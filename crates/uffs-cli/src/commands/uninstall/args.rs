@@ -56,6 +56,9 @@ pub(crate) struct UninstallArgs {
     pub(crate) no_path: bool,
     /// `--json`: emit the analysis + plan as machine-readable JSON.
     pub(crate) json: bool,
+    /// `-v` / `--verbose`: show the full binary resolution table, artifact
+    /// inventory, and deep-sweep diagnostics (default: a one-line summary).
+    pub(crate) verbose: bool,
     /// `--scope`: restrict to user / machine / all (default `all`).
     pub(crate) scope: UninstallScope,
     /// `--help` / `-h`: print usage and exit.
@@ -80,6 +83,7 @@ impl UninstallArgs {
                 "--no-deep-sweep" => parsed.no_deep_sweep = true,
                 "--no-path" => parsed.no_path = true,
                 "--json" => parsed.json = true,
+                "--verbose" | "-v" => parsed.verbose = true,
                 "--help" | "-h" => parsed.help = true,
                 "--scope" => {
                     let value = iter
@@ -124,6 +128,7 @@ mod tests {
             "--no-deep-sweep",
             "--no-path",
             "--json",
+            "--verbose",
         ])
         .unwrap();
         assert!(
@@ -133,7 +138,13 @@ mod tests {
                 && out.no_deep_sweep
                 && out.no_path
                 && out.json
+                && out.verbose
         );
+    }
+
+    #[test]
+    fn verbose_short_form_maps() {
+        assert!(parse(&["-v"]).unwrap().verbose);
     }
 
     #[test]

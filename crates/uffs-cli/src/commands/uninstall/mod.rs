@@ -78,30 +78,21 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     }
 
     render::print_run_header();
-    render::print_resolution_table(&resolved);
-    render::print_inventory(&inventory);
-    render::print_plan(&removal_plan);
 
-    // M3 elevation (U-30): the broker (its LocalSystem service) is the only
-    // admin-only part. Decide it UP FRONT — *before* the slow deep sweep — so a
-    // non-elevated run is told immediately and isn't left to discover it at the
-    // end. An elevated run skips this and removes everything. Dry-run only
-    // previews (the plan already marks the broker "needs Administrator").
-    // `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
-    // Unix effective-uid 0).
-    if !parsed.dry_run && removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
-        render::print_elevation_required(&removal_plan);
-        if confirm(
-            "\nRemoving these needs Administrator. Continue now and uninstall everything\n\
-             ELSE, leaving them? (answering No aborts so you can re-run elevated) [y/N] ",
-        )? {
-            removal_plan.drop_elevation_required();
-            render::print_broker_kept();
-        } else {
-            bail!(
-                "aborted — re-run `uffs --uninstall` from an elevated (Administrator) terminal to remove everything"
-            );
-        }
+    // `-v` also unlocks the deep-sweep diagnostics printed via
+    // [`sweep::dbg_line`] during the stray search below.
+    #[cfg(windows)]
+    sweep::set_verbose(parsed.verbose);
+
+    let skipped_elevation = elevation_gate(&parsed, &mut removal_plan)?;
+
+    // Scan overview: a one-line summary by default; the full binary resolution
+    // table + artifact inventory under `-v`.
+    if parsed.verbose {
+        render::print_resolution_table(&resolved);
+        render::print_inventory(&inventory);
+    } else {
+        render::print_scan_summary(&resolved, &inventory);
     }
 
     // M7 deep sweep: ask UFFS itself for stray family files elsewhere on the
@@ -112,7 +103,16 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // plan above) are all we can find.
     let stray_plan = platform_stray_plan(&parsed, &removal_plan);
 
+    // The FINAL summary — everything is gathered, so say exactly what this run
+    // will (and will not) do, then ask. The stray list printed just above by
+    // the sweep is part of this picture.
+    render::print_plan(&removal_plan);
+    render::print_skipped_elevation(&skipped_elevation);
+
     if parsed.dry_run {
+        if removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
+            render::print_dry_run_elevation_note();
+        }
         print_dry_run_footer();
         return Ok(());
     }
@@ -200,6 +200,34 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         render::print_journal_warning(&err);
     }
     Ok(())
+}
+
+/// M3 elevation gate (U-30): THE FIRST question, before any analysis output.
+/// The broker (its `LocalSystem` service) is the only admin-only part; a
+/// non-elevated run is told immediately what it cannot remove and decides once
+/// whether to continue without it. The skipped items are dropped from the plan
+/// entirely (so the final summary never lists work that will not happen) and
+/// their descriptions are returned for the summary's "NOT removed in this run"
+/// note. Empty when elevated, under `--dry-run` (preview keeps the markers), or
+/// when nothing needs Administrator. `--yes` continues without asking.
+/// `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
+/// Unix effective-uid 0).
+fn elevation_gate(parsed: &UninstallArgs, removal_plan: &mut RemovalPlan) -> Result<Vec<String>> {
+    if parsed.dry_run || !removal_plan.requires_elevation() || uffs_mft::platform::is_elevated() {
+        return Ok(Vec::new());
+    }
+    render::print_elevation_gate(removal_plan);
+    let continue_without = parsed.assume_yes
+        || confirm(
+            "\nContinue without Administrator? Everything else is still uninstalled; the\n\
+             item(s) above are left in place. (No aborts so you can re-run elevated) [y/N] ",
+        )?;
+    if !continue_without {
+        bail!(
+            "aborted — re-run `uffs --uninstall` from an elevated (Administrator) terminal to remove everything"
+        );
+    }
+    Ok(removal_plan.drop_elevation_required())
 }
 
 /// The running self-binaries that cannot be deleted in place: the current
@@ -339,6 +367,7 @@ fn print_help() {
          \x20 --no-path         Do not edit PATH (print a manual hint instead)\n\
          \x20 --scope <s>       Restrict to user | machine | all (default: all)\n\
          \x20 --json            Emit the analysis + plan as JSON\n\
+         \x20 --verbose, -v     Show the full binary table, inventory, and sweep detail\n\
          \x20 --help, -h        Show this help"
     );
 }

@@ -186,11 +186,15 @@ pub(crate) fn print_plan(plan: &RemovalPlan) {
     );
 }
 
-/// List the admin-only items (the broker service + its process) before the
-/// non-elevated keep-or-elevate choice (U-30).
+/// The up-front elevation gate (U-30): the FIRST thing a non-elevated run says.
+/// Explains which items need an Administrator terminal and why, before any
+/// analysis output — the question that follows is the only elevation decision.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_elevation_required(plan: &RemovalPlan) {
-    println!("\nThese items need Administrator (the broker runs as LocalSystem):");
+pub(crate) fn print_elevation_gate(plan: &RemovalPlan) {
+    println!(
+        "\nThis terminal is not elevated (Administrator). The following can only be\n\
+         removed from an elevated terminal (the broker runs as LocalSystem):"
+    );
     for group in &plan.groups {
         for item in &group.items {
             if item.needs_elevation {
@@ -200,12 +204,50 @@ pub(crate) fn print_elevation_required(plan: &RemovalPlan) {
     }
 }
 
-/// Note printed when the user keeps the broker and continues non-elevated.
+/// Final-summary note listing what this run skips because it needs
+/// Administrator (decided once, up front, at the elevation gate).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_broker_kept() {
+pub(crate) fn print_skipped_elevation(skipped: &[String]) {
+    if skipped.is_empty() {
+        return;
+    }
+    println!("\nNOT removed in this run (needs Administrator):");
+    for item in skipped {
+        println!("  - {item}");
+    }
+    println!("  Re-run `uffs --uninstall` from an elevated terminal to remove these.");
+}
+
+/// One-line scan overview printed by default in place of the full resolution
+/// table + inventory (which move behind `-v`): how much was found, and where.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_scan_summary(stems: &[StemResolution], inventory: &Inventory) {
+    let copies: usize = stems.iter().map(|stem| stem.copies.len()).sum();
+    let mut dirs: Vec<String> = stems
+        .iter()
+        .flat_map(|stem| {
+            stem.copies
+                .iter()
+                .map(|copy| copy.dir.to_string_lossy().to_ascii_lowercase())
+        })
+        .collect();
+    dirs.sort_unstable();
+    dirs.dedup();
+    let data_dirs = inventory.dirs.iter().filter(|dir| dir.exists).count();
     println!(
-        "Leaving the broker installed. Re-run `uffs --uninstall` from an elevated \
-         terminal to remove it."
+        "\nFound {copies} UFFS binaries in {} location(s) and {data_dirs} data/cache \
+         location(s). (-v for the full inventory)",
+        dirs.len(),
+    );
+}
+
+/// Dry-run note shown when the plan carries admin-only items but this terminal
+/// is not elevated: a real run will offer to skip them.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_dry_run_elevation_note() {
+    println!(
+        "\nNote: items marked (needs Administrator) require an elevated terminal; a\n\
+         non-elevated run asks up front whether to continue without them."
     );
 }
 

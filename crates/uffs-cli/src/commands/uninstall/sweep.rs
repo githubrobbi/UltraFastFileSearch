@@ -18,12 +18,23 @@ use std::time::Instant;
 
 use anyhow::Result;
 
-/// TEMPORARY uninstall deep-sweep diagnostics. Prints a `[sweep]` line to
-/// stdout so we can see candidate counts / phase timings during the Windows
-/// rollout. Remove once the sweep is signed off.
-#[expect(clippy::print_stdout, reason = "temporary deep-sweep diagnostics")]
+/// Gate for the `[sweep]` diagnostic lines: set from `-v` once at the start of
+/// an uninstall run, read by [`dbg_line`]. A relaxed static rather than a
+/// parameter so the sweep call chain (and its tests) stay signature-stable.
+static SWEEP_VERBOSE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Enable/disable the `[sweep]` diagnostics for this run (`-v` / `--verbose`).
+pub(crate) fn set_verbose(verbose: bool) {
+    SWEEP_VERBOSE.store(verbose, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Deep-sweep diagnostics (candidate counts per pattern, phase timings, probe
+/// timeouts). Prints a `[sweep]` line to stdout, only under `-v`.
+#[expect(clippy::print_stdout, reason = "verbose-gated deep-sweep diagnostics")]
 pub(crate) fn dbg_line(msg: &str) {
-    println!("  [sweep] {msg}");
+    if SWEEP_VERBOSE.load(core::sync::atomic::Ordering::Relaxed) {
+        println!("  [sweep] {msg}");
+    }
 }
 
 /// UFFS cache/cursor data-file patterns the sweep searches for. The executable

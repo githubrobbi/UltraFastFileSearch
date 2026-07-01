@@ -184,12 +184,22 @@ impl RemovalPlan {
 
     /// Drop every item that needs Administrator (the broker service + its
     /// process), removing any group left empty. Lets a non-elevated run remove
-    /// everything it *can* and leave the broker for an elevated re-run.
-    pub(crate) fn drop_elevation_required(&mut self) {
+    /// everything it *can* and leave the broker for an elevated re-run. Returns
+    /// the dropped items' descriptions so the final summary can list exactly
+    /// what this run skips.
+    pub(crate) fn drop_elevation_required(&mut self) -> Vec<String> {
+        let mut dropped: Vec<String> = Vec::new();
         for group in &mut self.groups {
-            group.items.retain(|item| !item.needs_elevation);
+            group.items.retain(|item| {
+                if item.needs_elevation {
+                    dropped.push(item.target.describe());
+                    return false;
+                }
+                true
+            });
         }
         self.groups.retain(|group| !group.items.is_empty());
+        dropped
     }
 
     /// Number of items across all groups.
@@ -645,8 +655,12 @@ mod tests {
             "broker service + process need admin"
         );
 
-        plan.drop_elevation_required();
+        let dropped = plan.drop_elevation_required();
         assert!(!plan.requires_elevation(), "admin-only items were dropped");
+        assert!(
+            !dropped.is_empty() && dropped.iter().all(|desc| !desc.is_empty()),
+            "the dropped items are returned as human descriptions for the summary"
+        );
         assert!(
             !has_target(&plan, |target| matches!(
                 target,

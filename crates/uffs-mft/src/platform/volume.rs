@@ -213,18 +213,59 @@ fn is_operation_aborted(err: &MftError) -> bool {
 /// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
 /// [`MftError::InvalidData`] on a short read.
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
+#[expect(unsafe_code, reason = "FFI: create/close a per-read completion event")]
 fn read_handle_at_once(handle: HANDLE, offset: u64, buf: &mut [u8]) -> Result<()> {
-    use windows::Win32::Foundation::ERROR_IO_PENDING;
+    use windows::Win32::System::Threading::CreateEventW;
+
+    // Bind THIS read to a dedicated manual-reset event and wait on the event —
+    // never on the bare file handle. The Access Broker vends duplicate handles
+    // to the same volume file object, so during a fresh concurrent multi-drive
+    // load several overlapped reads race on that object; a NULL-event
+    // `GetOverlappedResult(bWait=true)` then cannot tell which read completed
+    // and blocks forever (Microsoft's documented pitfall). That was the post-
+    // read `$UpCase` read that silently hung 1-2 drives at 5-or-6-of-7 on every
+    // fresh (no-cache) daemon start. The event makes the wait specific to this
+    // read and lets us bound it.
+    //
+    // SAFETY: FFI. `CreateEventW` returns an owned event handle we close below.
+    let event = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }
+        .map_err(|err| MftError::Io(hresult_to_io_error(&err)))?;
+    let outcome = read_handle_at_once_event(handle, offset, buf, event);
+    // SAFETY: FFI. `event` is the live event we created; close it exactly once.
+    unsafe {
+        let _closed = CloseHandle(event);
+    }
+    outcome
+}
+
+/// Body of [`read_handle_at_once`] given a dedicated completion `event`, split
+/// out so the caller closes the event on every return path.
+///
+/// # Errors
+///
+/// [`MftError::Io`] if `ReadFile` / the wait / `GetOverlappedResult` fail — an
+/// overrun of [`IOCP_WAIT_COMPLETION_DEADLINE`] surfaces as a retryable
+/// `ERROR_OPERATION_ABORTED` — or [`MftError::InvalidData`] on a short read.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "FFI: overlapped ReadFile + event-bounded wait")]
+fn read_handle_at_once_event(
+    handle: HANDLE,
+    offset: u64,
+    buf: &mut [u8],
+    event: HANDLE,
+) -> Result<()> {
+    use windows::Win32::Foundation::{ERROR_IO_PENDING, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::Storage::FileSystem::ReadFile;
-    use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+    use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows::Win32::System::Threading::WaitForSingleObject;
 
     let mut overlapped = OVERLAPPED::default();
     crate::io::readers::set_overlapped_offset(&mut overlapped, offset);
+    overlapped.hEvent = event;
 
     let mut bytes_read = 0_u32;
-    // SAFETY: `buf` is valid and writable for its length; `overlapped` outlives
-    // the call and the wait below; `handle` is a live volume handle.
+    // SAFETY: `buf` is valid+writable for its length; `overlapped` (with its
+    // event) outlives the call and the wait; `handle` is a live volume handle.
     let read = unsafe {
         ReadFile(
             handle,
@@ -237,9 +278,39 @@ fn read_handle_at_once(handle: HANDLE, offset: u64, buf: &mut [u8]) -> Result<()
         if err.code() != ERROR_IO_PENDING.to_hresult() {
             return Err(MftError::Io(hresult_to_io_error(&err)));
         }
-        // SAFETY: `overlapped` is the in-flight struct from the pending
-        // `ReadFile` and is still alive; `bWait = true` blocks to completion.
-        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut bytes_read, true) }
+        let deadline_ms =
+            u32::try_from(IOCP_WAIT_COMPLETION_DEADLINE.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: FFI. `event` is the manual-reset event bound to `overlapped`.
+        let wait = unsafe { WaitForSingleObject(event, deadline_ms) };
+        if wait == WAIT_TIMEOUT {
+            // The read wedged. Cancel it and drain the cancellation so the
+            // kernel stops referencing `buf` / `overlapped` before they drop,
+            // then report a retryable abort (995) that `read_handle_at`
+            // reissues.
+            // SAFETY: FFI. Cancel the in-flight read on this handle+overlapped.
+            unsafe {
+                let _cancelled = CancelIoEx(handle, Some(&raw const overlapped));
+            }
+            // SAFETY: FFI. Drain the cancellation (blocks via the bound event
+            // until it settles) so the kernel stops referencing `buf` /
+            // `overlapped` before they drop.
+            unsafe {
+                let _drained =
+                    GetOverlappedResult(handle, &raw const overlapped, &raw mut bytes_read, true);
+            }
+            return Err(MftError::Io(std::io::Error::from_raw_os_error(
+                i32::try_from(ERROR_OPERATION_ABORTED_CODE).unwrap_or(995),
+            )));
+        }
+        if wait != WAIT_OBJECT_0 {
+            return Err(MftError::Io(std::io::Error::other(format!(
+                "overlapped read wait failed: WaitForSingleObject returned 0x{:08X}",
+                wait.0
+            ))));
+        }
+        // Signaled: collect the result without waiting further.
+        // SAFETY: FFI. `overlapped` is the completed in-flight struct.
+        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut bytes_read, false) }
             .map_err(|wait_err| MftError::Io(hresult_to_io_error(&wait_err)))?;
     }
     if (bytes_read as usize) < buf.len() {

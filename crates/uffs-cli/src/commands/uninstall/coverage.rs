@@ -3,72 +3,74 @@
 
 //! Windows deep-sweep drive coverage for `uffs --uninstall`.
 //!
-//! Before the live cross-drive search, make sure the daemon manages **every**
-//! NTFS drive on the system. Windows-only: off Windows UFFS indexes offline MFT
-//! captures, not the live filesystem, so there is no live drive coverage to
-//! ensure.
+//! The deep sweep searches the daemon's live index for stray family files. It
+//! is only as complete as the set of drives the daemon has loaded, so before
+//! the sweep we check coverage — but we deliberately do **not** start or
+//! restart the daemon ourselves.
 //!
-//! The robust part: if the daemon is already managing every drive (any tier —
-//! hot / warm / parked / cold — a search re-promotes a parked drive on demand)
-//! we do nothing. If even **one** drive is missing, we do NOT hot-load it —
-//! that races the daemon's own background startup load over the single-instance
-//! Access Broker pipe and churns the registry (observed `2/6 -> 0/6`). Instead
-//! we replicate the proven CLI flow: `uffs --daemon kill` then a clean
-//! `uffs --daemon start`, which loads every drive with proper broker warm-up
-//! and only returns once the daemon reports Ready.
+//! Why not: a standalone `uffs --daemon start` loads every NTFS drive in a few
+//! seconds, but spawning that same command as a **child of the uninstall
+//! process** intermittently hangs the drive load (two drives never finish —
+//! observed a daemon stuck at `5/7` with zero progress across 15 s). Rather
+//! than chase that spawn-context bug, we treat daemon startup as the user's
+//! job: if the daemon already covers every drive we proceed silently; if a
+//! daemon is up but still loading we wait briefly; otherwise we tell the user
+//! to run `uffs --daemon start` and proceed best-effort with whatever is
+//! loaded.
 //!
-//! Best-effort throughout: any RPC failure leaves coverage as-is and the sweep
-//! proceeds against whatever is currently managed.
+//! Windows-only: off Windows UFFS indexes offline MFT captures, not the live
+//! filesystem, so there is no live drive coverage to ensure.
 
 #![cfg(windows)]
 
 use core::time::Duration;
-use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_mft::platform::{DriveLetter, detect_ntfs_drives};
 
-/// Max time to wait for the clean `--daemon start` to bring every system drive
-/// under management before the sweep proceeds anyway (best-effort). Generous
-/// because a cold multi-drive index is genuinely slow (millions of records per
-/// volume).
-const COVERAGE_WAIT: Duration = Duration::from_secs(600);
+/// Short wait for a daemon that is up but still loading drives to catch up
+/// before the sweep proceeds. Bounded on purpose — we never block the uninstall
+/// on a slow or stuck load; we proceed best-effort when it elapses.
+const BRIEF_WAIT: Duration = Duration::from_secs(60);
 
-/// Poll interval while waiting for the daemon to settle.
+/// Poll interval while waiting for a mid-load daemon to settle.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// How long to wait for the daemon to fully exit after `--daemon kill` before
-/// starting a fresh one (a lingering pipe would make `--daemon start` think a
-/// daemon is still running and skip the start).
-const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
-
-/// Ensure the daemon manages every NTFS drive before the deep sweep.
-///
-/// No-op when coverage is already complete. Otherwise runs the clean
-/// kill-then-start flow. Best-effort: a missing daemon or RPC failure just
-/// means the sweep covers whatever is already managed.
+/// Ensure — best-effort — that the daemon covers every NTFS drive before the
+/// deep sweep, without ever starting the daemon in-process (see module docs).
 pub(crate) fn ensure_drive_coverage() {
     let all = detect_ntfs_drives();
     if all.is_empty() {
         return;
     }
-    let managed = current_managed_drives();
-    let missing: Vec<DriveLetter> = all
-        .iter()
-        .filter(|drive| !managed.contains(drive))
-        .copied()
-        .collect();
-    if missing.is_empty() {
-        // The daemon already covers every system drive — nothing to do.
+    // Common case: a warm daemon already covers every drive — proceed silently.
+    if covered_count(&all) == all.len() {
         return;
     }
-    clean_restart_for_coverage(&all, &missing);
+    // Coverage is incomplete. If no daemon is reachable, there is nothing to
+    // wait for — tell the user and continue with a limited sweep.
+    if UffsClientSync::connect_raw().is_err() {
+        print_no_daemon_notice();
+        return;
+    }
+    // A daemon is up but not yet covering every drive — it may just be
+    // mid-load. Wait briefly for it to catch up, then proceed with whatever is
+    // loaded.
+    let covered = wait_briefly_for_coverage(&all);
+    if covered < all.len() {
+        print_partial_coverage_notice(covered, all.len());
+    }
 }
 
-/// The set of drive letters the daemon currently manages (any tier). An empty
-/// list means the daemon is not running or did not answer.
+/// How many of `all` the daemon currently manages (any tier).
+fn covered_count(all: &[DriveLetter]) -> usize {
+    let managed = current_managed_drives();
+    all.iter().filter(|drive| managed.contains(drive)).count()
+}
+
+/// The drive letters the daemon currently manages (any tier). Empty when the
+/// daemon is not running or did not answer.
 fn current_managed_drives() -> Vec<DriveLetter> {
     UffsClientSync::connect_raw()
         .map_or_else(|_| Vec::new(), |mut client| managed_letters(&mut client))
@@ -83,83 +85,54 @@ fn managed_letters(client: &mut UffsClientSync) -> Vec<DriveLetter> {
     )
 }
 
-/// Replicate the robust CLI flow — `--daemon kill` then a clean `--daemon
-/// start` — so the daemon reloads every system drive from scratch, then wait
-/// for it to come back covering them all.
-fn clean_restart_for_coverage(all: &[DriveLetter], missing: &[DriveLetter]) {
-    print_restart_intro(missing, all.len());
-    let exe = uffs_client::daemon_ctl::find_uffs_exe();
-
-    // KILL: bring the partially-loaded daemon fully down first.
-    let _kill = run_uffs(&exe, &["--daemon", "kill"]);
-    wait_until_daemon_down();
-
-    // START: the clean startup path loads every detected drive (with broker
-    // warm-up) and only returns once the daemon reports Ready.
-    let _start = run_uffs(&exe, &["--daemon", "start"]);
-
-    // Confirm the daemon came back covering every drive (progress feedback).
-    wait_until_covered(all);
-}
-
-/// Run `uffs <args>` as a child, inheriting stdio so the daemon start output is
-/// visible. Best-effort: a spawn failure is returned for the caller to ignore.
-fn run_uffs(exe: &Path, args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
-    Command::new(exe)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .status()
-}
-
-/// Poll until the daemon is no longer reachable (fully shut down) or
-/// [`SHUTDOWN_WAIT`] elapses.
-fn wait_until_daemon_down() {
-    let deadline = Instant::now() + SHUTDOWN_WAIT;
-    while Instant::now() < deadline {
-        if UffsClientSync::connect_raw().is_err() {
-            return;
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-/// Poll `status_drives` until every drive in `all` is managed again, or
-/// [`COVERAGE_WAIT`] elapses. Prints progress so a multi-minute reload never
-/// looks like a hang.
-fn wait_until_covered(all: &[DriveLetter]) {
-    let deadline = Instant::now() + COVERAGE_WAIT;
+/// Poll until the daemon covers every drive in `all`, or [`BRIEF_WAIT`]
+/// elapses. Prints progress so a mid-load wait never looks like a hang. Returns
+/// the final covered count.
+fn wait_briefly_for_coverage(all: &[DriveLetter]) -> usize {
+    print_wait_intro(all.len());
+    let deadline = Instant::now() + BRIEF_WAIT;
     let mut last_covered = usize::MAX;
     loop {
-        let managed = current_managed_drives();
-        let covered = all.iter().filter(|drive| managed.contains(drive)).count();
+        let covered = covered_count(all);
         if covered != last_covered {
             print_coverage_progress(covered, all.len());
             last_covered = covered;
         }
         if covered == all.len() || Instant::now() >= deadline {
-            return;
+            return covered;
         }
         std::thread::sleep(POLL_INTERVAL);
     }
 }
 
-/// Announce the kill-then-start because coverage is incomplete.
+/// Announce a brief wait for a mid-load daemon.
 #[expect(clippy::print_stdout, reason = "CLI progress output")]
-fn print_restart_intro(missing: &[DriveLetter], total: usize) {
-    let list = missing
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    println!(
-        "\nDaemon is not indexing every drive (missing {list}; {covered} of {total} covered).\n\
-         Restarting it cleanly (kill + start) for a complete deep sweep:",
-        covered = total.saturating_sub(missing.len()),
-    );
+fn print_wait_intro(total: usize) {
+    println!("\nWaiting for the daemon to finish loading all {total} drive(s) for the deep sweep:");
 }
 
-/// Print drive-coverage progress while the freshly started daemon reloads.
+/// Print drive-coverage progress while the daemon finishes loading.
 #[expect(clippy::print_stdout, reason = "CLI progress output")]
 fn print_coverage_progress(covered: usize, total: usize) {
     println!("  indexing for the sweep: {covered}/{total} drives ready...");
+}
+
+/// No daemon is running: the sweep cannot scan the live index. Tell the user
+/// how to enable a complete sweep; the uninstall continues regardless.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_no_daemon_notice() {
+    println!(
+        "\nNo index daemon is running, so the deep sweep can only cover what is already loaded.\n\
+         For a complete sweep, run `uffs --daemon start` and re-run the uninstall. Continuing..."
+    );
+}
+
+/// The daemon covers only some drives after the brief wait. Note it and how to
+/// get full coverage; the uninstall continues with a partial sweep.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_partial_coverage_notice(covered: usize, total: usize) {
+    println!(
+        "\nDaemon covers {covered} of {total} drive(s); the deep sweep will scan those.\n\
+         For full coverage, run `uffs --daemon start` and re-run the uninstall. Continuing..."
+    );
 }

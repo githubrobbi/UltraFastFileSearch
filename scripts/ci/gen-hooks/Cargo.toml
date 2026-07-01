@@ -72,5 +72,10 @@ toml = { workspace = true }
 # stderr-printing sites carry function-scoped
 # `#[expect(clippy::print_stderr, reason = "…")]` rather than disabling
 # the lint workspace-wide.  See `CLIPPY_POSTURE.md` § CLI-tooling.
+# Embeds the UFFS icon + version info + shared app.manifest into `gen-hooks.exe`
+# (see build.rs) for branding consistency.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

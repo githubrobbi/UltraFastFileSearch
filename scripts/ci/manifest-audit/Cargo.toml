@@ -68,5 +68,10 @@ toml = { workspace = true }
 # `src/main.rs` with `reason = "..."` strings, matching the precedent
 # established for `gen-hooks` / `gen-workflow` in PR #228.  See
 # `CLIPPY_POSTURE.md` § CLI-tooling for the policy.
+# Embeds the UFFS icon + version info + shared app.manifest into
+# `manifest-audit.exe` (see build.rs) for branding consistency.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

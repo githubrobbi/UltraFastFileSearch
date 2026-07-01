@@ -4384,6 +4384,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "winresource",
 ]
 
 [[package]]
@@ -4422,6 +4423,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+ "winresource",
 ]
 
 [[package]]
@@ -4537,6 +4539,7 @@ dependencies = [
  "sha2 0.11.0",
  "uffs-mft",
  "uffs-polars",
+ "winresource",
 ]
 
 [[package]]
@@ -4558,6 +4561,7 @@ dependencies = [
  "clap",
  "serde",
  "toml",
+ "winresource",
 ]
 
 [[package]]
@@ -4569,6 +4573,7 @@ dependencies = [
  "regex",
  "serde",
  "toml",
+ "winresource",
 ]
 
 [[package]]
@@ -4579,6 +4584,7 @@ dependencies = [
  "clap",
  "serde",
  "toml",
+ "winresource",
 ]
 
 [[package]]

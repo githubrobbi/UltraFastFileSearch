@@ -64,5 +64,10 @@ toml = { workspace = true }
 # blocks in `src/*.rs` with `reason = "..."` strings, matching the
 # precedent in `crates/uffs-diag/src/bin/*.rs`.  See `CLIPPY_POSTURE.md`
 # § CLI-tooling for the policy.
+# Embeds the UFFS icon + version info + shared app.manifest into
+# `gen-workflow.exe` (see build.rs) for branding consistency.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

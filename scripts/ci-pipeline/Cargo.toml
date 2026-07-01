@@ -85,5 +85,10 @@ tokio = { workspace = true, features = ["process"] }
 # uffs-diag).  CLI-inappropriate lints are suppressed at file scope via
 # `#![expect(...)]` blocks in `src/*.rs`; see the header comment block
 # above for the rationale.
+# Embeds the UFFS icon + version info + shared app.manifest into
+# `uffs-ci-pipeline.exe` (see build.rs) for branding consistency.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

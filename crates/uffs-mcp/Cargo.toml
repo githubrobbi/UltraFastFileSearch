@@ -135,5 +135,11 @@ clap = { workspace = true, features = ["derive"] }
 rmcp = { workspace = true, features = ["client"] }
 tokio = { workspace = true, features = ["test-util"] }
 
+# Embeds the UFFS icon + version info + shared app.manifest into `uffsmcp.exe`
+# (see build.rs). A metadata-less binary is both unbranded and a mild antivirus
+# false-positive signal.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

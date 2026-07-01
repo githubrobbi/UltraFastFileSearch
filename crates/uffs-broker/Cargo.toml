@@ -70,5 +70,11 @@ uffs-security.workspace = true
 # `--stop` commands — the same locale-proof primitive the updater uses.
 uffs-winsvc.workspace = true
 
+# Embeds the UFFS icon + version info + shared app.manifest into
+# `uffs-broker.exe` (see build.rs). A metadata-less binary is both unbranded
+# and a mild antivirus false-positive signal.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

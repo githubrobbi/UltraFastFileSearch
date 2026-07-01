@@ -123,5 +123,11 @@ tempfile.workspace = true
 # the pattern already used by `uffs-core`, `uffs-mft`, and `uffs-mcp`.
 tokio = { workspace = true, features = ["test-util", "macros"] }
 
+# Embeds the UFFS icon + version info + shared app.manifest into `uffsd.exe`
+# (see build.rs, alongside the UFFS_GIT_SHA stamp). A metadata-less binary is
+# both unbranded and a mild antivirus false-positive signal.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

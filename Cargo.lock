@@ -4397,6 +4397,7 @@ dependencies = [
  "uffs-security",
  "uffs-winsvc",
  "windows 0.62.2",
+ "winresource",
 ]
 
 [[package]]
@@ -4522,6 +4523,7 @@ dependencies = [
  "uffs-mft",
  "uffs-security",
  "windows 0.62.2",
+ "winresource",
 ]
 
 [[package]]
@@ -4599,6 +4601,7 @@ dependencies = [
  "uffs-client",
  "uffs-mft",
  "uffs-security",
+ "winresource",
 ]
 
 [[package]]
@@ -4636,6 +4639,7 @@ dependencies = [
  "uffs-security",
  "uffs-text",
  "windows 0.62.2",
+ "winresource",
  "zerocopy",
  "zstd",
 ]

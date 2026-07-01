@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+  SPDX-License-Identifier: MPL-2.0
+
+  Shared UFFS application manifest, embedded into the Windows binaries
+  (uffsd, uffs-broker, uffsmcp, uffs-mft) via winresource in each crate's
+  build.rs. The interactive CLI (uffs.exe) keeps its own crate-local manifest.
+
+  Declares:
+    - asInvoker: elevation is handled at runtime (the Access Broker service /
+      the daemon elevation policy), never at the manifest level.
+    - PerMonitorV2 DPI awareness.
+    - Long-path support (paths > 260 chars, which UFFS routinely handles).
+    - Windows 10 / 11 supported-OS id.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="UltraFastFileSearch" version="0.0.0.0"/>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 (Windows 11 shares the same supportedOS GUID per MS docs). -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>

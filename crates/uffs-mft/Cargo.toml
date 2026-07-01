@@ -131,5 +131,11 @@ tempfile.workspace = true
 name = "mft_read"
 harness = false
 
+# Embeds the UFFS icon + version info + shared app.manifest into `uffs-mft.exe`
+# (see build.rs). A metadata-less binary is both unbranded and a mild antivirus
+# false-positive signal. Only affects the bin target; the library is unchanged.
+[build-dependencies]
+winresource.workspace = true
+
 [lints]
 workspace = true

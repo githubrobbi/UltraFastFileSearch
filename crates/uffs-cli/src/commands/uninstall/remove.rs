@@ -140,26 +140,34 @@ impl RemovalOutcome {
 }
 
 /// Execute `plan` in order against `effects`, recording each item's outcome.
-/// Best-effort: a failing item is recorded and the walk continues. Once the
-/// broker's elevation is declined, dependent broker work is *left* (recorded as
-/// [`ItemStatus::Skipped`]) rather than attempted — no point deleting a binary
-/// the still-running service holds locked.
-pub(crate) fn execute(plan: &RemovalPlan, effects: &mut dyn Effects) -> RemovalOutcome {
+/// Best-effort: a failing item is recorded and the walk continues.
+///
+/// `broker_remains` is `true` when the Access Broker service will still be
+/// installed after this run — the non-elevated "continue without" choice drops
+/// the service item up front — so its binary is locked from the start and is
+/// *left* rather than fought. It also flips `true` if an in-plan service
+/// removal is declined at the UAC prompt. Either way the broker's binary is
+/// recorded as [`ItemStatus::Skipped`], never a raw Access-denied failure.
+pub(crate) fn execute(
+    plan: &RemovalPlan,
+    effects: &mut dyn Effects,
+    broker_remains: bool,
+) -> RemovalOutcome {
     let mut outcome = RemovalOutcome::default();
-    let mut elevation_declined = false;
+    let mut remains = broker_remains;
     for item in plan.items() {
-        run_item(item, effects, &mut elevation_declined, &mut outcome);
+        run_item(item, effects, &mut remains, &mut outcome);
     }
     outcome
 }
 
 /// Execute one plan item, folding its result into `outcome`. Sets
-/// `elevation_declined` when the broker service removal hits a declined UAC
-/// prompt, so later broker-dependent items are left rather than fought.
+/// `broker_remains` when an in-plan broker service removal is declined at the
+/// UAC prompt, so the later broker binary is left rather than fought.
 fn run_item(
     item: &PlanItem,
     effects: &mut dyn Effects,
-    elevation_declined: &mut bool,
+    broker_remains: &mut bool,
     outcome: &mut RemovalOutcome,
 ) {
     let description = item.target.describe();
@@ -167,7 +175,7 @@ fn run_item(
         match effects.remove_service(service) {
             Ok(()) => outcome.record(description, ItemStatus::Done),
             Err(err) if err.downcast_ref::<ElevationDeclined>().is_some() => {
-                *elevation_declined = true;
+                *broker_remains = true;
                 outcome.record(
                     description,
                     ItemStatus::Skipped(BROKER_SERVICE_LEFT.to_owned()),
@@ -177,10 +185,11 @@ fn run_item(
         }
         return;
     }
-    // Broker's removal was declined, so its service still runs and locks
-    // uffs-broker.exe: delete the other runtime binaries, leave the broker's.
+    // The broker service is staying (declined, or the non-elevated run left it),
+    // so it still runs and locks uffs-broker.exe: delete the other runtime
+    // binaries, leave the broker's alongside its service.
     if let PlanTarget::DeleteBinaries { dir, stems } = &item.target
-        && *elevation_declined
+        && *broker_remains
         && stems.iter().any(|stem| is_broker_stem(stem))
     {
         delete_binaries_leaving_broker(dir, stems, effects, outcome);
@@ -345,7 +354,7 @@ mod tests {
     fn executes_every_item_in_group_order() {
         let plan = full_plan();
         let mut effects = RecordingEffects::default();
-        let outcome = execute(&plan, &mut effects);
+        let outcome = execute(&plan, &mut effects, false);
         // Teardown-last ordering: tool binaries first (the tooling stays
         // usable during the run), then the daemon shutdown, then the data
         // dirs it had open handles in.
@@ -392,7 +401,8 @@ mod tests {
             decline_service: true,
             ..RecordingEffects::default()
         };
-        let outcome = execute(&plan, &mut effects);
+        // Broker is in the plan (an `e` run); the declined UAC flips the flag.
+        let outcome = execute(&plan, &mut effects, false);
 
         // The broker binary is never even attempted (its service still runs);
         // only the service removal + the OTHER runtime binary were called.
@@ -420,13 +430,72 @@ mod tests {
     }
 
     #[test]
+    fn broker_remains_leaves_the_broker_binary_up_front() {
+        // The `c` path leaves the broker: the gate dropped the service item, so
+        // the plan has NO RemoveService (modelled here with the service absent)
+        // and `broker_remains` is true from the start. The broker binary is then
+        // left without any remove_service call — no Access-denied.
+        let report = DetectionReport {
+            roots: vec![InstallRoot {
+                dir: PathBuf::from("/opt/uffs"),
+                channel: Channel::Unmanaged,
+                scope: Scope::User,
+                anchored_by: Vec::new(),
+                binaries: ["uffsd", "uffs-broker"]
+                    .into_iter()
+                    .map(|name| BinaryInfo {
+                        name: name.to_owned(),
+                        version: None,
+                    })
+                    .collect(),
+            }],
+            running: Vec::new(),
+        };
+        let inventory = Inventory {
+            dirs: Vec::new(),
+            broker_service: BrokerServiceState::Absent,
+        };
+        let plan = build_plan(&report, &inventory, &UninstallArgs::default(), &[]);
+        let mut effects = RecordingEffects::default();
+        let outcome = execute(&plan, &mut effects, true);
+
+        assert!(
+            !effects
+                .calls
+                .iter()
+                .any(|call| call.contains("remove_service")),
+            "no service removal is attempted: {:?}",
+            effects.calls
+        );
+        assert!(
+            !effects
+                .calls
+                .iter()
+                .any(|call| call.contains("uffs-broker")),
+            "the locked broker binary is not attempted: {:?}",
+            effects.calls
+        );
+        assert_eq!(outcome.skipped_count(), 1, "just the broker binary is left");
+        assert_eq!(outcome.failed_count(), 0, "no Access-denied failure");
+        // uffsd still deleted (the non-broker runtime binary).
+        assert!(
+            effects
+                .calls
+                .iter()
+                .any(|call| call == "delete_binaries:/opt/uffs:1"),
+            "the non-broker runtime binary is still removed: {:?}",
+            effects.calls
+        );
+    }
+
+    #[test]
     fn a_failing_item_is_recorded_and_the_rest_continue() {
         let plan = full_plan();
         let mut effects = RecordingEffects {
             fail_marker: Some("/x/cache".to_owned()),
             ..RecordingEffects::default()
         };
-        let outcome = execute(&plan, &mut effects);
+        let outcome = execute(&plan, &mut effects, false);
         // All three were attempted; the cache dir failed, the other two done.
         assert_eq!(effects.calls.len(), 3);
         assert_eq!(outcome.failed_count(), 1);

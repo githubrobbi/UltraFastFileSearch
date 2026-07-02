@@ -147,11 +147,22 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let remove_strays = matches!(choice, FinalChoice::All) && !stray_plan.is_empty();
+    // The broker service stays installed whenever the plan won't remove it (the
+    // non-elevated "continue without" choice dropped it), so its binary is
+    // locked and must be LEFT, not fought. A declined UAC on the `e` path is
+    // detected during execution.
+    let broker_remains = matches!(
+        inventory.broker_service,
+        inventory::BrokerServiceState::Installed
+    ) && !removal_plan
+        .items()
+        .any(|item| matches!(item.target, PlanTarget::RemoveService { .. }));
     execute_all(
         &removal_plan,
         stray_plan,
         remove_strays,
         matches!(gate, ElevationChoice::ElevateAtRemoval),
+        broker_remains,
     );
     Ok(())
 }
@@ -167,6 +178,7 @@ fn execute_all(
     stray_plan: &RemovalPlan,
     remove_strays: bool,
     elevate_via_uac: bool,
+    broker_remains: bool,
 ) {
     // M9: mark the run in progress (survives the lifecycle-dir deletion) so an
     // interruption is detectable next launch. Best-effort: a failed marker write
@@ -186,10 +198,11 @@ fn execute_all(
     let mut effects = effects::SystemEffects::new(self_paths.clone(), elevate_via_uac);
     let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
-        outcome.absorb(remove::execute(removal_plan, &mut effects));
+        outcome.absorb(remove::execute(removal_plan, &mut effects, broker_remains));
     }
     if remove_strays {
-        outcome.absorb(remove::execute(stray_plan, &mut effects));
+        // Strays are loose files, never the broker service's binary.
+        outcome.absorb(remove::execute(stray_plan, &mut effects, false));
     }
     if !outcome.is_empty() {
         render::print_outcome(&outcome);

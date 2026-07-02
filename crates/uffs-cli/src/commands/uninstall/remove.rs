@@ -227,10 +227,12 @@ mod tests {
         let plan = full_plan();
         let mut effects = RecordingEffects::default();
         let outcome = execute(&plan, &mut effects);
-        // Processes (stop) precede Binaries (delete), which precede Data dirs.
+        // Teardown-last ordering: tool binaries first (the tooling stays
+        // usable during the run), then the daemon shutdown, then the data
+        // dirs it had open handles in.
         assert_eq!(effects.calls, vec![
-            "stop_process:daemon:7".to_owned(),
             "delete_binaries:/opt/uffs:1".to_owned(),
+            "stop_process:daemon:7".to_owned(),
             "remove_dir:/x/cache".to_owned(),
         ]);
         assert!(outcome.all_done());

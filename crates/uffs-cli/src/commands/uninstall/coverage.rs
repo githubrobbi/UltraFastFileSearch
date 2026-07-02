@@ -119,8 +119,8 @@ fn reload_daemon_for_coverage(
             quiet,
             notes,
             format!(
-                "  could not kill the daemon: {err}. Continuing the deep sweep with whatever \
-                 is loaded."
+                "  could not kill the daemon: {err}\n\
+                   Continuing the deep sweep with whatever is loaded."
             ),
         );
         return;
@@ -132,8 +132,8 @@ fn reload_daemon_for_coverage(
             quiet,
             notes,
             format!(
-                "  could not start the daemon: {err}. Continuing the deep sweep with whatever \
-                 is loaded."
+                "  could not start the daemon: {err}\n\
+                   Continuing the deep sweep with whatever is loaded."
             ),
         );
         return;

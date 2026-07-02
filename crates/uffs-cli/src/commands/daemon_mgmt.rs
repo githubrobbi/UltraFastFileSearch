@@ -28,13 +28,6 @@ fn is_quiet() -> bool {
 
 /// RAII reset for the [`QUIET`] flag, so an early return or panic inside the
 /// handler can never leave later daemon commands silenced.
-#[cfg_attr(
-    not(windows),
-    expect(
-        dead_code,
-        reason = "constructed only by daemon_quiet, whose sole caller is the Windows uninstall coverage"
-    )
-)]
 struct QuietGuard;
 
 impl Drop for QuietGuard {
@@ -52,13 +45,6 @@ impl Drop for QuietGuard {
 /// # Errors
 ///
 /// Exactly [`daemon`]'s errors.
-#[cfg_attr(
-    not(windows),
-    expect(
-        dead_code,
-        reason = "called only by the Windows uninstall deep-sweep coverage"
-    )
-)]
 pub(crate) fn daemon_quiet(action: &DaemonAction) -> Result<()> {
     QUIET.store(true, core::sync::atomic::Ordering::Relaxed);
     let _guard = QuietGuard;
@@ -207,16 +193,49 @@ fn daemon_owner_needs_elevation(pid_file: &std::path::Path, caller_euid: u32) ->
     std::fs::metadata(pid_file).is_ok_and(|meta| meta.uid() != caller_euid)
 }
 
-/// Windows: elevation is required only when the Access Broker pipe is NOT
-/// serving. With the broker up the daemon runs non-elevated and a non-elevated
-/// caller can stop AND restart it (restart adopts broker handles — no UAC), so
-/// a non-elevated `uffs --update` can quiesce/restart it; without the broker a
-/// restart needs admin for the MFT (mirrors the Unix PID-owner gate).
+/// Windows: mirror the Unix PID-owner gate as closely as the platform allows.
+/// No elevation is needed when (in order):
+///
+/// 1. **No daemon to protect** — the PID file is absent, so stop/kill/restart
+///    cannot break anything a non-elevated caller could not bring back.
+/// 2. **The daemon itself runs non-elevated** — its launch-state sidecar
+///    (`daemon.state.json`, written into the *caller's own* `%LOCALAPPDATA%`,
+///    so it is this user's daemon by construction) records `"elevated": false`;
+///    a same-user, non-elevated process is killable and restartable without
+///    admin.
+/// 3. **The Access Broker pipe is serving** — a restart adopts broker handles,
+///    so a non-elevated caller can stop AND bring the daemon back (no UAC).
+///
+/// Otherwise (an elevated daemon, no broker) managing it needs Administrator.
 #[cfg(windows)]
 fn mutating_management_needs_elevation() -> bool {
     /// Short pipe probe — this gate runs once per management command.
     const BROKER_GATE_PROBE_MS: u32 = 600;
+
+    let pid_path = pid_file_path();
+    if !pid_path.exists() {
+        return false;
+    }
+    if launch_state_says_non_elevated(&pid_path) {
+        return false;
+    }
     !uffs_winsvc::pipe_serving(uffs_broker_protocol::PIPE_NAME, BROKER_GATE_PROBE_MS)
+}
+
+/// Whether the daemon's launch-state sidecar (next to the PID file) records a
+/// **non-elevated** launch. Absent file, unreadable JSON, or a pre-flag state
+/// file all return `false` — the gate then falls back to the broker probe
+/// (conservative: never *grants* user-level management on missing evidence).
+#[cfg(windows)]
+fn launch_state_says_non_elevated(pid_path: &std::path::Path) -> bool {
+    let state_path = pid_path.with_file_name("daemon.state.json");
+    let Ok(raw) = std::fs::read_to_string(&state_path) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|state| state.get("elevated").and_then(serde_json::Value::as_bool))
+        .is_some_and(|elevated| !elevated)
 }
 
 /// Other non-Unix targets (WASM, bare-metal — not real deployments): keep the

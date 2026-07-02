@@ -37,6 +37,15 @@ pub(crate) fn dbg_line(msg: &str) {
     }
 }
 
+/// Blank separator printed before the first `[sweep]` diagnostic block, so the
+/// diagnostics never run back-to-back into preceding output. `-v` only.
+#[expect(clippy::print_stdout, reason = "verbose-gated deep-sweep diagnostics")]
+pub(crate) fn dbg_gap() {
+    if SWEEP_VERBOSE.load(core::sync::atomic::Ordering::Relaxed) {
+        println!();
+    }
+}
+
 /// UFFS cache/cursor data-file patterns the sweep searches for. The executable
 /// patterns are derived from the shared family set (see [`family_stems`]).
 const CACHE_PATTERNS: &[&str] = &["*_compact.uffs", "*_usn.cursor"];

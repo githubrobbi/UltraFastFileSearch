@@ -61,7 +61,21 @@ impl SystemEffects {
 }
 
 impl Effects for SystemEffects {
-    fn stop_process(&mut self, _component: &str, pid: u32) -> Result<()> {
+    fn stop_process(&mut self, component: &str, pid: u32) -> Result<()> {
+        // The daemon's analyzed pid can go stale before execution (the deep
+        // sweep's coverage reload restarts it), so stop the CURRENT daemon via
+        // the same handler `uffs --daemon kill` uses (pid-file/socket
+        // discovery), falling back to the recorded pid; then wait for it to
+        // actually exit so its image is unlocked before the runtime binaries
+        // are deleted.
+        if component == "daemon" {
+            if crate::commands::daemon_mgmt::daemon_quiet(&crate::args::DaemonAction::Kill).is_err()
+            {
+                terminate_pid(pid)?;
+            }
+            wait_daemon_down();
+            return Ok(());
+        }
         terminate_pid(pid)
     }
 
@@ -77,16 +91,38 @@ impl Effects for SystemEffects {
     }
 
     fn delete_binaries(&mut self, dir: &Path, stems: &[String]) -> Result<()> {
-        for stem in stems {
-            let path = dir.join(exe_file_name(stem));
+        // Best-effort across the whole set: one locked file must never trap
+        // the remaining deletions (the original failure mode: a lingering
+        // uffsd.exe aborted the loop and left 21 other binaries in place).
+        let failed: Vec<PathBuf> = stems
+            .iter()
+            .map(|stem| dir.join(exe_file_name(stem)))
             // A running self-binary can't be deleted in place — defer it.
-            if self.is_self(&path) {
-                continue;
-            }
-            remove_file_if_present(&path)
-                .with_context(|| format!("removing {}", path.display()))?;
+            .filter(|path| !self.is_self(path))
+            .filter(|path| remove_file_if_present(path).is_err())
+            .collect();
+        if failed.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        // A just-stopped process can hold its image for a beat after the kill
+        // returns; give it one settle-and-retry pass before reporting.
+        std::thread::sleep(core::time::Duration::from_millis(750));
+        let mut errors: Vec<String> = Vec::new();
+        for path in failed {
+            if let Err(err) = remove_file_if_present(&path) {
+                errors.push(format!("{}: {err}", path.display()));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "could not remove {} of {} file(s): {}",
+                errors.len(),
+                stems.len(),
+                errors.join("; ")
+            )
+        }
     }
 
     fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()> {
@@ -157,6 +193,8 @@ fn remove_path_entry_impl(dir: &Path) -> Result<()> {
 /// directly, so just remove them.
 #[cfg(windows)]
 pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
+    use std::os::windows::process::CommandExt as _;
+
     if paths.is_empty() {
         return Ok(());
     }
@@ -170,8 +208,13 @@ pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
         "ping 127.0.0.1 -n 3 >nul & {} & rem self-delete",
         deletes.join(" & ")
     );
+    // `raw_arg`, NOT `args`: std's default Windows quoting wraps the script in
+    // quotes and backslash-escapes the inner `del "path"` quotes — an escaping
+    // scheme cmd.exe does not understand, so the deferred delete silently never
+    // deleted anything. The raw form hands cmd the `/c` payload verbatim.
     Command::new("cmd")
-        .args(["/c", &script])
+        .raw_arg("/c")
+        .raw_arg(&script)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -240,6 +283,21 @@ fn run_quiet(command: &mut Command, what: &str) -> Result<()> {
     } else {
         bail!("{what} exited with {status}");
     }
+}
+
+/// Poll until the daemon is no longer reachable over IPC (up to 10s), then
+/// give the OS a short beat to release the process image. Bounded — a wedged
+/// teardown degrades to the delete-side retry, never a hang.
+fn wait_daemon_down() {
+    let deadline = std::time::Instant::now() + core::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if uffs_client::connect_sync::UffsClientSync::connect_raw().is_err() {
+            break;
+        }
+        std::thread::sleep(core::time::Duration::from_millis(250));
+    }
+    // IPC down != image released; the loader lock lags the socket teardown.
+    std::thread::sleep(core::time::Duration::from_millis(500));
 }
 
 /// Stop a process by pid (`taskkill` on Windows, `kill` on Unix).

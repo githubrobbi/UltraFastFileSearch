@@ -436,6 +436,7 @@ fn gather_strays(known: &[PathBuf], quiet: bool) -> GatherOutcome {
     let coverage_notes = coverage::ensure_drive_coverage(quiet);
     GATHER_PHASE.store(1, core::sync::atomic::Ordering::Relaxed);
 
+    sweep::dbg_gap();
     let mut search = sweep::DaemonSearch;
     let find_started = std::time::Instant::now();
     let candidates = sweep::find_strays(&mut search, known).unwrap_or_default();

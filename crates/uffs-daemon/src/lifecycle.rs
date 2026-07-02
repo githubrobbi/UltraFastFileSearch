@@ -298,6 +298,10 @@ impl LifecycleManager {
             "command_line": command_line,
             "version": env!("CARGO_PKG_VERSION"),
             "started_unix": started_unix,
+            // Whether this daemon runs elevated. The CLI's daemon-management
+            // elevation gate reads it: a non-elevated daemon in the caller's
+            // own %LOCALAPPDATA% is theirs to stop/restart without admin.
+            "elevated": uffs_mft::is_elevated(),
         });
         let Ok(content) = serde_json::to_string_pretty(&state) else {
             return;

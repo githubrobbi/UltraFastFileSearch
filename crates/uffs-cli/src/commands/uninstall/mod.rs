@@ -201,7 +201,7 @@ fn execute_all(
     // M8 self-delete (U-80): finish the deferred delete of the running
     // self-binaries the executor skipped. If even scheduling fails, say so.
     if !self_paths.is_empty() {
-        render::print_self_delete_scheduled(&self_paths);
+        render::print_self_delete_scheduled();
         if let Err(err) = effects::schedule_self_delete(&self_paths) {
             render::print_self_delete_warning(&err);
         }
@@ -217,7 +217,7 @@ fn execute_all(
                 .any(|self_path| self_path.starts_with(dir))
         })
         .collect();
-    render::print_verification(&verify::still_present(&to_check));
+    render::print_verification(&verify::still_present(&to_check), outcome.is_clean());
 
     // M9: clear the in-progress marker now the run finished.
     if let Err(err) = journal::finish() {
@@ -603,6 +603,9 @@ fn spinner_wait<T>(handle: &std::thread::JoinHandle<T>) {
     use std::io::Write as _;
 
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    // One blank line between the sweep-decision prompt and the spinner, so the
+    // gather does not butt right up against "Choice [d/S]: d".
+    println!();
     let mut frame = 0_usize;
     while !handle.is_finished() {
         let label = if GATHER_PHASE.load(core::sync::atomic::Ordering::Relaxed) == 0 {

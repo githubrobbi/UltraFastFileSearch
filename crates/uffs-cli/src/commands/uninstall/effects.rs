@@ -398,10 +398,10 @@ fn remove_service_via_uac(service: &str) -> Result<()> {
             }
             Ok(())
         }
-        Some(UAC_NOT_GRANTED_EXIT) => bail!(
-            "elevation was not granted (UAC declined) — {service} was left installed; \
-             re-run `uffs --uninstall` from an Administrator terminal to remove it"
-        ),
+        // Typed so the executor recognises the decline and LEAVES the broker
+        // (service + its locked binary) as a clean outcome, instead of the raw
+        // Access-denied that deleting the still-running broker's image produces.
+        Some(UAC_NOT_GRANTED_EXIT) => Err(super::remove::ElevationDeclined.into()),
         other => bail!(
             "elevated service-removal helper failed (exit {other:?}) — {service} may still \
              be installed"

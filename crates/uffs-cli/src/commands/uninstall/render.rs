@@ -377,14 +377,12 @@ pub(crate) fn print_journal_warning(error: &anyhow::Error) {
     eprintln!("note: uninstall progress marker could not be updated ({error:#}).");
 }
 
-/// Note that the running self-binaries are deferred to a post-exit delete
-/// (the OS locks a running image, so they can't be removed in place).
+/// Note that the running `uffs` binary finishes removing itself after the
+/// process exits (the OS locks a running image). One quiet line — the exact
+/// paths are a mechanism detail the user does not need.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_self_delete_scheduled(paths: &[PathBuf]) {
-    println!("\nThe running UFFS binary is removed after this process exits:");
-    for path in paths {
-        println!("  {}", path.display());
-    }
+pub(crate) fn print_self_delete_scheduled() {
+    println!("\nThe uffs command removes itself once this process exits.");
 }
 
 /// Warn that the running self-binary could not be scheduled for deletion.
@@ -396,11 +394,17 @@ pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {
     );
 }
 
-/// Print the post-removal verification: clean, or the locations that survived.
+/// Print the post-removal verification. The upbeat "all gone" is claimed only
+/// when the run was `clean` — nothing failed and nothing was left (a declined
+/// broker removal is NOT "all gone", even though the leftover service/binary
+/// are not among the stat-checked `remaining` paths). `print_outcome` already
+/// explained any leftovers, so this stays quiet in that case.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_verification(remaining: &[PathBuf]) {
+pub(crate) fn print_verification(remaining: &[PathBuf], clean: bool) {
     if remaining.is_empty() {
-        println!("\nVerified: all targeted UFFS locations are gone.");
+        if clean {
+            println!("\nVerified: all targeted UFFS locations are gone.");
+        }
         return;
     }
     println!(
@@ -413,29 +417,38 @@ pub(crate) fn print_verification(remaining: &[PathBuf]) {
     }
 }
 
-/// Print the outcome of a removal run: counts, any failures, and a retry hint.
+/// Print the outcome of a removal run: counts, any failures / left items, and
+/// the matching next-step hint.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
-    println!(
-        "\nRemoval finished: {} removed, {} failed.",
-        outcome.done_count(),
-        outcome.failed_count(),
-    );
+    let failed = outcome.failed_count();
+    let skipped = outcome.skipped_count();
+    let mut parts = vec![format!("{} removed", outcome.done_count())];
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if skipped > 0 {
+        parts.push(format!("{skipped} left"));
+    }
+    println!("\nRemoval finished: {}.", parts.join(", "));
+
     for (description, status) in &outcome.results {
-        if let ItemStatus::Failed(error) = status {
-            println!("  FAILED  {description}  ({error})");
+        match status {
+            ItemStatus::Failed(error) => println!("  FAILED  {description}  ({error})"),
+            ItemStatus::Skipped(reason) => println!("  LEFT    {description}  ({reason})"),
+            ItemStatus::Done => {}
         }
     }
-    if !outcome.all_done() {
-        // Elevation only exists on Windows (the broker is a LocalSystem service);
-        // every non-Windows uninstall runs entirely in user-land, so a failure
-        // there is a file in use, never a privilege problem — no sudo hint.
-        #[cfg(windows)]
+
+    // Left items are always the broker after a declined elevation (Windows-only):
+    // one clear next step, not the generic file-in-use hint.
+    if skipped > 0 {
         println!(
-            "\nSome items could not be removed — e.g. the broker, a LocalSystem service. \
-             Re-run `uffs --uninstall` from an elevated (Administrator) terminal."
+            "\nThe Access Broker was left because elevation was declined. Re-run\n\
+             `uffs --uninstall` from an Administrator terminal to remove it."
         );
-        #[cfg(not(windows))]
+    }
+    if failed > 0 {
         println!(
             "\nSome items could not be removed (a file may be in use). Close anything \
              using them and re-run."

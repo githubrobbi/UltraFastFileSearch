@@ -63,13 +63,19 @@ impl SystemEffects {
 impl Effects for SystemEffects {
     fn stop_process(&mut self, component: &str, pid: u32) -> Result<()> {
         // The daemon's analyzed pid can go stale before execution (the deep
-        // sweep's coverage reload restarts it), so stop the CURRENT daemon via
-        // the same handler `uffs --daemon kill` uses (pid-file/socket
-        // discovery), falling back to the recorded pid; then wait for it to
-        // actually exit so its image is unlocked before the runtime binaries
-        // are deleted.
+        // sweep's coverage reload restarts it), so stop the CURRENT daemon:
+        // graceful shutdown RPC first — it needs no OS privileges, so it also
+        // stops an ELEVATED daemon (the no-broker sweep's UAC start) that
+        // taskkill could not touch — then the `uffs --daemon kill` handler
+        // (pid-file/socket discovery), then the recorded pid as a last resort.
+        // Finally wait for the process to actually exit so its image is
+        // unlocked before the runtime binaries are deleted.
         if component == "daemon" {
-            if crate::commands::daemon_mgmt::daemon_quiet(&crate::args::DaemonAction::Kill).is_err()
+            let stopped = uffs_client::connect_sync::UffsClientSync::connect_raw()
+                .is_ok_and(|mut client| client.shutdown().is_ok());
+            if !stopped
+                && crate::commands::daemon_mgmt::daemon_quiet(&crate::args::DaemonAction::Kill)
+                    .is_err()
             {
                 terminate_pid(pid)?;
             }

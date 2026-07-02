@@ -41,12 +41,26 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for shutdown.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Whether the daemon already covers every NTFS drive — a cheap RPC check used
+/// by the sweep-elevation decision *before* the gather starts (a daemon with
+/// full coverage needs no reload, elevated or not).
+pub(crate) fn coverage_complete() -> bool {
+    let all = detect_ntfs_drives();
+    if all.is_empty() {
+        return true;
+    }
+    let managed = current_managed_drives();
+    all.iter().all(|drive| managed.contains(drive))
+}
+
 /// Ensure the daemon covers every NTFS drive before the deep sweep. No-op when
 /// coverage is already complete; otherwise reload the daemon (kill + start)
-/// via the real CLI handlers. Returns the deferred narration notes (always
-/// empty in loud mode, where everything printed live). Best-effort: any
-/// failure just means the sweep covers whatever is currently loaded.
-pub(crate) fn ensure_drive_coverage(quiet: bool) -> Vec<String> {
+/// via the real CLI handlers — with `elevate_daemon` the start requests a UAC
+/// prompt (the user opted in at the sweep gate: without the Access Broker a
+/// daemon can only read the MFT elevated). Returns the deferred narration
+/// notes (always empty in loud mode, where everything printed live).
+/// Best-effort: any failure just means the sweep covers whatever is loaded.
+pub(crate) fn ensure_drive_coverage(quiet: bool, elevate_daemon: bool) -> Vec<String> {
     let mut notes: Vec<String> = Vec::new();
     let all = detect_ntfs_drives();
     if all.is_empty() {
@@ -62,7 +76,7 @@ pub(crate) fn ensure_drive_coverage(quiet: bool) -> Vec<String> {
         // The daemon already covers every system drive — nothing to do.
         return notes;
     }
-    reload_daemon_for_coverage(&all, &missing, quiet, &mut notes);
+    reload_daemon_for_coverage(&all, &missing, quiet, elevate_daemon, &mut notes);
     notes
 }
 
@@ -89,6 +103,7 @@ fn reload_daemon_for_coverage(
     all: &[DriveLetter],
     missing: &[DriveLetter],
     quiet: bool,
+    elevate_daemon: bool,
     notes: &mut Vec<String>,
 ) {
     let list = missing
@@ -127,7 +142,7 @@ fn reload_daemon_for_coverage(
     }
     wait_until_daemon_down();
 
-    if let Err(err) = run_handler(quiet, &start_action()) {
+    if let Err(err) = run_handler(quiet, &start_action(elevate_daemon)) {
         emit(
             quiet,
             notes,
@@ -175,8 +190,10 @@ fn emit(quiet: bool, notes: &mut Vec<String>, line: String) {
 }
 
 /// The [`DaemonAction::Start`] a bare `uffs --daemon start` produces: auto-
-/// discover every NTFS drive, use the cache, default logging, no UAC prompt.
-fn start_action() -> DaemonAction {
+/// discover every NTFS drive, use the cache, default logging. `elevate`
+/// requests the UAC prompt (`--daemon start --elevate`) for the no-broker
+/// sweep path the user opted into.
+fn start_action(elevate: bool) -> DaemonAction {
     DaemonAction::Start {
         mft_file: Vec::new(),
         data_dir: None,
@@ -184,7 +201,7 @@ fn start_action() -> DaemonAction {
         no_cache: false,
         log_level: "info".to_owned(),
         log_file: None,
-        elevate: false,
+        elevate,
     }
 }
 

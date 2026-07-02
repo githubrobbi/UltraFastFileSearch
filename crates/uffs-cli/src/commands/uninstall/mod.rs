@@ -75,12 +75,17 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     #[cfg(windows)]
     sweep::set_verbose(parsed.verbose);
 
-    // Overlap the slow work with the user's first decision: the drive-coverage
-    // reload + deep sweep start (quietly) in the background the moment the
-    // command fires, while the elevation question is on screen. `-v` runs
-    // sequentially instead so its live diagnostics stay readable.
+    // The deep-sweep decision comes first: a broker-less, non-elevated sweep
+    // needs the user to opt into a UAC daemon start (or skip the sweep).
     #[cfg(windows)]
-    let gather = start_stray_gather(&parsed, &removal_plan);
+    let sweep = sweep_decision(&parsed)?;
+
+    // Overlap the slow work with the user's next decision: the drive-coverage
+    // reload + deep sweep start (quietly) in the background right away, while
+    // the elevation question is on screen. `-v` runs sequentially instead so
+    // its live diagnostics stay readable.
+    #[cfg(windows)]
+    let gather = start_stray_gather(&parsed, &removal_plan, sweep);
 
     let gate = elevation_gate(&parsed, &mut removal_plan)?;
     let skipped_elevation: Vec<String> = match &gate {
@@ -92,7 +97,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // COMPLETE picture at once: CORE table + inventory, EXTRA table, the action
     // plan, and the gate notes. Nothing was shown while data was in flight.
     #[cfg(windows)]
-    let gathered = finish_stray_gather(&parsed, &removal_plan, gather);
+    let gathered = finish_stray_gather(&removal_plan, gather, sweep);
     #[cfg(windows)]
     let stray_plan = &gathered.stray_plan;
     #[cfg(not(windows))]
@@ -386,6 +391,72 @@ fn plan_dirs(plan: &RemovalPlan) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The up-front deep-sweep decision. Windows-only.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum SweepDecision {
+    /// Run the sweep; `elevate_daemon` = start the index daemon with a UAC
+    /// prompt (the no-broker path the user opted into at the sweep gate).
+    Proceed {
+        /// Whether the daemon start requests elevation (`--elevate`).
+        elevate_daemon: bool,
+    },
+    /// Skip the sweep entirely (`--no-deep-sweep`, or the user/mode declined
+    /// the elevation a broker-less sweep would need).
+    Skip,
+}
+
+/// Decide up front whether (and how) the deep sweep runs. A complete sweep
+/// needs the index daemon covering every drive; without the Access Broker a
+/// daemon can only read the MFT **elevated**, so when coverage is incomplete,
+/// this run is not elevated, and no broker pipe is serving, the user chooses:
+/// start the daemon with a UAC prompt now, or skip the sweep. `--yes` and
+/// `--dry-run` never pop a surprise UAC — they skip with a note instead.
+#[cfg(windows)]
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn sweep_decision(parsed: &UninstallArgs) -> Result<SweepDecision> {
+    /// Short broker-pipe probe (same budget as the daemon-management gate).
+    const BROKER_PROBE_MS: u32 = 600;
+
+    if parsed.no_deep_sweep {
+        return Ok(SweepDecision::Skip);
+    }
+    if coverage::coverage_complete()
+        || uffs_mft::platform::is_elevated()
+        || uffs_winsvc::pipe_serving(uffs_broker_protocol::PIPE_NAME, BROKER_PROBE_MS)
+    {
+        return Ok(SweepDecision::Proceed {
+            elevate_daemon: false,
+        });
+    }
+    // A complete sweep would need an elevated daemon start.
+    if parsed.dry_run || parsed.assume_yes {
+        println!(
+            "\nDeep sweep skipped: without the Access Broker the index daemon needs\n\
+             Administrator to start. Run elevated (or install the broker) for a full sweep."
+        );
+        return Ok(SweepDecision::Skip);
+    }
+    println!(
+        "\nA thorough uninstall deep-sweeps every drive for stray UFFS files. Without\n\
+         the Access Broker, the index daemon can only start from an elevated process."
+    );
+    let choice = prompt_choice(
+        "\n  d = deep sweep — start the daemon now (Windows shows one UAC prompt)\n\
+         \x20 s = skip the deep sweep (standard locations only)\n\
+         \n\
+         Choice [d/S]: ",
+    )?;
+    if matches!(choice.as_str(), "d" | "deep" | "deep sweep") {
+        Ok(SweepDecision::Proceed {
+            elevate_daemon: true,
+        })
+    } else {
+        println!("Deep sweep skipped; only the standard locations are cleaned.");
+        Ok(SweepDecision::Skip)
+    }
+}
+
 /// Everything the deep-sweep gather produces for the final presentation.
 /// Windows-only — off Windows the daemon indexes offline captures, not the
 /// live filesystem, so there is no stray phase at all.
@@ -406,10 +477,10 @@ struct GatherOutcome {
 static GATHER_PHASE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 /// Start the drive-coverage check/reload + deep sweep on a background thread
-/// the moment the uninstall fires, so the daemon index work overlaps the
-/// elevation question instead of costing wall-clock time after it. Quiet: all
-/// narration is deferred into the returned [`GatherOutcome`]. `None` when the
-/// sweep is disabled (`--no-deep-sweep`) or running sequentially (`-v`).
+/// the moment the sweep decision is made, so the daemon index work overlaps
+/// the elevation question instead of costing wall-clock time after it. Quiet:
+/// all narration is deferred into the returned [`GatherOutcome`]. `None` when
+/// the sweep was skipped at the gate or is running sequentially (`-v`).
 ///
 /// The known-dirs snapshot is taken before the elevation gate mutates the
 /// plan; that is safe because the gate only drops service/process items, which
@@ -418,13 +489,19 @@ static GATHER_PHASE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8
 fn start_stray_gather(
     parsed: &UninstallArgs,
     removal_plan: &RemovalPlan,
+    sweep: SweepDecision,
 ) -> Option<std::thread::JoinHandle<GatherOutcome>> {
-    if parsed.no_deep_sweep || parsed.verbose {
+    let SweepDecision::Proceed { elevate_daemon } = sweep else {
+        return None;
+    };
+    if parsed.verbose {
         return None;
     }
     GATHER_PHASE.store(0, core::sync::atomic::Ordering::Relaxed);
     let known = plan_dirs(removal_plan);
-    Some(std::thread::spawn(move || gather_strays(&known, true)))
+    Some(std::thread::spawn(move || {
+        gather_strays(&known, true, elevate_daemon)
+    }))
 }
 
 /// The gather body: ensure drive coverage (quiet = narration deferred), then
@@ -432,8 +509,8 @@ fn start_stray_gather(
 /// under `--dry-run` too — coverage and searching are non-destructive, and a
 /// dry run should preview the *complete* picture.
 #[cfg(windows)]
-fn gather_strays(known: &[PathBuf], quiet: bool) -> GatherOutcome {
-    let coverage_notes = coverage::ensure_drive_coverage(quiet);
+fn gather_strays(known: &[PathBuf], quiet: bool, elevate_daemon: bool) -> GatherOutcome {
+    let coverage_notes = coverage::ensure_drive_coverage(quiet, elevate_daemon);
     GATHER_PHASE.store(1, core::sync::atomic::Ordering::Relaxed);
 
     sweep::dbg_gap();
@@ -464,21 +541,22 @@ fn gather_strays(known: &[PathBuf], quiet: bool) -> GatherOutcome {
 
 /// Collect the gather results: join the background thread behind a spinner
 /// (default), run the gather synchronously and loudly (`-v`), or return empty
-/// (`--no-deep-sweep`). A panicked gather degrades to "no strays found".
+/// (the sweep was skipped at the gate). A panicked gather degrades to "no
+/// strays found".
 #[cfg(windows)]
 fn finish_stray_gather(
-    parsed: &UninstallArgs,
     removal_plan: &RemovalPlan,
     gather: Option<std::thread::JoinHandle<GatherOutcome>>,
+    sweep: SweepDecision,
 ) -> GatherOutcome {
     if let Some(handle) = gather {
         spinner_wait(&handle);
         return handle.join().unwrap_or_default();
     }
-    if parsed.no_deep_sweep {
+    let SweepDecision::Proceed { elevate_daemon } = sweep else {
         return GatherOutcome::default();
-    }
-    gather_strays(&plan_dirs(removal_plan), false)
+    };
+    gather_strays(&plan_dirs(removal_plan), false, elevate_daemon)
 }
 
 /// Animate a small spinner on the current line until `handle` finishes, with a

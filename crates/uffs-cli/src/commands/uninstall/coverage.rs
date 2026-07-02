@@ -111,12 +111,11 @@ fn reload_daemon_for_coverage(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    if quiet {
-        notes.push(format!(
-            "\nNote: the index daemon was reloaded (kill + start) to cover every drive\n\
-             for the deep sweep (it was missing {list})."
-        ));
-    } else {
+    // Loud mode announces the attempt live; quiet mode stays silent until the
+    // OUTCOME is known — a pre-declared "reloaded" note would contradict a later
+    // start failure (e.g. a declined UAC prompt), which is exactly what the user
+    // saw. The truthful note is pushed only once `start` actually succeeds.
+    if !quiet {
         emit(
             quiet,
             notes,
@@ -134,8 +133,8 @@ fn reload_daemon_for_coverage(
             quiet,
             notes,
             format!(
-                "  could not kill the daemon: {err}\n\
-                   Continuing the deep sweep with whatever is loaded."
+                "\nNote: could not stop the running daemon ({err}).\n\
+                   The deep sweep will scan the drives already indexed."
             ),
         );
         return;
@@ -143,15 +142,16 @@ fn reload_daemon_for_coverage(
     wait_until_daemon_down();
 
     if let Err(err) = run_handler(quiet, &start_action(elevate_daemon)) {
-        emit(
-            quiet,
-            notes,
-            format!(
-                "  could not start the daemon: {err}\n\
-                   Continuing the deep sweep with whatever is loaded."
-            ),
-        );
+        emit(quiet, notes, start_failure_note(elevate_daemon, &err));
         return;
+    }
+
+    // Success: the daemon is back with full coverage, so the note is truthful.
+    if quiet {
+        notes.push(format!(
+            "\nNote: the index daemon was restarted to cover every drive for the deep\n\
+             sweep (it was missing {list})."
+        ));
     }
 
     let managed = current_managed_drives();
@@ -165,6 +165,24 @@ fn reload_daemon_for_coverage(
                 total = all.len(),
             ),
         );
+    }
+}
+
+/// A coherent note for a failed coverage start — the elevated no-broker case
+/// names the likely cause (a declined UAC prompt) so the message does not read
+/// as a bug. Never claims the daemon "was reloaded" (it was not).
+fn start_failure_note(elevate_daemon: bool, err: &anyhow::Error) -> String {
+    if elevate_daemon {
+        format!(
+            "\nNote: the elevated index daemon a full deep sweep needs could not be\n\
+             started (the UAC prompt was likely declined: {err}).\n\
+             The deep sweep will scan the drives already indexed."
+        )
+    } else {
+        format!(
+            "\nNote: the index daemon could not be started ({err}).\n\
+             The deep sweep will scan the drives already indexed."
+        )
     }
 }
 

@@ -102,11 +102,11 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
 
     #[cfg(windows)]
     render::print_coverage_notes(&gathered.coverage_notes);
-    render::print_resolution_table(&resolved);
     render::print_inventory(&inventory);
+    render::print_resolution_table(&resolved);
     #[cfg(windows)]
     render::print_extra_table(&gathered.strays);
-    render::print_plan(&removal_plan);
+    render::print_plan(&removal_plan, stray_plan);
     render::print_skipped_elevation(&skipped_elevation);
     if matches!(gate, ElevationChoice::ElevateAtRemoval) {
         render::print_uac_note();
@@ -259,9 +259,10 @@ enum ElevationChoice {
 /// non-elevated run is told immediately what needs Administrator and decides
 /// once — elevate at removal time (Windows: one UAC prompt), continue without
 /// (items dropped so the final summary never lists work that will not happen),
-/// or abort. Skipped when elevated, under `--dry-run` (preview keeps the
-/// markers), or when nothing needs Administrator. `--yes` continues without
-/// asking — a scripted run must never trigger a surprise UAC prompt.
+/// or abort. Skipped when elevated, under `--dry-run` (the preview keeps the
+/// "needs Administrator" markers and notes that a real run asks), or when
+/// nothing needs Administrator. `--yes` continues without asking — a scripted
+/// run must never trigger a surprise UAC prompt.
 /// `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
 /// Unix effective-uid 0).
 fn elevation_gate(

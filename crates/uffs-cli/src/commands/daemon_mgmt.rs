@@ -326,8 +326,10 @@ fn daemon_start(
     // Gated behind an explicit debug/trace log level: on the default
     // `daemon start` happy path users see clean output, not internals
     // (2026-06-12 fresh-VM dry run flagged the unconditional version as
-    // looking like leftover debug logging).
-    if matches!(effective_log_level.as_str(), "debug" | "trace") {
+    // looking like leftover debug logging). Also silenced in quiet mode —
+    // a background daemon reload must never print over an interactive
+    // prompt or spinner (observed with UFFS_LOG=debug set).
+    if matches!(effective_log_level.as_str(), "debug" | "trace") && !is_quiet() {
         println!(
             "[diag] daemon_start: drives={drives:?}  log_level={log_level:?}  log_file={log_file:?}"
         );

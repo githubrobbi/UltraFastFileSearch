@@ -157,8 +157,8 @@ pub(crate) fn print_inventory(inventory: &Inventory) {
 /// Print the ordered removal plan (consent surface, U-21). Items are numbered
 /// across groups; ones needing Administrator are flagged.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_plan(plan: &RemovalPlan) {
-    if plan.is_empty() {
+pub(crate) fn print_plan(plan: &RemovalPlan, extra: &RemovalPlan) {
+    if plan.is_empty() && extra.is_empty() {
         println!("\nNothing to remove: no UFFS install or artifacts were found.");
         return;
     }
@@ -179,11 +179,30 @@ pub(crate) fn print_plan(plan: &RemovalPlan) {
             index = index.saturating_add(1);
         }
     }
-    println!(
-        "\nReclaims ~{} across {} item(s).",
-        human_bytes(plan.total_bytes()),
-        plan.item_count(),
-    );
+    // The EXTRA files ride the same summary so nothing is hidden from the
+    // final picture, but they are a separate choice: the ALL/CORE question.
+    if !extra.is_empty() {
+        println!("\n Found elsewhere (EXTRA)");
+        println!(
+            "  [{index}] {count} UFFS file(s) outside the standard install locations \
+             (listed above; removed only with ALL)",
+            count = extra.item_count(),
+        );
+    }
+    if extra.is_empty() {
+        println!(
+            "\nReclaims ~{} across {} item(s).",
+            human_bytes(plan.total_bytes()),
+            plan.item_count(),
+        );
+    } else {
+        println!(
+            "\nReclaims ~{} across {} CORE item(s), plus {} EXTRA file(s) with ALL.",
+            human_bytes(plan.total_bytes()),
+            plan.item_count(),
+            extra.item_count(),
+        );
+    }
 }
 
 /// The up-front elevation gate (U-30): the FIRST thing a non-elevated run says.

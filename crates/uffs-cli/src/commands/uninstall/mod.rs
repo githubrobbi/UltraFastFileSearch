@@ -98,6 +98,14 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // plan, and the gate notes. Nothing was shown while data was in flight.
     #[cfg(windows)]
     let gathered = finish_stray_gather(&removal_plan, gather, sweep);
+    // The deep sweep may have STARTED the daemon (the no-broker UAC start) after
+    // the plan was snapshotted with none running — make sure the plan stops that
+    // live daemon before its binary is deleted, or its locked image would fail
+    // the runtime-binary delete with Access-denied.
+    #[cfg(windows)]
+    if let Some(pid) = running_daemon_pid() {
+        removal_plan.ensure_daemon_shutdown(pid);
+    }
     #[cfg(windows)]
     let stray_plan = &gathered.stray_plan;
     #[cfg(not(windows))]
@@ -557,6 +565,17 @@ fn finish_stray_gather(
         return GatherOutcome::default();
     };
     gather_strays(&plan_dirs(removal_plan), false, elevate_daemon)
+}
+
+/// The pid of the daemon that is running right now, or `None` if none answers.
+/// Used after the gather to fold a sweep-started daemon into the shutdown plan.
+#[cfg(windows)]
+fn running_daemon_pid() -> Option<u32> {
+    uffs_client::connect_sync::UffsClientSync::connect_raw()
+        .ok()
+        .and_then(|mut client| client.status().ok())
+        .map(|status| status.pid)
+        .filter(|&pid| pid != 0)
 }
 
 /// Animate a small spinner on the current line until `handle` finishes, with a

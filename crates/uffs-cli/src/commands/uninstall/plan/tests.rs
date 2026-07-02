@@ -247,6 +247,84 @@ fn running_process_becomes_a_stop_item() {
     )));
 }
 
+#[cfg(windows)]
+#[test]
+fn ensure_daemon_shutdown_injects_a_stop_before_the_runtime_binaries() {
+    // No daemon was running when the plan was built (the deep sweep starts one
+    // afterwards), so the plan has no daemon stop — but it does have runtime
+    // binaries whose image the sweep-started daemon would lock.
+    let report = DetectionReport {
+        roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
+        running: Vec::new(),
+    };
+    let mut plan = built(
+        &report,
+        &inventory(BrokerServiceState::Absent, 1024),
+        &UninstallArgs::default(),
+    );
+    assert!(
+        !has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::StopProcess { .. }
+        )),
+        "no daemon stop before the injection"
+    );
+
+    plan.ensure_daemon_shutdown(9191);
+
+    let stop_group = plan
+        .groups
+        .iter()
+        .position(|group| {
+            group.items.iter().any(|item| {
+                matches!(&item.target, PlanTarget::StopProcess { component, pid }
+                    if component == "daemon" && *pid == 9191)
+            })
+        })
+        .expect("the daemon stop was injected");
+    let runtime_group = plan
+        .groups
+        .iter()
+        .position(|group| group.title == "Runtime binaries (after shutdown)")
+        .expect("runtime-binaries group present");
+    assert!(
+        stop_group < runtime_group,
+        "the daemon stop must run before the runtime binaries are deleted"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn ensure_daemon_shutdown_is_a_noop_when_a_stop_already_exists() {
+    let report = DetectionReport {
+        roots: Vec::new(),
+        running: vec![RunningProcess {
+            component: Component::Daemon,
+            pid: 4242,
+            image_path: None,
+            command_line: None,
+            version: None,
+        }],
+    };
+    let mut plan = built(
+        &report,
+        &inventory(BrokerServiceState::Absent, 1024),
+        &UninstallArgs::default(),
+    );
+    let before = plan.item_count();
+    plan.ensure_daemon_shutdown(9191);
+    assert_eq!(
+        plan.item_count(),
+        before,
+        "an existing daemon stop is not duplicated"
+    );
+    assert!(
+        plan.items().any(|item| matches!(&item.target,
+            PlanTarget::StopProcess { pid, .. } if *pid == 4242)),
+        "the analyzed daemon stop is kept (not replaced)"
+    );
+}
+
 #[test]
 fn drop_elevation_required_removes_broker_keeps_the_rest() {
     let report = DetectionReport {

@@ -47,6 +47,13 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         print_help();
         return Ok(());
     }
+    // Hidden elevated-child mode (see `UninstallArgs::admin_helper_service`):
+    // remove exactly the named service and exit. Spawned via UAC by the
+    // effects layer's service-removal routing; never part of the interactive
+    // flow.
+    if let Some(service) = parsed.admin_helper_service.as_deref() {
+        return run_admin_helper(service);
+    }
 
     // M9 crash-awareness: if a prior uninstall was interrupted, say so. Because
     // removal is idempotent, this (re-)run simply completes it.
@@ -54,23 +61,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         render::print_resumed_note();
     }
 
-    // M1 analysis: reuse the self-update Phase-A detection for the binary
-    // resolution table, then sweep in any retired/optional binary names that
-    // linger from old installs, then inventory the non-binary artifacts.
-    let mut report = crate::commands::update::detect();
-    // Scan PATH + the standard bin dirs for copies that are neither running nor
-    // the invoking exe (which-style, stat-only — no filesystem walk), then sweep
-    // in any retired/optional binary names that linger from old installs.
-    analyze::augment_with_path_locations(&mut report);
-    analyze::augment_with_extra_binaries(&mut report);
-    let candidates = analyze::build_candidates(&report);
-    let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
-    let inventory = inventory::collect();
-    // M2: turn the analysis into an ordered removal plan (read-only). Only PATH
-    // entries pointing at a *dedicated* UFFS dir are offered for removal — a
-    // shared bin dir (~/bin, ~/.local/bin) we never created is left alone.
-    let removable_path = analyze::removable_path_dirs(&report, &analyze::path_entries());
-    let mut removal_plan = plan::build_plan(&report, &inventory, &parsed, &removable_path);
+    let (resolved, inventory, mut removal_plan) = analyze_and_plan(&parsed);
 
     if parsed.json {
         render::print_json(&resolved, &inventory, &removal_plan);
@@ -84,7 +75,11 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     #[cfg(windows)]
     sweep::set_verbose(parsed.verbose);
 
-    let skipped_elevation = elevation_gate(&parsed, &mut removal_plan)?;
+    let gate = elevation_gate(&parsed, &mut removal_plan)?;
+    let skipped_elevation: Vec<String> = match &gate {
+        ElevationChoice::ContinueWithout(items) => items.clone(),
+        ElevationChoice::NotNeeded | ElevationChoice::ElevateAtRemoval => Vec::new(),
+    };
 
     // Scan overview: a one-line summary by default; the full binary resolution
     // table + artifact inventory under `-v`.
@@ -108,6 +103,9 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // the sweep is part of this picture.
     render::print_plan(&removal_plan);
     render::print_skipped_elevation(&skipped_elevation);
+    if matches!(gate, ElevationChoice::ElevateAtRemoval) {
+        render::print_uac_note();
+    }
 
     if parsed.dry_run {
         if removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
@@ -157,7 +155,10 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
 
     // M4 execute (U-40..42): run the plan(s) once against the live effects sink,
     // accumulating a single outcome so the summary + retry hint print once.
-    let mut effects = effects::SystemEffects::new(self_paths.clone());
+    let mut effects = effects::SystemEffects::new(
+        self_paths.clone(),
+        matches!(gate, ElevationChoice::ElevateAtRemoval),
+    );
     let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
         outcome.absorb(remove::execute(&removal_plan, &mut effects));
@@ -202,32 +203,140 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// M1+M2 analysis (read-only, no output): reuse the self-update Phase-A
+/// detection, sweep in PATH/standard-location copies and retired/optional
+/// binary names lingering from old installs, inventory the non-binary
+/// artifacts, and build the ordered removal plan. Only PATH entries pointing
+/// at a *dedicated* UFFS dir are offered for removal — a shared bin dir
+/// (`~/bin`, `~/.local/bin`) we never created is left alone.
+fn analyze_and_plan(
+    parsed: &UninstallArgs,
+) -> (
+    Vec<resolve_order::StemResolution>,
+    inventory::Inventory,
+    RemovalPlan,
+) {
+    let mut report = crate::commands::update::detect();
+    analyze::augment_with_path_locations(&mut report);
+    analyze::augment_with_extra_binaries(&mut report);
+    let candidates = analyze::build_candidates(&report);
+    let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
+    let inventory = inventory::collect();
+    let removable_path = analyze::removable_path_dirs(&report, &analyze::path_entries());
+    let removal_plan = plan::build_plan(&report, &inventory, parsed, &removable_path);
+    (resolved, inventory, removal_plan)
+}
+
+/// What the elevation gate decided for this run.
+enum ElevationChoice {
+    /// Elevated, `--dry-run`, or nothing needs Administrator — plan untouched.
+    NotNeeded,
+    /// Windows, non-elevated: keep the admin items in the plan; removal routes
+    /// them through a one-shot elevated helper (a single UAC prompt at removal
+    /// time — see [`effects`]).
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "constructed only on the Windows UAC path")
+    )]
+    ElevateAtRemoval,
+    /// Non-elevated, continuing without the admin items: they are dropped from
+    /// the plan; carries their descriptions for the final summary's "NOT
+    /// removed in this run" note.
+    ContinueWithout(Vec<String>),
+}
+
 /// M3 elevation gate (U-30): THE FIRST question, before any analysis output.
 /// The broker (its `LocalSystem` service) is the only admin-only part; a
-/// non-elevated run is told immediately what it cannot remove and decides once
-/// whether to continue without it. The skipped items are dropped from the plan
-/// entirely (so the final summary never lists work that will not happen) and
-/// their descriptions are returned for the summary's "NOT removed in this run"
-/// note. Empty when elevated, under `--dry-run` (preview keeps the markers), or
-/// when nothing needs Administrator. `--yes` continues without asking.
+/// non-elevated run is told immediately what needs Administrator and decides
+/// once — elevate at removal time (Windows: one UAC prompt), continue without
+/// (items dropped so the final summary never lists work that will not happen),
+/// or abort. Skipped when elevated, under `--dry-run` (preview keeps the
+/// markers), or when nothing needs Administrator. `--yes` continues without
+/// asking — a scripted run must never trigger a surprise UAC prompt.
 /// `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
 /// Unix effective-uid 0).
-fn elevation_gate(parsed: &UninstallArgs, removal_plan: &mut RemovalPlan) -> Result<Vec<String>> {
+fn elevation_gate(
+    parsed: &UninstallArgs,
+    removal_plan: &mut RemovalPlan,
+) -> Result<ElevationChoice> {
     if parsed.dry_run || !removal_plan.requires_elevation() || uffs_mft::platform::is_elevated() {
-        return Ok(Vec::new());
+        return Ok(ElevationChoice::NotNeeded);
     }
     render::print_elevation_gate(removal_plan);
-    let continue_without = parsed.assume_yes
-        || confirm(
-            "\nContinue without Administrator? Everything else is still uninstalled; the\n\
-             item(s) above are left in place. (No aborts so you can re-run elevated) [y/N] ",
-        )?;
-    if !continue_without {
-        bail!(
+    if parsed.assume_yes {
+        return Ok(ElevationChoice::ContinueWithout(
+            removal_plan.drop_elevation_required(),
+        ));
+    }
+    platform_elevation_choice(removal_plan)
+}
+
+/// Windows: the interactive 3-way elevation choice. `e` records the decision —
+/// the single UAC prompt appears later, when removal actually starts, so
+/// nothing is elevated before the final confirmation.
+#[cfg(windows)]
+fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<ElevationChoice> {
+    let choice = prompt_choice(
+        "\n  e = elevate at removal time (Windows shows one UAC prompt)\n\
+         \x20 c = continue without it (the item(s) above stay installed)\n\
+         \x20 a = abort\n\
+         Choice [e/c/A]: ",
+    )?;
+    match choice.as_str() {
+        "e" | "elevate" => Ok(ElevationChoice::ElevateAtRemoval),
+        "c" | "continue" => Ok(ElevationChoice::ContinueWithout(
+            removal_plan.drop_elevation_required(),
+        )),
+        _ => bail!(
             "aborted — re-run `uffs --uninstall` from an elevated (Administrator) terminal to remove everything"
+        ),
+    }
+}
+
+/// Non-Windows: there is no UAC to request, so the choice stays binary —
+/// continue without the elevation-required items, or abort to re-run elevated.
+#[cfg(not(windows))]
+fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<ElevationChoice> {
+    if confirm(
+        "\nContinue without elevation? Everything else is still uninstalled; the\n\
+         item(s) above are left in place. (No aborts so you can re-run elevated) [y/N] ",
+    )? {
+        Ok(ElevationChoice::ContinueWithout(
+            removal_plan.drop_elevation_required(),
+        ))
+    } else {
+        bail!("aborted — re-run `uffs --uninstall` elevated (sudo) to remove everything")
+    }
+}
+
+/// Read one line of input for a multi-choice prompt, trimmed and lowercased.
+#[cfg(windows)]
+#[expect(clippy::print_stdout, reason = "interactive CLI prompt")]
+fn prompt_choice(prompt: &str) -> Result<String> {
+    use std::io::Write as _;
+
+    print!("{prompt}");
+    std::io::stdout()
+        .flush()
+        .context("flushing the choice prompt")?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("reading the choice")?;
+    Ok(line.trim().to_ascii_lowercase())
+}
+
+/// Hidden `--remove-service-helper` mode: the elevated child spawned (via a UAC
+/// prompt) by [`effects`]' service-removal routing. Performs exactly the same
+/// removal the elevated in-process path uses, then exits; refuses to run
+/// non-elevated as a guard against direct invocation.
+fn run_admin_helper(service: &str) -> Result<()> {
+    if !uffs_mft::platform::is_elevated() {
+        bail!(
+            "--remove-service-helper must run elevated (it is spawned via a UAC prompt by `uffs --uninstall`)"
         );
     }
-    Ok(removal_plan.drop_elevation_required())
+    effects::remove_windows_service(service)
 }
 
 /// The running self-binaries that cannot be deleted in place: the current

@@ -24,13 +24,30 @@ use crate::commands::update::model::Scope;
 pub(crate) struct SystemEffects {
     /// Absolute paths of the running self-binaries to skip in-place deletes.
     self_paths: Vec<PathBuf>,
+    /// Windows: the user chose "elevate at removal time" at the elevation gate,
+    /// so admin-only service removal is routed through a one-shot elevated
+    /// helper (a single UAC prompt) instead of failing non-elevated. Stored but
+    /// never read off Windows (no broker service exists there).
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "read only by the Windows UAC service-removal routing"
+        )
+    )]
+    elevate_via_uac: bool,
 }
 
 impl SystemEffects {
     /// Construct the live effects sink, told which running self-binaries to
-    /// skip in-place (they are deferred to [`schedule_self_delete`]).
-    pub(crate) const fn new(self_paths: Vec<PathBuf>) -> Self {
-        Self { self_paths }
+    /// skip in-place (they are deferred to [`schedule_self_delete`]) and
+    /// whether admin-only service removal goes through the Windows UAC helper
+    /// (`elevate_via_uac`; meaningless off Windows).
+    pub(crate) const fn new(self_paths: Vec<PathBuf>, elevate_via_uac: bool) -> Self {
+        Self {
+            self_paths,
+            elevate_via_uac,
+        }
     }
 
     /// Whether `path` is one of the running self-binaries (case-insensitive,
@@ -49,6 +66,13 @@ impl Effects for SystemEffects {
     }
 
     fn remove_service(&mut self, service: &str) -> Result<()> {
+        // Non-elevated with the gate's "elevate at removal time" choice: run
+        // the removal in a one-shot elevated helper (this is where the single
+        // UAC prompt appears). Elevated runs remove the service in-process.
+        #[cfg(windows)]
+        if self.elevate_via_uac && !uffs_mft::is_elevated() {
+            return remove_service_via_uac(service);
+        }
         remove_windows_service(service)
     }
 
@@ -241,9 +265,11 @@ fn stop_command(pid_str: &str) -> Command {
 }
 
 /// Stop + delete the broker Windows service. No-op off Windows (where no such
-/// service exists, so the plan never produces this item).
+/// service exists, so the plan never produces this item). `pub(crate)` so the
+/// hidden `--remove-service-helper` mode (the elevated UAC child) can call the
+/// exact same removal.
 #[cfg(windows)]
-fn remove_windows_service(service: &str) -> Result<()> {
+pub(crate) fn remove_windows_service(service: &str) -> Result<()> {
     // Best-effort stop first; an already-stopped service is fine to delete, so
     // proceed whether or not the stop succeeded.
     match uffs_winsvc::stop(service) {
@@ -259,8 +285,64 @@ fn remove_windows_service(service: &str) -> Result<()> {
 /// plan never produces this item off Windows, so this is never reached; if it
 /// somehow were, erroring is the honest outcome.
 #[cfg(not(windows))]
-fn remove_windows_service(service: &str) -> Result<()> {
+pub(crate) fn remove_windows_service(service: &str) -> Result<()> {
     bail!("cannot remove service {service}: the broker is Windows-only")
+}
+
+/// Marker exit code the `PowerShell` launcher script returns when elevation was
+/// not obtained (the UAC prompt was declined, or `Start-Process -Verb RunAs`
+/// failed) — distinguishable from the helper's own success (0) / failure (1).
+#[cfg(windows)]
+const UAC_NOT_GRANTED_EXIT: i32 = 223;
+
+/// Remove `service` through a one-shot **elevated helper**: relaunch this same
+/// `uffs.exe` via `Start-Process -Verb RunAs` (the single UAC prompt) with the
+/// hidden `--uninstall --remove-service-helper <service>` mode, wait for it,
+/// and map its exit code. A declined UAC prompt degrades gracefully into an
+/// error that names the skipped service and the elevated re-run hint — the
+/// executor records it and the rest of the uninstall continues.
+///
+/// `PowerShell` (not raw `ShellExecuteExW`) keeps this crate `unsafe`-free and
+/// matches the module's shell-out design; `-Wait -PassThru` provides the exit
+/// code, and the `catch` arm turns "UAC declined" into
+/// [`UAC_NOT_GRANTED_EXIT`].
+#[cfg(windows)]
+fn remove_service_via_uac(service: &str) -> Result<()> {
+    let raw_exe = std::env::current_exe().context("locating uffs.exe for the elevated helper")?;
+    let exe = crate::commands::update::strip_verbatim_prefix(raw_exe);
+    let exe_escaped = exe.display().to_string().replace('\'', "''");
+    let service_escaped = service.replace('\'', "''");
+    let script = format!(
+        "try {{ \
+           $p = Start-Process -FilePath '{exe_escaped}' \
+                -ArgumentList '--uninstall','--remove-service-helper','{service_escaped}' \
+                -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \
+           exit $p.ExitCode \
+         }} catch {{ exit {UAC_NOT_GRANTED_EXIT} }}"
+    );
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("spawning the elevated service-removal helper")?;
+    match status.code() {
+        Some(0) => {
+            // Trust but verify: the helper said OK, confirm the service is gone.
+            if uffs_winsvc::is_installed(service) {
+                bail!("elevated helper reported success but service {service} is still installed");
+            }
+            Ok(())
+        }
+        Some(UAC_NOT_GRANTED_EXIT) => bail!(
+            "elevation was not granted (UAC declined) — {service} was left installed; \
+             re-run `uffs --uninstall` from an Administrator terminal to remove it"
+        ),
+        other => bail!(
+            "elevated service-removal helper failed (exit {other:?}) — {service} may still \
+             be installed"
+        ),
+    }
 }
 
 /// Delegate removal of a `WinGet`-managed root to `winget uninstall`.
@@ -307,7 +389,7 @@ mod tests {
         // The second stem is treated as the running self-binary — it must be
         // skipped (left for the deferred self-delete), not removed in place.
         let self_path = base.join(exe_file_name("uffsd"));
-        let mut effects = SystemEffects::new(vec![self_path.clone()]);
+        let mut effects = SystemEffects::new(vec![self_path.clone()], false);
         effects.delete_binaries(&base, &stems).unwrap();
         assert!(
             !base.join(exe_file_name("uffs")).exists(),

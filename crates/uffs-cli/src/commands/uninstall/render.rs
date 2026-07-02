@@ -218,6 +218,17 @@ pub(crate) fn print_skipped_elevation(skipped: &[String]) {
     println!("  Re-run `uffs --uninstall` from an elevated terminal to remove these.");
 }
 
+/// Note printed under the final summary when the user chose "elevate at
+/// removal time" at the gate: exactly one UAC prompt appears once removal
+/// starts (never before the final confirmation).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_uac_note() {
+    println!(
+        "\nThe item(s) marked (needs Administrator) will show one Windows UAC prompt\n\
+         when removal starts."
+    );
+}
+
 /// One-line scan overview printed by default in place of the full resolution
 /// table + inventory (which move behind `-v`): how much was found, and where.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]

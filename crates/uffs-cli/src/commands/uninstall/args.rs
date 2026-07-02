@@ -63,6 +63,11 @@ pub(crate) struct UninstallArgs {
     pub(crate) scope: UninstallScope,
     /// `--help` / `-h`: print usage and exit.
     pub(crate) help: bool,
+    /// `--remove-service-helper <name>`: **internal, undocumented.** The
+    /// elevated child mode spawned via UAC by the non-elevated uninstall's
+    /// "elevate at removal time" choice: remove exactly this Windows service,
+    /// then exit. Never passed by users; deliberately absent from `--help`.
+    pub(crate) admin_helper_service: Option<String>,
 }
 
 impl UninstallArgs {
@@ -90,6 +95,12 @@ impl UninstallArgs {
                         .next()
                         .ok_or_else(|| anyhow!("--scope requires a value: user | machine | all"))?;
                     parsed.scope = UninstallScope::parse(value)?;
+                }
+                "--remove-service-helper" => {
+                    let value = iter.next().ok_or_else(|| {
+                        anyhow!("--remove-service-helper requires a service name")
+                    })?;
+                    parsed.admin_helper_service = Some(value.clone());
                 }
                 flag if flag.starts_with("--scope=") => {
                     let value = flag.strip_prefix("--scope=").unwrap_or_default();
@@ -145,6 +156,18 @@ mod tests {
     #[test]
     fn verbose_short_form_maps() {
         assert!(parse(&["-v"]).unwrap().verbose);
+    }
+
+    #[test]
+    fn hidden_service_helper_flag_parses_and_requires_a_name() {
+        assert_eq!(
+            parse(&["--remove-service-helper", "UffsAccessBroker"])
+                .unwrap()
+                .admin_helper_service
+                .as_deref(),
+            Some("UffsAccessBroker")
+        );
+        parse(&["--remove-service-helper"]).unwrap_err();
     }
 
     #[test]

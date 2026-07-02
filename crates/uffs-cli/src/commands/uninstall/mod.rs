@@ -290,6 +290,7 @@ fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<Elevation
         "\n  e = elevate at removal time (Windows shows one UAC prompt)\n\
          \x20 c = continue without it (the item(s) above stay installed)\n\
          \x20 a = abort\n\
+         \n\
          Choice [e/c/A]: ",
     )?;
     match choice.as_str() {
@@ -552,6 +553,7 @@ fn final_consent(
          \x20 a = ALL   — CORE and the {n} EXTRA file(s) found elsewhere\n\
          \x20 c = CORE  — the standard install only (leave the EXTRA files)\n\
          \x20 q = ABORT — nothing is removed\n\
+         \n\
          Choice [a/c/Q]: ",
         n = stray_plan.item_count()
     ))?;

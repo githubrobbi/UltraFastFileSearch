@@ -212,7 +212,7 @@ pub(crate) fn print_plan(plan: &RemovalPlan, extra: &RemovalPlan) {
 pub(crate) fn print_elevation_gate(plan: &RemovalPlan) {
     println!(
         "\nThis terminal is not elevated (Administrator). The following can only be\n\
-         removed from an elevated terminal (the broker runs as LocalSystem):"
+         removed from an elevated terminal (the broker runs as LocalSystem):\n"
     );
     for group in &plan.groups {
         for item in &group.items {

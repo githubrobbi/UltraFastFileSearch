@@ -7,18 +7,20 @@
 //! it is only as complete as the set of drives the daemon has loaded. Before
 //! the sweep we make sure the daemon covers every NTFS drive; if it does not,
 //! we reload it cleanly — **kill then start** — by calling the exact same
-//! handlers the CLI dispatches for `uffs --daemon kill` / `uffs --daemon start`
-//! ([`daemon_mgmt::daemon`]), in-process.
+//! handlers the CLI dispatches for `uffs --daemon kill` / `uffs --daemon
+//! start`, in-process (the daemon spawns as a direct child, identical to a
+//! shell start; an earlier subprocess relaunch made it a grandchild and was
+//! abandoned).
 //!
-//! Calling those handlers directly is the whole point: the daemon is then
-//! spawned as a **direct child of this process**, identical to a shell
-//! `uffs --daemon start`. An earlier attempt shelled out to
-//! `uffs.exe --daemon start` as a subprocess, which made the daemon a
-//! *grandchild* and intermittently hung its drive load (stuck at `5/7`).
-//! Re-using the handler avoids that entirely.
+//! Two narration modes: **loud** (`-v` sequential runs — everything prints
+//! live, including the daemon handlers' own lines) and **quiet** (the default
+//! background gather — the daemon handlers are silenced via
+//! [`daemon_mgmt::daemon_quiet`] and the narration is *deferred*: collected as
+//! note strings the caller prints with the final presentation, so nothing ever
+//! garbles the interactive prompt on the main thread).
 //!
-//! Windows-only: off Windows UFFS indexes offline MFT captures, not the live
-//! filesystem, so there is no live drive coverage to ensure.
+//! Best-effort throughout: any failure leaves coverage as-is and the sweep
+//! proceeds against whatever is currently loaded.
 
 #![cfg(windows)]
 
@@ -41,12 +43,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Ensure the daemon covers every NTFS drive before the deep sweep. No-op when
 /// coverage is already complete; otherwise reload the daemon (kill + start)
-/// via the real CLI handlers. Best-effort: any failure just means the sweep
-/// covers whatever is currently loaded.
-pub(crate) fn ensure_drive_coverage() {
+/// via the real CLI handlers. Returns the deferred narration notes (always
+/// empty in loud mode, where everything printed live). Best-effort: any
+/// failure just means the sweep covers whatever is currently loaded.
+pub(crate) fn ensure_drive_coverage(quiet: bool) -> Vec<String> {
+    let mut notes: Vec<String> = Vec::new();
     let all = detect_ntfs_drives();
     if all.is_empty() {
-        return;
+        return notes;
     }
     let managed = current_managed_drives();
     let missing: Vec<DriveLetter> = all
@@ -55,10 +59,11 @@ pub(crate) fn ensure_drive_coverage() {
         .copied()
         .collect();
     if missing.is_empty() {
-        // The daemon already covers every system drive — proceed silently.
-        return;
+        // The daemon already covers every system drive — nothing to do.
+        return notes;
     }
-    reload_daemon_for_coverage(&all, &missing);
+    reload_daemon_for_coverage(&all, &missing, quiet, &mut notes);
+    notes
 }
 
 /// The drive letters the daemon currently manages (any tier). Empty when the
@@ -78,29 +83,94 @@ fn managed_letters(client: &mut UffsClientSync) -> Vec<DriveLetter> {
 }
 
 /// Reload the daemon so it covers every drive: `kill`, wait for it to exit,
-/// then `start`. Both steps go through [`daemon_mgmt::daemon`] — the exact
-/// handlers `uffs --daemon kill` / `uffs --daemon start` use — so the daemon is
-/// spawned in-process as a direct child (see module docs).
-fn reload_daemon_for_coverage(all: &[DriveLetter], missing: &[DriveLetter]) {
-    print_reload_intro(missing, all.len());
+/// then `start` (blocks until Ready = every drive loaded). Both steps go
+/// through the real CLI handlers — silenced ones in quiet mode.
+fn reload_daemon_for_coverage(
+    all: &[DriveLetter],
+    missing: &[DriveLetter],
+    quiet: bool,
+    notes: &mut Vec<String>,
+) {
+    let list = missing
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if quiet {
+        notes.push(format!(
+            "\nNote: the index daemon was reloaded (kill + start) to cover every drive\n\
+             for the deep sweep (it was missing {list})."
+        ));
+    } else {
+        emit(
+            quiet,
+            notes,
+            format!(
+                "\nDaemon is not indexing every drive (missing {list}; {covered} of {total} \
+                 covered).\nReloading it (kill + start) for a complete deep sweep:",
+                covered = all.len().saturating_sub(missing.len()),
+                total = all.len(),
+            ),
+        );
+    }
 
-    if let Err(err) = daemon_mgmt::daemon(&DaemonAction::Kill) {
-        print_reload_failed("kill the daemon", &err);
+    if let Err(err) = run_handler(quiet, &DaemonAction::Kill) {
+        emit(
+            quiet,
+            notes,
+            format!(
+                "  could not kill the daemon: {err}. Continuing the deep sweep with whatever \
+                 is loaded."
+            ),
+        );
         return;
     }
     wait_until_daemon_down();
 
-    // `daemon start` blocks until the daemon is Ready (every drive loaded), so
-    // on success coverage is complete.
-    if let Err(err) = daemon_mgmt::daemon(&start_action()) {
-        print_reload_failed("start the daemon", &err);
+    if let Err(err) = run_handler(quiet, &start_action()) {
+        emit(
+            quiet,
+            notes,
+            format!(
+                "  could not start the daemon: {err}. Continuing the deep sweep with whatever \
+                 is loaded."
+            ),
+        );
         return;
     }
 
     let managed = current_managed_drives();
     let covered = all.iter().filter(|drive| managed.contains(drive)).count();
     if covered < all.len() {
-        print_partial_coverage_notice(covered, all.len());
+        emit(
+            quiet,
+            notes,
+            format!(
+                "  daemon covers {covered} of {total} drive(s); the deep sweep will scan those.",
+                total = all.len(),
+            ),
+        );
+    }
+}
+
+/// Dispatch `action` through the CLI handlers — the silenced variant in quiet
+/// mode so background work never prints over the interactive prompt.
+fn run_handler(quiet: bool, action: &DaemonAction) -> anyhow::Result<()> {
+    if quiet {
+        daemon_mgmt::daemon_quiet(action)
+    } else {
+        daemon_mgmt::daemon(action)
+    }
+}
+
+/// Route one narration line: printed live in loud mode, deferred as a note in
+/// quiet mode (the caller prints notes with the final presentation).
+#[expect(clippy::print_stdout, reason = "CLI progress output (loud mode only)")]
+fn emit(quiet: bool, notes: &mut Vec<String>, line: String) {
+    if quiet {
+        notes.push(line);
+    } else {
+        println!("{line}");
     }
 }
 
@@ -128,31 +198,4 @@ fn wait_until_daemon_down() {
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-}
-
-/// Announce the kill+start because coverage is incomplete.
-#[expect(clippy::print_stdout, reason = "CLI progress output")]
-fn print_reload_intro(missing: &[DriveLetter], total: usize) {
-    let list = missing
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    println!(
-        "\nDaemon is not indexing every drive (missing {list}; {covered} of {total} covered).\n\
-         Reloading it (kill + start) for a complete deep sweep:",
-        covered = total.saturating_sub(missing.len()),
-    );
-}
-
-/// Note that the reload could not complete; the sweep continues best-effort.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_reload_failed(what: &str, err: &anyhow::Error) {
-    println!("  could not {what}: {err}. Continuing the deep sweep with whatever is loaded.");
-}
-
-/// Note that the daemon covers only some drives after the reload.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_partial_coverage_notice(covered: usize, total: usize) {
-    println!("  daemon covers {covered} of {total} drive(s); the deep sweep will scan those.");
 }

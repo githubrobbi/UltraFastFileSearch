@@ -16,6 +16,7 @@ pub mod aggregate;
 pub(crate) mod daemon_load;
 /// Daemon management subcommands.
 pub(crate) mod daemon_mgmt;
+pub(crate) mod daemon_status;
 /// Memory-tiering operator commands (`hibernate` / `preload`).
 ///
 /// Phase 8-B / 8-C — split off `daemon_mgmt` so each cluster stays

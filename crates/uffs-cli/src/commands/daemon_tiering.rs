@@ -273,7 +273,7 @@ pub(crate) fn daemon_status_drives() -> Result<()> {
     // a misleading "daemon is not running" when the daemon is
     // actually up but speaking an older protocol.
     let Ok(mut client) = UffsClientSync::connect_raw() else {
-        crate::commands::daemon_mgmt::print_not_running();
+        crate::commands::daemon_status::print_not_running();
         return Ok(());
     };
 

@@ -71,9 +71,16 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     render::print_run_header();
 
     // `-v` also unlocks the deep-sweep diagnostics printed via
-    // [`sweep::dbg_line`] during the stray search below.
+    // [`sweep::dbg_line`] during the stray search.
     #[cfg(windows)]
     sweep::set_verbose(parsed.verbose);
+
+    // Overlap the slow work with the user's first decision: the drive-coverage
+    // reload + deep sweep start (quietly) in the background the moment the
+    // command fires, while the elevation question is on screen. `-v` runs
+    // sequentially instead so its live diagnostics stay readable.
+    #[cfg(windows)]
+    let gather = start_stray_gather(&parsed, &removal_plan);
 
     let gate = elevation_gate(&parsed, &mut removal_plan)?;
     let skipped_elevation: Vec<String> = match &gate {
@@ -81,26 +88,24 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         ElevationChoice::NotNeeded | ElevationChoice::ElevateAtRemoval => Vec::new(),
     };
 
-    // Scan overview: a one-line summary by default; the full binary resolution
-    // table + artifact inventory under `-v`.
-    if parsed.verbose {
-        render::print_resolution_table(&resolved);
-        render::print_inventory(&inventory);
-    } else {
-        render::print_scan_summary(&resolved, &inventory);
-    }
+    // Wait for the gather (spinner) / run it now (`-v`), then present the
+    // COMPLETE picture at once: CORE table + inventory, EXTRA table, the action
+    // plan, and the gate notes. Nothing was shown while data was in flight.
+    #[cfg(windows)]
+    let gathered = finish_stray_gather(&parsed, &removal_plan, gather);
+    #[cfg(windows)]
+    let stray_plan = &gathered.stray_plan;
+    #[cfg(not(windows))]
+    let no_strays = RemovalPlan::default();
+    #[cfg(not(windows))]
+    let stray_plan = &no_strays;
 
-    // M7 deep sweep: ask UFFS itself for stray family files elsewhere on the
-    // live drives, version them, and build a separate plan removed only under
-    // its own confirmation (one may be a copy the user placed themselves). This
-    // is Windows-only — off Windows UFFS indexes offline captures, not the live
-    // filesystem, so PATH/standard-location copies (already folded into the main
-    // plan above) are all we can find.
-    let stray_plan = platform_stray_plan(&parsed, &removal_plan);
-
-    // The FINAL summary — everything is gathered, so say exactly what this run
-    // will (and will not) do, then ask. The stray list printed just above by
-    // the sweep is part of this picture.
+    #[cfg(windows)]
+    render::print_coverage_notes(&gathered.coverage_notes);
+    render::print_resolution_table(&resolved);
+    render::print_inventory(&inventory);
+    #[cfg(windows)]
+    render::print_extra_table(&gathered.strays);
     render::print_plan(&removal_plan);
     render::print_skipped_elevation(&skipped_elevation);
     if matches!(gate, ElevationChoice::ElevateAtRemoval) {
@@ -121,25 +126,35 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // Gather every decision UP FRONT, then execute once — never ask after
-    // removal has started. The broker keep/skip was decided at the elevation
-    // gate above. On Windows, decide the deep-sweep strays here too (a separate
-    // opt-in: a copy you placed yourself may be among them).
-    #[cfg(windows)]
-    let remove_strays = !stray_plan.is_empty()
-        && (parsed.assume_yes
-            || confirm(&format!(
-                "\nAlso remove the {} file(s) found elsewhere (listed above)? [y/N] ",
-                stray_plan.item_count()
-            ))?);
-
-    // M4 consent (U-21): the final go. Declining aborts the whole uninstall.
-    if !removal_plan.is_empty() && !parsed.assume_yes && !confirm("\nProceed with removal? [y/N] ")?
-    {
+    // The single end-of-flow decision (design: decide -> gather -> present ->
+    // confirm). Every choice was collected before anything is touched.
+    let choice = final_consent(&parsed, &removal_plan, stray_plan)?;
+    if matches!(choice, FinalChoice::Abort) {
         print_aborted();
         return Ok(());
     }
+    let remove_strays = matches!(choice, FinalChoice::All) && !stray_plan.is_empty();
+    execute_all(
+        &removal_plan,
+        stray_plan,
+        remove_strays,
+        matches!(gate, ElevationChoice::ElevateAtRemoval),
+    );
+    Ok(())
+}
 
+/// M4/M8/M9 execution: journal the run, execute the consented plan(s) once
+/// against the live effects sink, print the outcome, schedule the deferred
+/// self-delete, and verify the targeted locations are gone. Runs only after
+/// [`final_consent`] — no questions are asked past this point, and every
+/// failure is reported (never propagated: the run always finishes its
+/// best-effort pass).
+fn execute_all(
+    removal_plan: &RemovalPlan,
+    stray_plan: &RemovalPlan,
+    remove_strays: bool,
+    elevate_via_uac: bool,
+) {
     // M9: mark the run in progress (survives the lifecycle-dir deletion) so an
     // interruption is detectable next launch. Best-effort: a failed marker write
     // must not block the uninstall, but we surface it honestly.
@@ -155,22 +170,17 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
 
     // M4 execute (U-40..42): run the plan(s) once against the live effects sink,
     // accumulating a single outcome so the summary + retry hint print once.
-    let mut effects = effects::SystemEffects::new(
-        self_paths.clone(),
-        matches!(gate, ElevationChoice::ElevateAtRemoval),
-    );
+    let mut effects = effects::SystemEffects::new(self_paths.clone(), elevate_via_uac);
     let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
-        outcome.absorb(remove::execute(&removal_plan, &mut effects));
+        outcome.absorb(remove::execute(removal_plan, &mut effects));
     }
-    #[cfg(windows)]
     if remove_strays {
-        outcome.absorb(remove::execute(&stray_plan, &mut effects));
+        outcome.absorb(remove::execute(stray_plan, &mut effects));
     }
     if !outcome.is_empty() {
         render::print_outcome(&outcome);
     }
-    #[cfg(windows)]
     if !stray_plan.is_empty() && !remove_strays {
         render::print_strays_kept();
     }
@@ -186,7 +196,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
 
     // M8 verify (U-81): confirm the targeted locations are gone, excluding the
     // reboot-deferred self-binaries handled above.
-    let to_check: Vec<PathBuf> = plan_dirs(&removal_plan)
+    let to_check: Vec<PathBuf> = plan_dirs(removal_plan)
         .into_iter()
         .filter(|dir| {
             !self_paths
@@ -200,7 +210,6 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     if let Err(err) = journal::finish() {
         render::print_journal_warning(&err);
     }
-    Ok(())
 }
 
 /// M1+M2 analysis (read-only, no output): reuse the self-update Phase-A
@@ -310,7 +319,6 @@ fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<Elevation
 }
 
 /// Read one line of input for a multi-choice prompt, trimmed and lowercased.
-#[cfg(windows)]
 #[expect(clippy::print_stdout, reason = "interactive CLI prompt")]
 fn prompt_choice(prompt: &str) -> Result<String> {
     use std::io::Write as _;
@@ -376,28 +384,59 @@ fn plan_dirs(plan: &RemovalPlan) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Build the deep-sweep stray plan for the current platform.
-///
-/// Windows: ensure the daemon covers every NTFS drive (offering to start it /
-/// index the missing drives), then ask UFFS for stray copies outside the known
-/// roots and present them for a separate confirmation. The coverage offer runs
-/// under `--dry-run` too — starting the daemon and indexing drives are
-/// non-destructive, and a dry run should preview the *complete* picture; only
-/// the deletions themselves are withheld (the caller returns before executing).
+/// Everything the deep-sweep gather produces for the final presentation.
+/// Windows-only — off Windows the daemon indexes offline captures, not the
+/// live filesystem, so there is no stray phase at all.
 #[cfg(windows)]
-fn platform_stray_plan(parsed: &UninstallArgs, removal_plan: &RemovalPlan) -> RemovalPlan {
-    if parsed.no_deep_sweep {
-        return RemovalPlan::default();
-    }
-    // Indexing every drive is a non-elevated, non-destructive read the sweep
-    // needs, so it always runs (no prompt) — including under --dry-run, to make
-    // the preview accurate.
-    coverage::ensure_drive_coverage();
-    let known = plan_dirs(removal_plan);
-    let mut search = sweep::DaemonSearch;
+#[derive(Default)]
+struct GatherOutcome {
+    /// The stray-removal plan (the EXTRA section), removed only on ALL.
+    stray_plan: RemovalPlan,
+    /// The stray hits behind that plan, for the EXTRA table.
+    strays: Vec<sweep::StrayHit>,
+    /// Deferred coverage narration from the quiet background mode.
+    coverage_notes: Vec<String>,
+}
 
+/// Which stage the background gather is in, for the spinner label:
+/// 0 = drive coverage (indexing), 1 = searching the index.
+#[cfg(windows)]
+static GATHER_PHASE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Start the drive-coverage check/reload + deep sweep on a background thread
+/// the moment the uninstall fires, so the daemon index work overlaps the
+/// elevation question instead of costing wall-clock time after it. Quiet: all
+/// narration is deferred into the returned [`GatherOutcome`]. `None` when the
+/// sweep is disabled (`--no-deep-sweep`) or running sequentially (`-v`).
+///
+/// The known-dirs snapshot is taken before the elevation gate mutates the
+/// plan; that is safe because the gate only drops service/process items, which
+/// never contribute directories.
+#[cfg(windows)]
+fn start_stray_gather(
+    parsed: &UninstallArgs,
+    removal_plan: &RemovalPlan,
+) -> Option<std::thread::JoinHandle<GatherOutcome>> {
+    if parsed.no_deep_sweep || parsed.verbose {
+        return None;
+    }
+    GATHER_PHASE.store(0, core::sync::atomic::Ordering::Relaxed);
+    let known = plan_dirs(removal_plan);
+    Some(std::thread::spawn(move || gather_strays(&known, true)))
+}
+
+/// The gather body: ensure drive coverage (quiet = narration deferred), then
+/// search the live index for stray family files and build their plan. Runs
+/// under `--dry-run` too — coverage and searching are non-destructive, and a
+/// dry run should preview the *complete* picture.
+#[cfg(windows)]
+fn gather_strays(known: &[PathBuf], quiet: bool) -> GatherOutcome {
+    let coverage_notes = coverage::ensure_drive_coverage(quiet);
+    GATHER_PHASE.store(1, core::sync::atomic::Ordering::Relaxed);
+
+    let mut search = sweep::DaemonSearch;
     let find_started = std::time::Instant::now();
-    let candidates = sweep::find_strays(&mut search, &known).unwrap_or_default();
+    let candidates = sweep::find_strays(&mut search, known).unwrap_or_default();
     sweep::dbg_line(&format!(
         "found {} candidate file(s) in {:.2?} (after filtering)",
         candidates.len(),
@@ -412,18 +451,114 @@ fn platform_stray_plan(parsed: &UninstallArgs, removal_plan: &RemovalPlan) -> Re
         probe_started.elapsed()
     ));
 
-    render::print_strays(&strays);
-    plan::build_stray_plan(&strays)
+    let stray_plan = plan::build_stray_plan(&strays);
+    GatherOutcome {
+        stray_plan,
+        strays,
+        coverage_notes,
+    }
 }
 
-/// Build the deep-sweep stray plan for the current platform.
-///
-/// Off Windows the daemon indexes offline captures, not the live filesystem, so
-/// it cannot find local stray binaries; PATH/standard-location copies are
-/// already folded into the main plan, leaving no separate stray phase.
-#[cfg(not(windows))]
-fn platform_stray_plan(_parsed: &UninstallArgs, _removal_plan: &RemovalPlan) -> RemovalPlan {
-    RemovalPlan::default()
+/// Collect the gather results: join the background thread behind a spinner
+/// (default), run the gather synchronously and loudly (`-v`), or return empty
+/// (`--no-deep-sweep`). A panicked gather degrades to "no strays found".
+#[cfg(windows)]
+fn finish_stray_gather(
+    parsed: &UninstallArgs,
+    removal_plan: &RemovalPlan,
+    gather: Option<std::thread::JoinHandle<GatherOutcome>>,
+) -> GatherOutcome {
+    if let Some(handle) = gather {
+        spinner_wait(&handle);
+        return handle.join().unwrap_or_default();
+    }
+    if parsed.no_deep_sweep {
+        return GatherOutcome::default();
+    }
+    gather_strays(&plan_dirs(removal_plan), false)
+}
+
+/// Animate a small spinner on the current line until `handle` finishes, with a
+/// label tracking the gather stage; the line is cleared before returning so
+/// the presentation starts clean.
+#[cfg(windows)]
+#[expect(clippy::print_stdout, reason = "interactive progress spinner")]
+fn spinner_wait<T>(handle: &std::thread::JoinHandle<T>) {
+    use std::io::Write as _;
+
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut frame = 0_usize;
+    while !handle.is_finished() {
+        let label = if GATHER_PHASE.load(core::sync::atomic::Ordering::Relaxed) == 0 {
+            "indexing the drives for the deep sweep"
+        } else {
+            "searching the drives for UFFS files"
+        };
+        let glyph = FRAMES.get(frame % FRAMES.len()).copied().unwrap_or("*");
+        print!("\r{glyph} Gathering artifacts ({label})...      ");
+        let _flushed = std::io::stdout().flush();
+        std::thread::sleep(core::time::Duration::from_millis(120));
+        frame = frame.wrapping_add(1);
+    }
+    print!("\r{:74}\r", "");
+    let _flushed = std::io::stdout().flush();
+}
+
+/// The single end-of-flow decision (design: decide -> gather -> present ->
+/// confirm), asked only once the complete picture is on screen.
+enum FinalChoice {
+    /// Remove everything: the CORE install and the EXTRA files found elsewhere.
+    All,
+    /// Remove the CORE install only; leave the EXTRA files in place.
+    CoreOnly,
+    /// Remove nothing.
+    Abort,
+}
+
+/// Ask the final consent question. With EXTRA files present this is a 3-way
+/// ALL / CORE / ABORT tied to the section names above; without them it stays
+/// the classic proceed-yes/no. `--yes` means ALL (the pre-existing semantics:
+/// a scripted uninstall removes everything it found).
+fn final_consent(
+    parsed: &UninstallArgs,
+    removal_plan: &RemovalPlan,
+    stray_plan: &RemovalPlan,
+) -> Result<FinalChoice> {
+    if parsed.assume_yes {
+        return Ok(FinalChoice::All);
+    }
+    if stray_plan.is_empty() {
+        return Ok(if confirm("\nProceed with removal? [y/N] ")? {
+            FinalChoice::All
+        } else {
+            FinalChoice::Abort
+        });
+    }
+    if removal_plan.is_empty() {
+        return Ok(
+            if confirm(&format!(
+                "\nRemove the {} EXTRA file(s) found elsewhere? [y/N] ",
+                stray_plan.item_count()
+            ))? {
+                FinalChoice::All
+            } else {
+                FinalChoice::Abort
+            },
+        );
+    }
+    let choice = prompt_choice(&format!(
+        "\nRemove:\n\
+         \x20 a = ALL   — CORE and the {n} EXTRA file(s) found elsewhere\n\
+         \x20 c = CORE  — the standard install only (leave the EXTRA files)\n\
+         \x20 q = ABORT — nothing is removed\n\
+         Choice [a/c/Q]: ",
+        n = stray_plan.item_count()
+    ))?;
+    Ok(match choice.as_str() {
+        "a" | "all" => FinalChoice::All,
+        "c" | "core" => FinalChoice::CoreOnly,
+        _ => FinalChoice::Abort,
+    })
 }
 
 /// Prompt for a yes/no confirmation. Default (empty / anything but `y`/`yes`)

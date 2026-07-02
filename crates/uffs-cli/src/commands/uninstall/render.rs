@@ -107,9 +107,9 @@ pub(crate) fn print_resolution_table(stems: &[StemResolution]) {
     let w_source = width("SOURCE", |row| row.source.len());
 
     println!(
-        "Discovered UFFS binaries. STATUS: 'runs' = the copy a bare command executes \
-         (first on PATH); 'shadowed' = on PATH but another runs first; 'off PATH' = \
-         present but not on PATH.\n"
+        "\nCORE — the UFFS install (binaries, data, caches). STATUS: 'runs' = the copy a\n\
+         bare command executes (first on PATH); 'shadowed' = on PATH but another runs\n\
+         first; 'off PATH' = present but not on PATH.\n"
     );
     // One printer for the header and every row, so the columns share widths and
     // there are no bare format literals.
@@ -229,29 +229,6 @@ pub(crate) fn print_uac_note() {
     );
 }
 
-/// One-line scan overview printed by default in place of the full resolution
-/// table + inventory (which move behind `-v`): how much was found, and where.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_scan_summary(stems: &[StemResolution], inventory: &Inventory) {
-    let copies: usize = stems.iter().map(|stem| stem.copies.len()).sum();
-    let mut dirs: Vec<String> = stems
-        .iter()
-        .flat_map(|stem| {
-            stem.copies
-                .iter()
-                .map(|copy| copy.dir.to_string_lossy().to_ascii_lowercase())
-        })
-        .collect();
-    dirs.sort_unstable();
-    dirs.dedup();
-    let data_dirs = inventory.dirs.iter().filter(|dir| dir.exists).count();
-    println!(
-        "\nFound {copies} UFFS binaries in {} location(s) and {data_dirs} data/cache \
-         location(s). (-v for the full inventory)",
-        dirs.len(),
-    );
-}
-
 /// Dry-run note shown when the plan carries admin-only items but this terminal
 /// is not elevated: a real run will offer to skip them.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
@@ -262,31 +239,71 @@ pub(crate) fn print_dry_run_elevation_note() {
     );
 }
 
-/// Print stray UFFS files the deep sweep found outside the known roots, with
-/// versions. These are removed only under a separate second confirmation (a
-/// copy the user placed themselves might be among them). Windows-only.
+/// Print the EXTRA section: stray UFFS files the deep sweep found outside the
+/// standard install locations, as an aligned BINARY / VERSION / LOCATION table
+/// (matching the CORE table's shape). Removed only when the final choice is
+/// ALL — one may be a copy the user placed themselves. Windows-only.
 #[cfg(windows)]
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_strays(strays: &[StrayHit]) {
+pub(crate) fn print_extra_table(strays: &[StrayHit]) {
     if strays.is_empty() {
         return;
     }
+    let rows: Vec<(String, String, String)> = strays
+        .iter()
+        .map(|stray| {
+            let binary = stray.path.file_name().map_or_else(
+                || stray.path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let location = stray
+                .path
+                .parent()
+                .map_or_else(String::new, |dir| dir.display().to_string());
+            let version = stray.version.clone().unwrap_or_else(|| "legacy".to_owned());
+            (binary, version, location)
+        })
+        .collect();
+    let width = |header: &str, cell: fn(&(String, String, String)) -> usize| {
+        rows.iter()
+            .map(cell)
+            .chain(core::iter::once(header.len()))
+            .max()
+            .unwrap_or(0)
+    };
+    let w_bin = width("BINARY", |row| row.0.len());
+    let w_ver = width("VERSION", |row| row.1.len());
+
     println!(
-        "\nAlso found elsewhere (deep sweep), outside the standard install locations.\n\
-         These are removed only if you confirm a separate prompt below (one may be a\n\
-         copy you placed yourself):\n"
+        "\nEXTRA — UFFS files found elsewhere by the deep sweep (removed only with ALL;\n\
+         one may be a copy you placed yourself):\n"
     );
-    for stray in strays {
-        let version = stray.version.as_deref().unwrap_or("legacy");
-        println!("  {version:<9}  {}", stray.path.display());
+    let print_row = |binary: &str, version: &str, location: &str| {
+        println!("  {binary:<w_bin$}  {version:<w_ver$}  {location}");
+    };
+    print_row("BINARY", "VERSION", "LOCATION");
+    for row in &rows {
+        print_row(&row.0, &row.1, &row.2);
     }
 }
 
-/// Note that the user declined to remove the deep-sweep strays. Windows-only.
+/// Print the deferred coverage narration collected by the quiet background
+/// gather (empty when coverage was already complete or the run was loud).
+/// Windows-only.
 #[cfg(windows)]
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_coverage_notes(notes: &[String]) {
+    for note in notes {
+        println!("{note}");
+    }
+}
+
+/// Note that the user kept the deep-sweep EXTRA files (chose CORE). Reachable
+/// only on Windows in practice (off Windows the stray plan is always empty),
+/// but compiled everywhere because the shared executor references it.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_strays_kept() {
-    println!("Left the file(s) found elsewhere in place.");
+    println!("Left the EXTRA file(s) (found elsewhere) in place.");
 }
 
 /// Note that a prior uninstall was interrupted and this run completes it.

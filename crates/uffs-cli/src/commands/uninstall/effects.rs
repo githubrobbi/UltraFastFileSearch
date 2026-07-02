@@ -239,7 +239,7 @@ pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
 }
 
 /// The on-disk file name for a binary stem (`uffsd` -> `uffsd.exe` on Windows).
-fn exe_file_name(stem: &str) -> String {
+pub(crate) fn exe_file_name(stem: &str) -> String {
     #[cfg(windows)]
     {
         format!("{stem}.exe")

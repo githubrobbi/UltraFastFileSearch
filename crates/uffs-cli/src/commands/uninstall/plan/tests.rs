@@ -247,6 +247,46 @@ fn running_process_becomes_a_stop_item() {
     )));
 }
 
+#[test]
+fn size_binaries_fills_only_binary_delete_items_from_the_sizer() {
+    // A plan with a deletable binaries root plus a data dir (already sized) and
+    // a PATH item (never sized).
+    let report = DetectionReport {
+        roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
+        running: Vec::new(),
+    };
+    let mut plan = built(
+        &report,
+        &inventory(BrokerServiceState::Absent, 1024),
+        &UninstallArgs::default(),
+    );
+    let dirs_before = plan
+        .items()
+        .filter(|item| matches!(item.target, PlanTarget::DeleteDir { .. }))
+        .map(|item| item.bytes)
+        .sum::<u64>();
+
+    // Sizer reports 4096 bytes for any binary target.
+    plan.size_binaries(|_dir, stems| 4096 * stems.len() as u64);
+
+    let binary_bytes = plan
+        .items()
+        .filter(|item| matches!(item.target, PlanTarget::DeleteBinaries { .. }))
+        .map(|item| item.bytes)
+        .sum::<u64>();
+    assert_eq!(binary_bytes, 4096, "the single `uffs` stem was sized");
+    // The data-dir bytes are untouched by size_binaries.
+    let dirs_after = plan
+        .items()
+        .filter(|item| matches!(item.target, PlanTarget::DeleteDir { .. }))
+        .map(|item| item.bytes)
+        .sum::<u64>();
+    assert_eq!(
+        dirs_after, dirs_before,
+        "dir sizes are left as the inventory set them"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn ensure_daemon_shutdown_injects_a_stop_before_the_runtime_binaries() {

@@ -214,6 +214,21 @@ impl RemovalPlan {
         dropped
     }
 
+    /// Fill in the reclaim bytes of every binary-delete item, so the summary's
+    /// "Reclaims ~N" reflects the binaries too (not just the data dirs).
+    /// Statting files is IO, which this pure module leaves to the caller:
+    /// `size_of` maps a `(dir, stems)` binary-delete target to its on-disk
+    /// total (best-effort — an absent file contributes 0). `WinGet`
+    /// delegations and directory / process items are untouched (winget owns
+    /// its bytes; dir sizes already came from the inventory).
+    pub(crate) fn size_binaries(&mut self, size_of: impl Fn(&Path, &[String]) -> u64) {
+        for item in self.groups.iter_mut().flat_map(|group| &mut group.items) {
+            if let PlanTarget::DeleteBinaries { dir, stems } = &item.target {
+                item.bytes = size_of(dir, stems);
+            }
+        }
+    }
+
     /// Make sure the plan stops the daemon at `pid` before its binary is
     /// deleted. The deep sweep can *start* the daemon (the no-broker path's UAC
     /// start) **after** the plan was snapshotted, so `report.running` had none

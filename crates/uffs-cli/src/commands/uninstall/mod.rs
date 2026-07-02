@@ -245,8 +245,24 @@ fn analyze_and_plan(
     let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
     let inventory = inventory::collect();
     let removable_path = analyze::removable_path_dirs(&report, &analyze::path_entries());
-    let removal_plan = plan::build_plan(&report, &inventory, parsed, &removable_path);
+    let mut removal_plan = plan::build_plan(&report, &inventory, parsed, &removable_path);
+    // Fold each binary's on-disk size into the plan (statting is IO the pure
+    // plan module leaves to us), so the "Reclaims ~N" line counts the binaries,
+    // not just the data dirs.
+    removal_plan.size_binaries(binary_dir_bytes);
     (resolved, inventory, removal_plan)
+}
+
+/// Best-effort total on-disk size of the named binary stems inside `dir`
+/// (`uffsd` -> `uffsd.exe` on Windows). An absent / unreadable file contributes
+/// 0 — sizing must never fail the plan.
+fn binary_dir_bytes(dir: &std::path::Path, stems: &[String]) -> u64 {
+    stems
+        .iter()
+        .map(|stem| {
+            std::fs::metadata(dir.join(effects::exe_file_name(stem))).map_or(0, |meta| meta.len())
+        })
+        .fold(0, u64::saturating_add)
 }
 
 /// What the elevation gate decided for this run.

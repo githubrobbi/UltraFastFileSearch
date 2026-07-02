@@ -122,14 +122,6 @@ audit-as-crates-io = false
 [policy.uffs-time]
 audit-as-crates-io = false
 
-[[exemptions.aead]]
-version = "0.5.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.aes]]
-version = "0.8.4"
-criteria = "safe-to-deploy"
-
 [[exemptions.aes-gcm]]
 version = "0.10.3"
 criteria = "safe-to-deploy"
@@ -374,10 +366,6 @@ criteria = "safe-to-deploy"
 version = "0.1.7"
 criteria = "safe-to-deploy"
 
-[[exemptions.ctr]]
-version = "0.9.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.cty]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -504,10 +492,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
 version = "0.3.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.ghash]]
-version = "0.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.globset]]
@@ -860,10 +844,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.polars-utils]]
 version = "0.54.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.polyval]]
-version = "0.6.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]

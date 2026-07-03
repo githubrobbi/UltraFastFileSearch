@@ -485,6 +485,10 @@ fn sweep_decision(parsed: &UninstallArgs) -> Result<SweepDecision> {
          Choice [d/S]: ",
     )?;
     if matches!(choice.as_str(), "d" | "deep" | "deep sweep") {
+        // Breathing room between the answered prompt and the gather spinner
+        // (emitted here, not in the spinner, so the silent no-question paths
+        // do not accumulate stray blank lines under the run header).
+        println!();
         Ok(SweepDecision::Proceed {
             elevate_daemon: true,
         })
@@ -616,9 +620,6 @@ fn spinner_wait<T>(handle: &std::thread::JoinHandle<T>) {
     use std::io::Write as _;
 
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    // One blank line between the sweep-decision prompt and the spinner, so the
-    // gather does not butt right up against "Choice [d/S]: d".
-    println!();
     let mut frame = 0_usize;
     while !handle.is_finished() {
         let label = if GATHER_PHASE.load(core::sync::atomic::Ordering::Relaxed) == 0 {

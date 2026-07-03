@@ -232,16 +232,34 @@ fn assess(report: &DetectionReport) -> UpdatePlan {
 /// the install is incomplete relative to the canonical set
 /// (`binaries::KNOWN_BINARIES`, the single source of truth). `WinGet` roots are
 /// delegated to `winget upgrade`, so they are not reconciled here.
+///
+/// `uffs-broker` is **excluded** from the required set: it is a Windows
+/// `LocalSystem` service installed *once* (via the winget package or
+/// `uffs-broker --install`), so it legitimately does not live in every
+/// hand-placed CLI root. Requiring it would mark a perfectly current install
+/// "incomplete" and trigger a pointless update + UAC prompt every time the
+/// broker sits in a different (e.g. winget) root than the CLI.
 fn has_missing_core(report: &DetectionReport) -> bool {
     report
         .roots
         .iter()
         .filter(|root| root.channel.label() == "unmanaged")
-        .any(|root| {
-            binaries::KNOWN_BINARIES
-                .iter()
-                .any(|stem| !root.binaries.iter().any(|bin| bin.name == *stem))
-        })
+        .any(|root| root_missing_core(root, &binaries::KNOWN_BINARIES))
+}
+
+/// Binary stem of the Access Broker — excluded from [`root_missing_core`]
+/// because it is a once-installed Windows service, not a per-root binary.
+const BROKER_STEM: &str = "uffs-broker";
+
+/// Whether `root` lacks any *required* core binary, treating the broker as
+/// optional (see [`has_missing_core`]). Split out as a pure function so the
+/// broker-exclusion is testable off Windows, where `KNOWN_BINARIES` omits the
+/// broker anyway.
+fn root_missing_core(root: &InstallRoot, required: &[&str]) -> bool {
+    required
+        .iter()
+        .filter(|stem| **stem != BROKER_STEM)
+        .any(|stem| !root.binaries.iter().any(|bin| bin.name == *stem))
 }
 
 /// Point the user at the update flow — the fix for an out-of-date, skewed, or
@@ -597,8 +615,56 @@ fn print_phase_a_footer() {
 
 #[cfg(test)]
 mod tests {
-    use super::model::{Anchor, InstallRoot};
-    use super::{normalize_tag, strip_verbatim_str, upsert_root};
+    use super::model::{Anchor, BinaryInfo, Channel, InstallRoot, Scope};
+    use super::{normalize_tag, root_missing_core, strip_verbatim_str, upsert_root};
+
+    /// An unmanaged root holding exactly the given binary stems.
+    fn unmanaged_root(stems: &[&str]) -> InstallRoot {
+        InstallRoot {
+            dir: "/nonexistent/bin".into(),
+            channel: Channel::Unmanaged,
+            scope: Scope::Unknown,
+            anchored_by: vec![Anchor::Cli],
+            binaries: stems
+                .iter()
+                .map(|name| BinaryInfo {
+                    name: (*name).to_owned(),
+                    version: Some("0.6.20".to_owned()),
+                })
+                .collect(),
+        }
+    }
+
+    // The Windows core set (broker included) — the case the exclusion fixes.
+    const CORE_WITH_BROKER: [&str; 6] = [
+        "uffs",
+        "uffsd",
+        "uffsmcp",
+        "uffs-update",
+        "uffs-mft",
+        "uffs-broker",
+    ];
+
+    #[test]
+    fn absent_broker_does_not_mark_root_incomplete() {
+        // Every non-broker core binary present, broker absent (it lives in the
+        // winget root / as the service) → NOT incomplete, so no pointless update.
+        let root = unmanaged_root(&["uffs", "uffsd", "uffsmcp", "uffs-update", "uffs-mft"]);
+        assert!(
+            !root_missing_core(&root, &CORE_WITH_BROKER),
+            "a missing broker must not count as an incomplete install"
+        );
+    }
+
+    #[test]
+    fn absent_non_broker_core_marks_root_incomplete() {
+        // A genuine gap (no uffsd) is still incomplete, broker present or not.
+        let root = unmanaged_root(&["uffs", "uffsmcp", "uffs-update", "uffs-mft", "uffs-broker"]);
+        assert!(
+            root_missing_core(&root, &CORE_WITH_BROKER),
+            "a missing non-broker core binary must count as incomplete"
+        );
+    }
 
     #[test]
     fn strip_verbatim_str_handles_drive_unc_and_plain() {

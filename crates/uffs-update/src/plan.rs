@@ -9,7 +9,7 @@
 //! phases need are modelled; unknown fields are ignored so the schema can
 //! grow without breaking older helpers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
@@ -78,7 +78,7 @@ impl Snapshot {
     /// # Errors
     ///
     /// Fails if the file is missing or not valid snapshot JSON.
-    pub(crate) fn load(path: &std::path::Path) -> Result<Self> {
+    pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading snapshot {}", path.display()))?;
         serde_json::from_str(&text).with_context(|| format!("parsing snapshot {}", path.display()))
@@ -122,6 +122,43 @@ impl Snapshot {
             target.binaries.retain(|bin| bin.name != BROKER_STEM);
         }
         Some(version)
+    }
+
+    /// Whether the Access Broker binary lives under a `WinGet`-delegated root.
+    /// When it does, a non-elevated apply skips the broker here, but the
+    /// caller's `winget upgrade` refreshes `uffs-broker.exe` and cycles the
+    /// service — so the broker is NOT left at the old version and the
+    /// "left running and NOT updated" hint would be wrong. Must be read
+    /// **before** [`Self::drop_broker`], which strips the broker entries.
+    pub(crate) fn broker_in_winget_root(&self) -> bool {
+        self.targets.iter().any(|target| {
+            target.channel == "winget" && target.binaries.iter().any(|bin| bin.name == BROKER_STEM)
+        })
+    }
+
+    /// Names of running components whose image lives under a `WinGet`-delegated
+    /// root. Their lifecycle is owned by the caller's `winget upgrade` + resume
+    /// (in `uffs-cli`), so a non-elevated apply that could not restart them
+    /// here has not actually left anything broken — the caller relaunches
+    /// them on the new binary. Used to keep these out of the alarming
+    /// "failed to restart" warning (they are stopped-on-purpose, not a
+    /// fault).
+    pub(crate) fn winget_delegated_components(&self) -> Vec<String> {
+        let winget_roots: Vec<&Path> = self
+            .targets
+            .iter()
+            .filter(|target| target.channel == "winget")
+            .map(|target| target.root.as_path())
+            .collect();
+        self.running
+            .iter()
+            .filter(|run| {
+                run.image_path
+                    .as_deref()
+                    .is_some_and(|img| winget_roots.iter().any(|root| img.starts_with(root)))
+            })
+            .map(|run| run.component.clone())
+            .collect()
     }
 
     /// Roots the **updater** owns: `unmanaged` only. `WinGet` roots are
@@ -261,5 +298,75 @@ mod tests {
     fn drop_broker_is_none_when_absent() {
         let mut snap: Snapshot = serde_json::from_str(SNAP).expect("parse");
         assert_eq!(snap.drop_broker(), None, "snapshot has no broker");
+    }
+
+    #[test]
+    fn broker_in_winget_root_detects_delegated_broker() {
+        // Broker binary sits in the winget root → delegated `winget upgrade`
+        // will refresh it, so the "left NOT updated" note must be suppressed.
+        const WINGET_BROKER: &str = r#"{
+          "to_version": "0.6.21",
+          "targets": [
+            { "root": "C:\\bin", "channel": "unmanaged", "binaries": [
+              { "name": "uffs", "on_disk_version": "0.6.21" }
+            ] },
+            { "root": "C:\\wg", "channel": "winget", "binaries": [
+              { "name": "uffsd", "on_disk_version": "0.6.18" },
+              { "name": "uffs-broker", "on_disk_version": "0.6.18" }
+            ] }
+          ]
+        }"#;
+        let snap: Snapshot = serde_json::from_str(WINGET_BROKER).expect("parse");
+        assert!(
+            snap.broker_in_winget_root(),
+            "broker under a winget root is delegated"
+        );
+    }
+
+    #[test]
+    fn winget_delegated_components_matches_images_under_winget_root() {
+        // Forward slashes so the path component-split works on Unix CI too;
+        // on Windows the real backslash paths split the same way.
+        const SNAP_RUN: &str = r#"{
+          "to_version": "0.6.21",
+          "targets": [
+            { "root": "/bin", "channel": "unmanaged", "binaries": [] },
+            { "root": "/wg",  "channel": "winget",    "binaries": [] }
+          ],
+          "running": [
+            { "component": "daemon", "pid": 1, "image_path": "/wg/uffsd.exe" },
+            { "component": "mcp",    "pid": 2, "image_path": "/bin/uffsmcp.exe" }
+          ]
+        }"#;
+        let snap: Snapshot = serde_json::from_str(SNAP_RUN).expect("parse");
+        assert_eq!(
+            snap.winget_delegated_components(),
+            vec!["daemon".to_owned()],
+            "only the component whose image is under the winget root is delegated"
+        );
+    }
+
+    #[test]
+    fn broker_in_winget_root_false_for_unmanaged_broker() {
+        // Broker in an unmanaged root: nothing else refreshes it, so the
+        // note stays. (Also false when there is no broker at all.)
+        const UNMANAGED_BROKER: &str = r#"{
+          "to_version": "0.6.21",
+          "targets": [
+            { "root": "C:\\bin", "channel": "unmanaged", "binaries": [
+              { "name": "uffs-broker", "on_disk_version": "0.6.20" }
+            ] }
+          ]
+        }"#;
+        let snap: Snapshot = serde_json::from_str(UNMANAGED_BROKER).expect("parse");
+        assert!(
+            !snap.broker_in_winget_root(),
+            "broker in an unmanaged root is not delegated"
+        );
+        let no_broker: Snapshot = serde_json::from_str(SNAP).expect("parse");
+        assert!(
+            !no_broker.broker_in_winget_root(),
+            "no broker at all is not delegated"
+        );
     }
 }

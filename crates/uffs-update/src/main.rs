@@ -113,6 +113,14 @@ fn run_apply(args: &[String]) -> Result<()> {
     // (its wire protocol is back-compatible) and catches up on the next elevated
     // update. `is_elevated()` is `false` off Windows, but the snapshot has no
     // broker there, so this is a no-op away from Windows.
+    // Read this BEFORE drop_broker strips the broker entries: when the broker
+    // lives in a WinGet-delegated root, the caller's `winget upgrade` refreshes
+    // its `.exe` and cycles the service, so it is not left at the old version.
+    let broker_delegated = snapshot.broker_in_winget_root();
+    // Components whose image is in a WinGet-delegated root: the caller
+    // (uffs-cli) stops them up front and its `resume` relaunches them on the
+    // new binary, so if restore can't restart them here it is NOT a fault.
+    let winget_delegated = snapshot.winget_delegated_components();
     let skipped_broker = if uffs_winsvc::is_elevated() {
         None
     } else {
@@ -166,21 +174,39 @@ fn run_apply(args: &[String]) -> Result<()> {
     // Committed: relaunch services into the new binaries.
     let failed = restore::restore(&snapshot);
     journal.transition(journal::UpdateState::Restored, "restore.done")?;
-    if !failed.is_empty() {
+    // Split the failures: a component in a WinGet-delegated root was stopped by
+    // the caller and is relaunched by its `resume` on the new binary, so it is
+    // not a fault here — only genuinely-ours components warrant the warning.
+    let (delegated_down, genuine_failed): (Vec<String>, Vec<String>) = failed
+        .into_iter()
+        .partition(|component| winget_delegated.contains(component));
+    if !genuine_failed.is_empty() {
         #[expect(clippy::print_stderr, reason = "CLI user-facing warning")]
         {
             eprintln!(
                 "warning: components failed to restart: [{}]",
-                failed.join(", ")
+                genuine_failed.join(", ")
             );
         }
+    }
+    if !delegated_down.is_empty() {
+        println!(
+            "note: {} left stopped here — the winget package update relaunches \
+             it on the new binary.",
+            delegated_down.join(", ")
+        );
     }
 
     orchestrate::prune_all(&journal);
     journal.transition(journal::UpdateState::Done, "apply.done")?;
     journal.archive();
     println!("Applied + committed → {}", journal.to_version);
-    if let Some(broker_version) = skipped_broker {
+    // Only warn when nothing else will refresh the broker. If it lives in a
+    // WinGet-delegated root, the caller's `winget upgrade` + service cycle
+    // brings it to the new version, so this hint would contradict reality.
+    if let Some(broker_version) = skipped_broker
+        && !broker_delegated
+    {
         println!(
             "note: the Access Broker (uffs-broker {broker_version}) was left running \
              and NOT updated — refreshing the LocalSystem broker service needs \

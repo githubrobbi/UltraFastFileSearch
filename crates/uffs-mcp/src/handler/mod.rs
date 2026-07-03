@@ -348,19 +348,31 @@ impl ServerHandler for UffsMcpServer {
         )
     )]
     async fn on_roots_list_changed(&self, context: rmcp::service::NotificationContext<RoleServer>) {
-        // Ask the client for the current list of roots.
+        // Ask the client for the current list of roots. This match is the ONLY
+        // place in uffs-mcp that speaks the SEP-2577-deprecated Roots wire API
+        // (`Peer::list_roots` + `rmcp::model::Root`); `roots.rs` is transport-
+        // agnostic (`AdvertisedRoot`). When rmcp removes the API, delete this
+        // hook — workspace scoping then flows from the explicit path filters
+        // the search tools already accept.
         #[expect(
             deprecated,
-            reason = "rmcp 1.8.0 deprecated Peer::list_roots per MCP SEP-2577 (the Roots \
-                      capability is being phased out). It still functions, and uffs-mcp's \
-                      roots -> NTFS-prefix mapping depends on it; there is no replacement API \
-                      yet. Migrate or drop the roots feature when rmcp removes the method (at \
-                      which point this becomes a hard error, not a silenced warning)."
+            reason = "SEP-2577 deprecates MCP Roots with no replacement API; clients still \
+                      advertise roots today, so this single boundary hook converts them to \
+                      the transport-agnostic AdvertisedRoot. Delete the hook when rmcp \
+                      removes the method (hard error then, not a silenced warning)."
         )]
         match context.peer.list_roots().await {
             Ok(result) => {
+                let advertised: Vec<roots::AdvertisedRoot> = result
+                    .roots
+                    .iter()
+                    .map(|root| roots::AdvertisedRoot {
+                        uri: root.uri.clone(),
+                        name: root.name.clone(),
+                    })
+                    .collect();
                 let mut state = self.roots.write().await;
-                roots::update_roots_state(&mut state, &result.roots);
+                roots::update_roots_state(&mut state, &advertised);
                 let mapped = state
                     .roots
                     .iter()

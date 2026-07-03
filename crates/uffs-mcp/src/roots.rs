@@ -8,13 +8,13 @@
 //! workspace.  Unmappable roots (e.g. macOS paths for NTFS capture data)
 //! produce warnings rather than silent incorrect scoping.
 
-// rmcp 2.x deprecates MCP Roots (SEP-2577, removal planned upstream). UFFS
-// still scopes searches for Roots-advertising clients; migrating off Roots is
-// tracked as follow-up work on this branch.
-#![expect(
-    deprecated,
-    reason = "rmcp 2.x deprecates MCP Roots (SEP-2577); Roots support stays until the follow-up migration on this branch"
-)]
+// SEP-2577 deprecates the MCP Roots capability upstream with NO replacement
+// API (workspace context moves to explicit tool inputs). This module is
+// deliberately **transport-agnostic**: it never touches `rmcp::model::Root`.
+// The one place that still speaks the deprecated wire API is the narrow
+// `on_roots_list_changed` hook in `handler/mod.rs` — when rmcp removes the
+// API, that hook is deleted and everything here keeps working, fed by
+// explicit path filters instead.
 
 extern crate alloc;
 
@@ -38,6 +38,18 @@ pub struct RootScope {
     /// NTFS drive letter, upper-case (e.g. `'C'`).
     /// `None` if unmappable.
     pub drive_letter: Option<char>,
+}
+
+/// A workspace root as advertised by the client, decoupled from the
+/// transport: `rmcp::model::Root` is SEP-2577-deprecated, so only the
+/// `handler` boundary hook converts from it — this module and its tests
+/// never name the deprecated type.
+#[derive(Debug, Clone)]
+pub(crate) struct AdvertisedRoot {
+    /// Root URI as sent by the client (e.g. `"file:///C:/Users/me/project"`).
+    pub(crate) uri: String,
+    /// Optional display name from the client.
+    pub(crate) name: Option<String>,
 }
 
 /// Shared roots state held by the MCP server.
@@ -91,8 +103,8 @@ fn parse_file_uri_to_ntfs_path(uri: &str) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-/// Resolve a single [`rmcp::model::Root`] into a [`RootScope`].
-fn resolve_root(root: &rmcp::model::Root) -> RootScope {
+/// Resolve a single [`AdvertisedRoot`] into a [`RootScope`].
+fn resolve_root(root: &AdvertisedRoot) -> RootScope {
     let ntfs_prefix = parse_file_uri_to_ntfs_path(&root.uri);
     let drive_letter = ntfs_prefix
         .as_ref()
@@ -108,7 +120,7 @@ fn resolve_root(root: &rmcp::model::Root) -> RootScope {
 }
 
 /// Update the [`RootsState`] from a list of roots received from the client.
-pub(crate) fn update_roots_state(state: &mut RootsState, roots: &[rmcp::model::Root]) {
+pub(crate) fn update_roots_state(state: &mut RootsState, roots: &[AdvertisedRoot]) {
     state.advertised = true;
     state.roots.clear();
     state.warnings.clear();
@@ -285,11 +297,10 @@ fn longest_common_prefix(paths: &[&String]) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn make_root(uri: &str, name: Option<&str>) -> rmcp::model::Root {
-        let root = rmcp::model::Root::new(uri);
-        match name {
-            Some(label) => root.with_name(label),
-            None => root,
+    fn make_root(uri: &str, name: Option<&str>) -> AdvertisedRoot {
+        AdvertisedRoot {
+            uri: uri.to_owned(),
+            name: name.map(str::to_owned),
         }
     }
 

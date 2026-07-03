@@ -8,6 +8,14 @@
 //! workspace.  Unmappable roots (e.g. macOS paths for NTFS capture data)
 //! produce warnings rather than silent incorrect scoping.
 
+// rmcp 2.x deprecates MCP Roots (SEP-2577, removal planned upstream). UFFS
+// still scopes searches for Roots-advertising clients; migrating off Roots is
+// tracked as follow-up work on this branch.
+#![expect(
+    deprecated,
+    reason = "rmcp 2.x deprecates MCP Roots (SEP-2577); Roots support stays until the follow-up migration on this branch"
+)]
+
 extern crate alloc;
 
 use alloc::sync::Arc;

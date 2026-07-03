@@ -30,8 +30,8 @@
 
 use std::io;
 
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::{AeadInPlace as _, Aes256Gcm, KeyInit as _, Nonce};
+use aes_gcm::aead::inout::InOutBuf;
+use aes_gcm::{AeadInOut as _, Aes256Gcm, KeyInit as _, Tag};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -147,18 +147,17 @@ pub fn encrypt_cache(plaintext: &[u8], key: &[u8; 32]) -> io::Result<Vec<u8>> {
     output.extend_from_slice(plaintext);
 
     // Encrypt in-place
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(key));
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let cipher = Aes256Gcm::new(key.into());
     let tag = cipher
-        .encrypt_in_place_detached(
-            nonce,
+        .encrypt_inout_detached(
+            (&nonce_bytes).into(),
             &aad,
-            output.get_mut(ciphertext_start..).ok_or_else(|| {
+            InOutBuf::from(output.get_mut(ciphertext_start..).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "ciphertext offset out of bounds",
                 )
-            })?,
+            })?),
         )
         .map_err(|enc_err| io::Error::other(format!("AES-GCM encrypt failed: {enc_err}")))?;
 
@@ -272,12 +271,17 @@ pub fn decrypt_cache(data: &[u8], key: &[u8; 32]) -> io::Result<Vec<u8>> {
         .get(header_size + payload_len..header_size + payload_len + TAG_SIZE)
         .ok_or_else(|| bad_data("tag OOB"))?;
 
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(key));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(key.into());
+    let auth_tag: &Tag = tag.try_into().map_err(|_e| bad_data("tag size mismatch"))?;
 
     let mut plaintext = ciphertext.to_vec();
     cipher
-        .decrypt_in_place_detached(nonce, aad, &mut plaintext, GenericArray::from_slice(tag))
+        .decrypt_inout_detached(
+            nonce_bytes.into(),
+            aad,
+            plaintext.as_mut_slice().into(),
+            auth_tag,
+        )
         .map_err(|_e| bad_data("AES-GCM authentication failed (wrong key or tampered data)"))?;
 
     Ok(plaintext)
@@ -414,11 +418,10 @@ mod tests {
         let ciphertext_start = v1_data.len();
         v1_data.extend_from_slice(plaintext);
 
-        let cipher = Aes256Gcm::new(GenericArray::from_slice(&key_bytes));
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let cipher = Aes256Gcm::new((&key_bytes).into());
         let ct_region = v1_data.get_mut(ciphertext_start..).expect("ct region");
         let tag = cipher
-            .encrypt_in_place_detached(nonce, &aad, ct_region)
+            .encrypt_inout_detached((&nonce_bytes).into(), &aad, ct_region.into())
             .expect("encrypt");
         v1_data.extend_from_slice(&tag);
 

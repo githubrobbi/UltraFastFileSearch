@@ -3,7 +3,7 @@
 
 //! `uffs_facet_values` tool — search within facet values for a field.
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uffs_client::connect::UffsClient;
@@ -140,7 +140,7 @@ pub(crate) async fn run(
 
     let json = serde_json::to_string_pretty(&structured)?;
 
-    let mut result = CallToolResult::success(vec![Content::text(format!(
+    let mut result = CallToolResult::success(vec![ContentBlock::text(format!(
         "{summary}\n\n```json\n{json}\n```"
     ))]);
     result.structured_content = Some(serde_json::to_value(structured)?);

@@ -17,7 +17,6 @@
     clippy::min_ident_chars,
     clippy::let_underscore_must_use,
     clippy::let_underscore_untyped,
-    clippy::match_wildcard_for_single_variants,
     clippy::panic,
     reason = "integration test — relaxed linting for test clarity"
 )]
@@ -89,11 +88,7 @@ async fn mcp_resources_list() {
 
     assert_eq!(resources.resources.len(), 7, "expected 7 resources");
 
-    let uris: Vec<_> = resources
-        .resources
-        .iter()
-        .map(|r| r.raw.uri.as_str())
-        .collect();
+    let uris: Vec<_> = resources.resources.iter().map(|r| r.uri.as_str()).collect();
     // Live metadata resources
     assert!(uris.contains(&"uffs://drives"));
     assert!(uris.contains(&"uffs://status"));
@@ -114,7 +109,9 @@ async fn mcp_resources_list() {
 fn extract_text(rc: &rmcp::model::ResourceContents) -> &str {
     match rc {
         rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.as_str(),
-        _ => panic!("expected TextResourceContents"),
+        rmcp::model::ResourceContents::BlobResourceContents { .. } | _ => {
+            panic!("expected TextResourceContents")
+        }
     }
 }
 
@@ -200,7 +197,7 @@ async fn mcp_resource_templates_list() {
     let uris: Vec<&str> = templates
         .resource_templates
         .iter()
-        .map(|t| t.raw.uri_template.as_str())
+        .map(|t| t.uri_template.as_str())
         .collect();
     assert!(
         uris.contains(&"uffs://info/{path}"),

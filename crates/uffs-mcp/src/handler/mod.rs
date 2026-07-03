@@ -16,11 +16,10 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use rmcp::model::{
-    AnnotateAble as _, CallToolRequestParams, CallToolResult, GetPromptRequestParams,
-    GetPromptResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, RawResource, RawResourceTemplate,
-    ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
-    ServerInfo,
+    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, Implementation,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -483,49 +482,42 @@ impl ServerHandler for UffsMcpServer {
         self.touch();
         Ok(ListResourcesResult {
             resources: vec![
-                RawResource::new("uffs://schema/fields", "Field Catalog")
+                Resource::new("uffs://schema/fields", "Field Catalog")
                     .with_description(
                         "Complete catalog of fields available for searching, filtering, \
                          sorting, and aggregating — includes types and capabilities",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResource::new("uffs://drives", "Indexed Drives")
+                    .with_mime_type("application/json"),
+                Resource::new("uffs://drives", "Indexed Drives")
                     .with_description(
                         "Live listing of currently indexed NTFS drives with record counts",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResource::new("uffs://status", "Daemon Status")
+                    .with_mime_type("application/json"),
+                Resource::new("uffs://status", "Daemon Status")
                     .with_description(
                         "Daemon health, state, uptime, memory, PID, and drive-loading progress",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResource::new("uffs://schema/search", "Search Request Schema")
+                    .with_mime_type("application/json"),
+                Resource::new("uffs://schema/search", "Search Request Schema")
                     .with_description("JSON Schema for the uffs_search tool input parameters")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResource::new("uffs://schema/aggregate", "Aggregate Request Schema")
+                    .with_mime_type("application/json"),
+                Resource::new("uffs://schema/aggregate", "Aggregate Request Schema")
                     .with_description("JSON Schema for the uffs_aggregate tool input parameters")
-                    .with_mime_type("application/json")
-                    .no_annotation(),
-                RawResource::new("uffs://presets/aggregate", "Aggregate Presets")
+                    .with_mime_type("application/json"),
+                Resource::new("uffs://presets/aggregate", "Aggregate Presets")
                     .with_description(
                         "Built-in aggregate presets (overview, by_type, by_extension, \
                          storage, etc.) with descriptions",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
                 // ── Agent cookbook (query examples) ──────────────────
-                RawResource::new("uffs://cookbook", "Query Cookbook")
+                Resource::new("uffs://cookbook", "Query Cookbook")
                     .with_description(
                         "Curated example MCP tool calls organized by workflow — \
                          ready-to-use arguments objects, tips, and multi-step patterns. \
                          Read this first to learn how to compose effective UFFS queries.",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ],
             next_cursor: None,
             meta: None,
@@ -544,14 +536,13 @@ impl ServerHandler for UffsMcpServer {
         self.touch();
         Ok(ListResourceTemplatesResult {
             resource_templates: vec![
-                RawResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
+                ResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
                     .with_description(
                         "Full metadata for a file or directory by path. \
                      The {path} parameter is a percent-encoded Windows path \
                      with forward slashes (e.g. C:/Users/me/file.txt).",
                     )
-                    .with_mime_type("application/json")
-                    .no_annotation(),
+                    .with_mime_type("application/json"),
             ],
             next_cursor: None,
             meta: None,

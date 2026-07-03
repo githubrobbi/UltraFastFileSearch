@@ -3,7 +3,7 @@
 
 //! `uffs_info` tool — file/directory detail lookup by path.
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uffs_client::connect::UffsClient;
@@ -49,7 +49,7 @@ pub(crate) async fn run(
         format!("File not found: {}", args.path)
     };
 
-    let mut result = CallToolResult::success(vec![Content::text(text)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(serde_json::to_value(structured)?);
     Ok(result)
 }

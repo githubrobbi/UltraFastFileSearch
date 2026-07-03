@@ -23,10 +23,7 @@ pub(crate) fn u64_arg(args: &serde_json::Map<String, Value>, key: &str, default:
 
 /// Build a single user-role prompt message.
 fn user_msg(text: String) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        rmcp::model::PromptMessageRole::User,
-        text,
-    )]
+    vec![PromptMessage::new_text(rmcp::model::Role::User, text)]
 }
 
 /// Build the messages for a given prompt name and arguments.

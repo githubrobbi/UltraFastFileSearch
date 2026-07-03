@@ -5,7 +5,7 @@
 
 use core::fmt::Write as _;
 
-use rmcp::model::{AnnotateAble as _, CallToolResult, Content, RawContent, RawResource};
+use rmcp::model::{CallToolResult, ContentBlock, Resource};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uffs_client::connect::UffsClient;
@@ -428,17 +428,17 @@ pub(crate) async fn run(
     });
 
     // ── Build content: text table + capped resource links ──────────
-    let mut content = vec![Content::text(output)];
+    let mut content = vec![ContentBlock::text(output)];
 
     // Emit resource links only for the first MAX_RESOURCE_LINKS rows.
     // These let host UIs offer clickable detail views but the LLM never
     // sees them, so emitting hundreds is pure payload waste.
     for row in page_rows.iter().take(MAX_RESOURCE_LINKS) {
         let info_uri = format!("uffs://info/{}", percent_encode_path(&row.path));
-        let resource = RawResource::new(info_uri, &row.name)
+        let resource = Resource::new(info_uri, &row.name)
             .with_description(format!("Full metadata for {}", row.path))
             .with_mime_type("application/json");
-        content.push(RawContent::resource_link(resource).no_annotation());
+        content.push(ContentBlock::resource_link(resource));
     }
 
     let structured = SearchOutput {

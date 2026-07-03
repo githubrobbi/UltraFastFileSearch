@@ -5,7 +5,7 @@
 
 use core::fmt::Write as _;
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use uffs_client::connect::UffsClient;
 
 use crate::error::BridgeError;
@@ -45,7 +45,7 @@ pub(crate) async fn run(client: &mut UffsClient) -> Result<CallToolResult, Bridg
         );
     }
 
-    let mut result = CallToolResult::success(vec![Content::text(output)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(output)]);
     result.structured_content = Some(serde_json::to_value(structured)?);
     Ok(result)
 }

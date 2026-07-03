@@ -5,7 +5,7 @@
 
 use core::fmt::Write as _;
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uffs_client::connect::UffsClient;
@@ -202,7 +202,7 @@ pub(crate) async fn run(
         out
     };
 
-    let mut result = CallToolResult::success(vec![Content::text(output)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(output)]);
     result.structured_content = Some(serde_json::to_value(structured)?);
     Ok(result)
 }

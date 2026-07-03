@@ -3,7 +3,7 @@
 
 //! `uffs_status` tool — daemon health and loading progress.
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use uffs_client::connect::UffsClient;
 
 use crate::error::BridgeError;
@@ -39,7 +39,7 @@ pub(crate) async fn run(client: &mut UffsClient) -> Result<CallToolResult, Bridg
         server_version: server_version.to_owned(),
     };
 
-    let mut result = CallToolResult::success(vec![Content::text(text)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(serde_json::to_value(structured)?);
     Ok(result)
 }

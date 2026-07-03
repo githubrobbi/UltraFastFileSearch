@@ -454,6 +454,84 @@ pub fn load_mft_file(
     load_drive(&MftSource::File(mft_path.to_path_buf(), drive), no_cache)
 }
 
+/// Order a USN batch so that a created/renamed record is applied AFTER the
+/// change that creates its parent directory, whenever that parent is itself
+/// created in the same batch. The journal delivers records in time order
+/// (a directory exists before anything appears inside it), but
+/// [`uffs_mft::usn::aggregate_changes`] folds them into a `HashMap`, so the
+/// batch arrives in arbitrary order at every consumer (the live journal loop
+/// AND the cold-start cache replay) — fixing it here covers both.
+///
+/// A fixpoint pass handles arbitrarily deep same-batch trees (an unzip
+/// creates `dir/sub/file` in one poll window). Changes whose parent is
+/// genuinely absent from the batch are emitted as-is: the unknown-parent
+/// fallback still applies, but is now reached only for truly missing parents
+/// (lost/overflowed journal events), and is logged.
+fn order_parent_first(changes: &[uffs_mft::usn::FileChange]) -> Vec<&uffs_mft::usn::FileChange> {
+    use std::collections::HashSet;
+
+    // Only a parent that is CREATED in this batch can become resolvable by
+    // reordering; everything else keeps its relative order.
+    let batch_creates: HashSet<u64> = changes
+        .iter()
+        .filter(|change| change.created)
+        .map(|change| change.frs.raw())
+        .collect();
+    let mut applied_creates: HashSet<u64> = HashSet::new();
+    let mut out: Vec<&uffs_mft::usn::FileChange> = Vec::with_capacity(changes.len());
+    let mut deferred: Vec<&uffs_mft::usn::FileChange> = Vec::new();
+
+    for change in changes {
+        let parent = change.parent_frs.raw();
+        let waits_for_parent = (change.created || change.renamed)
+            && parent != change.frs.raw()
+            && batch_creates.contains(&parent)
+            && !applied_creates.contains(&parent);
+        if waits_for_parent {
+            deferred.push(change);
+        } else {
+            if change.created {
+                applied_creates.insert(change.frs.raw());
+            }
+            out.push(change);
+        }
+    }
+
+    // Fixpoint: each pass releases the changes whose parent has now been
+    // emitted; depth-N same-batch trees settle in N passes.
+    while !deferred.is_empty() {
+        let before = deferred.len();
+        deferred.retain(|change| {
+            if applied_creates.contains(&change.parent_frs.raw()) {
+                if change.created {
+                    applied_creates.insert(change.frs.raw());
+                }
+                out.push(change);
+                false
+            } else {
+                true
+            }
+        });
+        if deferred.len() == before {
+            // No progress: a dependency cycle (corrupt journal) or parents
+            // whose own creates never surfaced. Emit as-is — the
+            // unknown-parent fallback handles them — but say so.
+            for change in &deferred {
+                tracing::warn!(
+                    frs = change.frs.raw(),
+                    parent_frs = change.parent_frs.raw(),
+                    name = %change.filename,
+                    "usn apply: parent create not resolvable within the batch; \
+                     falling back to unknown-parent"
+                );
+                out.push(change);
+            }
+            break;
+        }
+    }
+    out
+}
+
 /// Apply USN changes in-place to the compact index.
 ///
 /// Mutates records (`parent_idx`, names, flags) and the
@@ -508,7 +586,15 @@ pub fn apply_usn_patch(
     // Wall-clock the whole apply (O(changed) mutation loop + the post-loop
     // overlay/path refresh) for the DEBUG batch summary.
     let t_apply = Instant::now();
-    for change in changes {
+    // Parents before children: `aggregate_changes` hands the batch over in
+    // HashMap (arbitrary) order, so without reordering a file's create could
+    // apply before its parent directory's create — the parent lookup then
+    // misses and bakes the unknown-parent sentinel (`u32::MAX`), which the
+    // path machinery legitimately renders as a ROOT-LEVEL entry. That is the
+    // #510 bug: freshly-unzipped files reported at `C:\<name>` and an
+    // uninstall "removing" phantom paths while the real files survived.
+    let ordered = order_parent_first(changes);
+    for change in ordered {
         // Typed `Frs` → raw `u64` lift at the frs_to_compact CSR lookup
         // boundary.  The mapping table is `Vec<u32>` indexed by `usize`,
         // so demoting once per change keeps the inner index arithmetic on
@@ -584,6 +670,10 @@ pub fn apply_usn_patch(
 #[cfg(test)]
 #[path = "compact_loader_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compact_loader_usn_order_tests.rs"]
+mod usn_order_tests;
 
 #[cfg(test)]
 #[path = "compact_loader_path_oracle_tests.rs"]

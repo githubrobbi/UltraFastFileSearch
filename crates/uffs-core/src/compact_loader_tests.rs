@@ -40,7 +40,7 @@ use crate::trigram::TrigramIndex;
 /// `u32::MAX` sentinels for FRS 13 (newly-created in the create
 /// test) and FRS 99 (unmapped / skipped) so tests can patch the
 /// drive in place without touching a separate slice.
-fn make_synthetic_drive() -> DriveCompactIndex {
+pub(super) fn make_synthetic_drive() -> DriveCompactIndex {
     // Names blob layout:
     //   "C"       [0..1]
     //   "foo.txt" [1..8]

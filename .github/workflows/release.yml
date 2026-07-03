@@ -502,7 +502,11 @@ jobs:
           sudo chmod +x /usr/local/bin/zig
           zig version
           cargo install --locked cargo-zigbuild@0.22.3
-          cargo zigbuild --version
+          # No `cargo zigbuild --version` smoke here: `cargo zigbuild <args>`
+          # forwards to the `zigbuild` subcommand, which has no `--version`
+          # (it errors "unexpected argument '--version'"). The real proof is
+          # the `cargo zigbuild --release` build step below; installing at the
+          # pinned @0.22.3 already fixes the version.
 
       - name: Build optimized release binaries
         shell: bash

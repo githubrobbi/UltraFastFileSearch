@@ -49,8 +49,23 @@ pub(crate) fn coverage_complete() -> bool {
     if all.is_empty() {
         return true;
     }
+    // A version-mismatched daemon (old uffsd serving a newer CLI) must be
+    // reloaded before the sweep: its results are only as trustworthy as its
+    // own code (cf. issue #510, where a mismatched daemon served sweep rows
+    // whose paths resolved to the bare drive root).
+    if daemon_version_mismatch().is_some() {
+        return false;
+    }
     let managed = current_managed_drives();
     all.iter().all(|drive| managed.contains(drive))
+}
+
+/// `Some(daemon_version)` when a daemon answers with a version different from
+/// this CLI's; `None` when it matches or no daemon answers (nothing to judge).
+fn daemon_version_mismatch() -> Option<String> {
+    let mut client = UffsClientSync::connect_raw().ok()?;
+    let status = client.status().ok()?;
+    (status.version != env!("CARGO_PKG_VERSION")).then_some(status.version)
 }
 
 /// Ensure the daemon covers every NTFS drive before the deep sweep. No-op when
@@ -72,11 +87,19 @@ pub(crate) fn ensure_drive_coverage(quiet: bool, elevate_daemon: bool) -> Vec<St
         .filter(|drive| !managed.contains(drive))
         .copied()
         .collect();
-    if missing.is_empty() {
-        // The daemon already covers every system drive — nothing to do.
+    let stale = daemon_version_mismatch();
+    if missing.is_empty() && stale.is_none() {
+        // Full coverage from a version-matched daemon — nothing to do.
         return notes;
     }
-    reload_daemon_for_coverage(&all, &missing, quiet, elevate_daemon, &mut notes);
+    reload_daemon_for_coverage(
+        &all,
+        &missing,
+        stale.as_deref(),
+        quiet,
+        elevate_daemon,
+        &mut notes,
+    );
     notes
 }
 
@@ -102,15 +125,36 @@ fn managed_letters(client: &mut UffsClientSync) -> Vec<DriveLetter> {
 fn reload_daemon_for_coverage(
     all: &[DriveLetter],
     missing: &[DriveLetter],
+    stale_version: Option<&str>,
     quiet: bool,
     elevate_daemon: bool,
     notes: &mut Vec<String>,
 ) {
-    let list = missing
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Human reason for the reload: missing drives, a stale daemon, or both.
+    let reason = match (stale_version, missing.is_empty()) {
+        (Some(theirs), true) => format!(
+            "it was running v{theirs}, not this CLI's v{}",
+            env!("CARGO_PKG_VERSION")
+        ),
+        (Some(theirs), false) => format!(
+            "it was running v{theirs}, not this CLI's v{}, and was missing {}",
+            env!("CARGO_PKG_VERSION"),
+            missing
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        (None, _) => format!(
+            "it was missing {}",
+            missing
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let list = reason.as_str();
     // Loud mode announces the attempt live; quiet mode stays silent until the
     // OUTCOME is known — a pre-declared "reloaded" note would contradict a later
     // start failure (e.g. a declined UAC prompt), which is exactly what the user
@@ -120,10 +164,8 @@ fn reload_daemon_for_coverage(
             quiet,
             notes,
             format!(
-                "\nDaemon is not indexing every drive (missing {list}; {covered} of {total} \
-                 covered).\nReloading it (kill + start) for a complete deep sweep:",
-                covered = all.len().saturating_sub(missing.len()),
-                total = all.len(),
+                "\nThe daemon needs a reload before the deep sweep ({list}).\n\
+                 Reloading it (kill + start):"
             ),
         );
     }
@@ -149,8 +191,7 @@ fn reload_daemon_for_coverage(
     // Success: the daemon is back with full coverage, so the note is truthful.
     if quiet {
         notes.push(format!(
-            "\nNote: the index daemon was restarted to cover every drive for the deep\n\
-             sweep (it was missing {list})."
+            "\nNote: the index daemon was restarted for the deep sweep ({list})."
         ));
     }
 

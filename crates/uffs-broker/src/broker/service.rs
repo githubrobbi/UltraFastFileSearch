@@ -55,19 +55,36 @@ fn sc_output(output: &std::process::Output) -> String {
         .to_owned()
 }
 
-/// Print an in-progress step label without a trailing newline and flush, so
-/// the operator sees what a slow step (e.g. the blocking `sc start`) is doing
-/// before its "ok"/"failed" verdict lands on the same line.
+/// Run a blocking step (`body`) while animating a braille spinner after
+/// `label`, then clear back to `label` so the caller's `println!("ok")` lands
+/// cleanly on the same line. Used for `sc create`, which is instant normally
+/// but on an AV box (Norton/Defender deep-scanning the registration of a new
+/// auto-start service pointing at an UNSIGNED binary) blocks ~40s — a silent
+/// 40s reads as a hang.
 #[cfg(windows)]
 #[expect(
     clippy::print_stdout,
-    reason = "CLI admin command — stdout is the user-visible result channel"
+    reason = "CLI admin command — stdout is the user-visible progress channel"
 )]
-fn print_step(label: &str) {
+fn spinner_step<T: Send>(label: &str, body: impl FnOnce() -> T + Send) -> T {
     use std::io::Write as _;
 
-    print!("{label}");
-    let _flushed = std::io::stdout().flush();
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(body);
+        let mut frame = 0_usize;
+        while !handle.is_finished() {
+            let glyph = FRAMES.get(frame % FRAMES.len()).copied().unwrap_or("*");
+            print!("\r{label}{glyph} ");
+            let _flushed = std::io::stdout().flush();
+            std::thread::sleep(core::time::Duration::from_millis(120));
+            frame = frame.wrapping_add(1);
+        }
+        // Redraw the bare label so the caller's verdict ("ok"/"failed") appends.
+        print!("\r{label}");
+        let _flushed = std::io::stdout().flush();
+        handle.join().unwrap_or_else(|_| std::process::abort())
+    })
 }
 
 /// Register the broker as an auto-start Windows Service and start it.
@@ -97,23 +114,33 @@ pub(super) fn install_service() -> anyhow::Result<()> {
         );
     }
 
-    // Step-by-step narration: `sc start` blocks until the service reports
-    // ready, which can take a minute — a silent wait reads as a hang.
+    // Step-by-step narration: the `sc create` below can block ~40s on an AV
+    // box (the reason is on that step), and `sc start` waits for the service
+    // to warm up (~10s) — either silent wait reads as a hang, so each step
+    // spins and says what it is waiting on.
     let exe = std::env::current_exe()?;
     println!("Installing the UFFS Access Broker service...");
-    print_step("  registering the service (sc create)... ");
-    let create = std::process::Command::new("sc.exe")
-        .args([
-            "create",
-            SERVICE_NAME,
-            "binPath=",
-            &exe.display().to_string(),
-            "start=",
-            "auto",
-            "DisplayName=",
-            "UFFS Access Broker",
-        ])
-        .output()?;
+    // `sc create` registers an auto-start service pointing at this binary.
+    // Instant normally, but security software (Norton / Defender) deep-scans
+    // the creation of a new auto-start service on an UNSIGNED binary — measured
+    // at ~40s on a Norton box (13ms with it off). So spin, and say why.
+    let create = spinner_step(
+        "  registering the service (a security scan can take up to a minute)... ",
+        || {
+            std::process::Command::new("sc.exe")
+                .args([
+                    "create",
+                    SERVICE_NAME,
+                    "binPath=",
+                    &exe.display().to_string(),
+                    "start=",
+                    "auto",
+                    "DisplayName=",
+                    "UFFS Access Broker",
+                ])
+                .output()
+        },
+    )?;
 
     if !create.status.success() {
         println!("failed");
@@ -130,30 +157,29 @@ pub(super) fn install_service() -> anyhow::Result<()> {
     // Start it now so the broker is usable immediately — the whole point
     // is "no future UAC", which only holds once the service is running.
     // `start= auto` also brings it back on every boot.
-    print_step(
-        "  starting the service (Windows waits for it to report ready; \
-         this can take a minute)... ",
-    );
-    let start = std::process::Command::new("sc.exe")
-        .args(["start", SERVICE_NAME])
-        .output()?;
-
-    if start.status.success() {
-        println!("ok");
-        println!(
-            "UFFS Access Broker installed and started (auto-start on boot).\n\
-             Non-elevated `uffs` searches will now use the broker for volume \
-             access — no more UAC prompts."
-        );
-    } else {
-        println!("failed");
-        // AUDIT-OK(bytes): `sc` output surfaced verbatim to the operator.
-        println!(
-            "Service installed (auto-start on boot), but starting it failed: \
-             {}\nStart it manually from an elevated shell with:\n    \
-             sc.exe start UffsAccessBroker",
-            sc_output(&start)
-        );
+    // Native SCM start (waits for the service to report RUNNING — the ~10s
+    // warmup the plain `sc start` returns before), so the spinner actually
+    // covers the wait instead of finishing in 30ms.
+    match spinner_step(
+        "  starting the service (waiting for it to warm up)... ",
+        || uffs_winsvc::start(SERVICE_NAME),
+    ) {
+        Ok(()) => {
+            println!("ok");
+            println!(
+                "UFFS Access Broker installed and started (auto-start on boot).\n\
+                 Non-elevated `uffs` searches will now use the broker for volume \
+                 access — no more UAC prompts."
+            );
+        }
+        Err(err) => {
+            println!("failed");
+            println!(
+                "Service installed (auto-start on boot), but starting it failed: \
+                 {err:#}\nStart it manually from an elevated shell with:\n    \
+                 sc.exe start UffsAccessBroker"
+            );
+        }
     }
     Ok(())
 }

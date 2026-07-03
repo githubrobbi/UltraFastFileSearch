@@ -118,8 +118,12 @@ resolve_version() {
 # ── verify one downloaded file against SHA256SUMS ────────────────────────────
 verify_asset() {
   # $1 = local file, $2 = asset name (the SHA256SUMS entry), $3 = SHA256SUMS path
+  # The release generates entries as `<hash>  ./<asset>` (note the ./ prefix);
+  # accept the bare name, ./-prefixed, and sha256sum's `*` binary marker.
+  # Exact string comparison in awk — no regex escaping, no pipes.
   local want got
-  want="$(grep -E "[[:space:]][*]?$2\$" "$3" | awk '{print $1}' | head -1)"
+  want="$(awk -v name="$2" \
+    '$2 == name || $2 == "./" name || $2 == "*" name { print $1; exit }' "$3")"
   [ -n "$want" ] || err "no checksum for '$2' in SHA256SUMS"
   got="$(sha256_of "$1")"
   [ "$want" = "$got" ] || err "checksum mismatch for '$2' (expected $want, got $got)"

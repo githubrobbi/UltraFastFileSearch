@@ -442,7 +442,9 @@ mod tests {
         assert!(is_family_artifact(Path::new(r"C:\x\uffs-broker.exe")));
         assert!(is_family_artifact(Path::new(r"C:\x\uffs-tui.exe")));
         // Dev/diagnostic tooling is part of the family set now.
-        assert!(is_family_artifact(Path::new(r"C:\x\dump-mft-records.exe")));
+        assert!(is_family_artifact(Path::new(
+            r"C:\x\uffs-dump-mft-records.exe"
+        )));
         assert!(is_family_artifact(Path::new(r"C:\x\uffs-ci-pipeline.exe")));
         assert!(is_family_artifact(Path::new(r"C:\x\drive_c_compact.uffs")));
         assert!(is_family_artifact(Path::new(r"C:\x\journal_usn.cursor")));

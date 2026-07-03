@@ -13,7 +13,7 @@
 # cadence.  See issue #211 for the full motivation + acceptance
 # criteria.
 #
-# Design follows the `gen-workflow` Phase-3 structural-validator
+# Design follows the `uffs-gen-workflow` Phase-3 structural-validator
 # pattern: read-only, `--check`-mode by default, exits non-zero on the
 # first drift detected with a per-finding diagnostic message.  No
 # `--write` mode — the tool can never break a manifest, only fail-loud
@@ -44,7 +44,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[bin]]
-name = "manifest-audit"
+name = "uffs-manifest-audit"
 path = "src/main.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ path = "src/main.rs"
 # ─────────────────────────────────────────────────────────────────────────────
 # Every dependency is aliased to `[workspace.dependencies]` in the root
 # Cargo.toml so a single Cargo.lock entry serves this tool and every
-# other crate.  See `scripts/ci/gen-hooks/Cargo.toml` for the rationale.
+# other crate.  See `scripts/ci/uffs-gen-hooks/Cargo.toml` for the rationale.
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -66,10 +66,10 @@ toml = { workspace = true }
 # uffs-diag).  CLI-inappropriate lints (`print_stderr` for the failure
 # report) are suppressed at file scope via `#![expect(...)]` blocks in
 # `src/main.rs` with `reason = "..."` strings, matching the precedent
-# established for `gen-hooks` / `gen-workflow` in PR #228.  See
+# established for `uffs-gen-hooks` / `uffs-gen-workflow` in PR #228.  See
 # `CLIPPY_POSTURE.md` § CLI-tooling for the policy.
 # Embeds the UFFS icon + version info + shared app.manifest into
-# `manifest-audit.exe` (see build.rs) for branding consistency.
+# `uffs-manifest-audit.exe` (see build.rs) for branding consistency.
 [build-dependencies]
 winresource.workspace = true
 

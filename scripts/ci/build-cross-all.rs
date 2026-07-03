@@ -99,16 +99,16 @@ const ALL_BINARIES: &[(&str, &str)] = &[
     ("uffs-update", "uffs-update"),
     ("uffs-broker", "uffs-broker"), // Windows-only (see is_windows_only)
     // Diagnostic binaries (all hyphenated per issue #213 / F1.13).
-    ("analyze-mft-parents", "uffs-diag"),
-    ("dump-mft-records", "uffs-diag"),
-    ("scan-mft-magic", "uffs-diag"),
-    ("dump-mft-extents", "uffs-diag"),
-    ("cross-check-mft-reference", "uffs-diag"),
-    ("compare-raw-mft", "uffs-diag"),
-    ("inspect-mft-record-flow", "uffs-diag"),
-    ("analyze-diff", "uffs-diag"),
-    ("compare-scan-parity", "uffs-diag"),
-    ("verify-iocp-capture", "uffs-diag"),
+    ("uffs-analyze-mft-parents", "uffs-diag"),
+    ("uffs-dump-mft-records", "uffs-diag"),
+    ("uffs-scan-mft-magic", "uffs-diag"),
+    ("uffs-dump-mft-extents", "uffs-diag"),
+    ("uffs-cross-check-mft-reference", "uffs-diag"),
+    ("uffs-compare-raw-mft", "uffs-diag"),
+    ("uffs-inspect-mft-record-flow", "uffs-diag"),
+    ("uffs-analyze-diff", "uffs-diag"),
+    ("uffs-compare-scan-parity", "uffs-diag"),
+    ("uffs-verify-iocp-capture", "uffs-diag"),
 ];
 
 struct Target {

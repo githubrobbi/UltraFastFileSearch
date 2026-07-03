@@ -6,7 +6,7 @@
     reason = "operational CLI tool — user-facing summary + drift report go to stderr (issue #212)"
 )]
 
-//! `gen-workflow` — gate-manifest workflow structural validator.
+//! `uffs-gen-workflow` — gate-manifest workflow structural validator.
 //!
 //! Phase 3 deliverable from `docs/architecture/gates-manifest-plan.md`
 //! (relative to the repo root).
@@ -87,18 +87,18 @@ const DEFAULT_WORKFLOW_PATH: &str = ".github/workflows/pr-fast.yml";
 /// Validate `.github/workflows/pr-fast.yml` against the gate manifest.
 ///
 /// `--check` is the default and only behaviour; the flag exists for
-/// symmetry with `gen-hooks` so a contributor reading the pre-push
+/// symmetry with `uffs-gen-hooks` so a contributor reading the pre-push
 /// hook output sees a consistent CLI shape.  There is no `--write`
 /// mode — see plan §4.2 for the design rationale.
 #[derive(Debug, Parser)]
 #[command(
-    name = "gen-workflow",
+    name = "uffs-gen-workflow",
     about = "Validate pr-fast.yml structurally against scripts/ci/gates.toml.",
     long_about = None,
 )]
 struct Args {
     /// Run in check-only mode (the default; flag retained for CLI symmetry
-    /// with `gen-hooks`).  Exits 1 if drift is detected.
+    /// with `uffs-gen-hooks`).  Exits 1 if drift is detected.
     #[arg(long, default_value_t = true)]
     check: bool,
 
@@ -121,7 +121,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("❌ gen-workflow: {err:#}");
+            eprintln!("❌ uffs-gen-workflow: {err:#}");
             ExitCode::from(1)
         }
     }
@@ -145,13 +145,15 @@ fn run() -> Result<()> {
 
     if report.is_empty() {
         if args.verbose {
-            eprintln!("✅ gen-workflow: pr-fast.yml is structurally consistent with gates.toml");
+            eprintln!(
+                "✅ uffs-gen-workflow: pr-fast.yml is structurally consistent with gates.toml"
+            );
             eprintln!("   (4 properties checked; see plan §4.2)");
         }
         Ok(())
     } else {
         eprintln!(
-            "❌ gen-workflow: {} structural drift issue(s) detected:",
+            "❌ uffs-gen-workflow: {} structural drift issue(s) detected:",
             report.len()
         );
         for issue in &report {

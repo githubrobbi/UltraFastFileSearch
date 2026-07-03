@@ -25,9 +25,9 @@ authors.workspace = true
 # package" warning even though the archived crate already contains a
 # copy.  Pointing at this crate's own `README.md` (alongside this
 # manifest) ships the right doc on the crates.io detail page and
-# silences the warning.  Permitted by manifest-audit invariant 3.5 via
+# silences the warning.  Permitted by uffs-manifest-audit invariant 3.5 via
 # `KnownExceptions::readme_override_ok` (see
-# `scripts/ci/manifest-audit/src/audit.rs`).  Issue #240.
+# `scripts/ci/uffs-manifest-audit/src/audit.rs`).  Issue #240.
 readme = "README.md"
 keywords.workspace = true
 categories.workspace = true

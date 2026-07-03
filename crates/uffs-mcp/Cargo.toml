@@ -20,12 +20,12 @@ authors.workspace = true
 # the source of cargo's "readme appears to be a path outside of the
 # package" warning.  Pointing at the crate's own `README.md` (alongside
 # this manifest) ships the right doc and silences the warning.  Permitted
-# by manifest-audit invariant 3.5 via `KnownExceptions::readme_override_ok`
-# (see `scripts/ci/manifest-audit/src/audit.rs`).  Issue #240.
+# by uffs-manifest-audit invariant 3.5 via `KnownExceptions::readme_override_ok`
+# (see `scripts/ci/uffs-manifest-audit/src/audit.rs`).  Issue #240.
 readme = "README.md"
 # Per-crate keywords + categories override (Phase 1 §3.5 escape hatch
 # via `KnownExceptions::keywords_override_ok` / `categories_override_ok`
-# in `scripts/ci/manifest-audit/src/audit.rs`).  This crate ships an
+# in `scripts/ci/uffs-manifest-audit/src/audit.rs`).  This crate ships an
 # MCP server bridging AI hosts (Claude Desktop, Cursor, Windsurf) to
 # the UFFS daemon — workspace defaults (mft / file-search / polars)
 # would hide it from the MCP / AI tooling audience this crate is

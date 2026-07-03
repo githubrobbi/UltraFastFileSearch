@@ -39,12 +39,12 @@ members = [
   "crates/uffs-update", # ⬆️  Self-update acquire helper (HTTP/TLS isolated from the CLI)
   # NOTE: uffs-tui and uffs-gui have moved to the private uffs-products repo.
   # ── Tools ──
-  "crates/uffs-diag",          # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
-  "crates/uffs-bench",         # 📊 Benchmark-suite orchestrator (robust-benchmark-flow-*.md)
-  "scripts/ci-pipeline",       # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
-  "scripts/ci/gen-hooks",      # 🧬 Gate-manifest hook generator (gates-manifest-plan.md Phase 2)
-  "scripts/ci/gen-workflow",   # 🧪 Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)
-  "scripts/ci/manifest-audit", # 🧾 Workspace manifest-inheritance drift detector (phase-1 follow-up, #211)
+  "crates/uffs-diag",               # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
+  "crates/uffs-bench",              # 📊 Benchmark-suite orchestrator (robust-benchmark-flow-*.md)
+  "scripts/ci-pipeline",            # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
+  "scripts/ci/uffs-gen-hooks",      # 🧬 Gate-manifest hook generator (gates-manifest-plan.md Phase 2)
+  "scripts/ci/uffs-gen-workflow",   # 🧪 Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)
+  "scripts/ci/uffs-manifest-audit", # 🧾 Workspace manifest-inheritance drift detector (phase-1 follow-up, #211)
 ]
 # Default-members policy: intentionally NOT set. `cargo build` /
 # `cargo test` at the workspace root default to ALL members above, which
@@ -52,7 +52,7 @@ members = [
 # is a first-class part of the deliverable.  When a future contributor
 # adds a member that should be opt-in (e.g. a heavyweight bench harness),
 # define `default-members = [...]` explicitly and exclude the new
-# member.  Per Phase 1 manifest-audit invariant 3.11, this comment is
+# member.  Per Phase 1 uffs-manifest-audit invariant 3.11, this comment is
 # the documented-fallback case the drift-detector looks for.
 
 # ─────────────────────────────────────────────────────────────────────────────

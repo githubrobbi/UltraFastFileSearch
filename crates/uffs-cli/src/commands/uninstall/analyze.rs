@@ -31,6 +31,22 @@ pub(crate) const EXTRA_BINARY_STEMS: &[&str] = &[
     // Dev / diagnostic / tooling binaries (workspace bin targets).
     "uffs-bench",
     "uffs-ci-pipeline",
+    "uffs-analyze-diff",
+    "uffs-analyze-mft-parents",
+    "uffs-compare-raw-mft",
+    "uffs-compare-scan-parity",
+    "uffs-cross-check-mft-reference",
+    "uffs-dump-mft-extents",
+    "uffs-dump-mft-records",
+    "uffs-inspect-mft-record-flow",
+    "uffs-scan-mft-magic",
+    "uffs-verify-iocp-capture",
+    "uffs-manifest-audit",
+    "uffs-gen-hooks",
+    "uffs-gen-workflow",
+    // Retired un-prefixed tool names (pre-rename releases up to 0.6.18 shipped
+    // these; installed copies must stay detectable by uninstall + the deep
+    // sweep, exactly like the other retired names above).
     "analyze-diff",
     "analyze-mft-parents",
     "compare-raw-mft",
@@ -38,12 +54,12 @@ pub(crate) const EXTRA_BINARY_STEMS: &[&str] = &[
     "cross-check-mft-reference",
     "dump-mft-extents",
     "dump-mft-records",
-    "inspect-mft-record-flow",
-    "scan-mft-magic",
-    "verify-iocp-capture",
-    "manifest-audit",
     "gen-hooks",
     "gen-workflow",
+    "inspect-mft-record-flow",
+    "manifest-audit",
+    "scan-mft-magic",
+    "verify-iocp-capture",
 ];
 
 /// Add any [`EXTRA_BINARY_STEMS`] that actually exist in an unmanaged /

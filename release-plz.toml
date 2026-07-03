@@ -377,9 +377,9 @@ pr_branch_prefix = "release-plz-"
 #   actual `cargo publish` block, but see the (b) correction above —
 #   it does NOT exclude them from release-plz iteration on its own):
 #     scripts/ci-pipeline      (uffs-ci-pipeline)
-#     scripts/ci/gen-hooks     (uffs-gen-hooks)
-#     scripts/ci/gen-workflow  (uffs-gen-workflow)
-#     scripts/ci/manifest-audit (uffs-manifest-audit)
+#     scripts/ci/uffs-gen-hooks     (uffs-gen-hooks)
+#     scripts/ci/uffs-gen-workflow  (uffs-gen-workflow)
+#     scripts/ci/uffs-manifest-audit (uffs-manifest-audit)
 #
 #   Out of band (1) — separate cargo workspace, release-plz never
 #   sees it; listed here for completeness:

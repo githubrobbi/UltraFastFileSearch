@@ -7,7 +7,7 @@
               stdout (currently empty) without losing the diagnostic stream (issue #212)"
 )]
 
-//! `manifest-audit` — workspace manifest-inheritance drift detector.
+//! `uffs-manifest-audit` — workspace manifest-inheritance drift detector.
 //!
 //! Phase 1 follow-up tool from
 //! `docs/dev/architecture/code_clean/phase_1_manifest_implementation_plan.md`
@@ -18,7 +18,8 @@
 //! # Design
 //!
 //! * **`--check`-mode only** — the tool is read-only; it never mutates a
-//!   manifest.  Consistent shape with `gen-workflow` and `gen-hooks --check`.
+//!   manifest.  Consistent shape with `uffs-gen-workflow` and `uffs-gen-hooks
+//!   --check`.
 //! * **Source-of-truth** — `Cargo.toml` files under `crates/`,
 //!   `scripts/ci-pipeline/`, and `scripts/ci/`.  The discovery pattern matches
 //!   the existing `gates-drift` / `workflow-drift` detectors so the three gates
@@ -55,17 +56,17 @@ const MEMBER_ROOTS: &[&str] = &["crates", "scripts/ci-pipeline", "scripts/ci"];
 /// Validate the workspace manifest set against the 15 invariants.
 ///
 /// `--check` is the default (and only) mode; the flag exists for
-/// symmetry with `gen-hooks` / `gen-workflow` so the pre-push hook
+/// symmetry with `uffs-gen-hooks` / `uffs-gen-workflow` so the pre-push hook
 /// output reads consistently across drift detectors.
 #[derive(Debug, Parser)]
 #[command(
-    name = "manifest-audit",
+    name = "uffs-manifest-audit",
     about = "Validate Cargo.toml inheritance against the 15 Phase-1 invariants.",
     long_about = None,
 )]
 struct Args {
     /// Run in check-only mode (the default).  Flag retained for CLI
-    /// symmetry with `gen-hooks` / `gen-workflow`.
+    /// symmetry with `uffs-gen-hooks` / `uffs-gen-workflow`.
     #[arg(long, default_value_t = true)]
     check: bool,
 
@@ -82,7 +83,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("❌ manifest-audit: {err:#}");
+            eprintln!("❌ uffs-manifest-audit: {err:#}");
             ExitCode::from(1)
         }
     }
@@ -146,7 +147,7 @@ fn run() -> Result<()> {
     if findings.is_empty() {
         if args.verbose {
             eprintln!(
-                "✅ manifest-audit: workspace manifests pass all 15 Phase-1 invariants \
+                "✅ uffs-manifest-audit: workspace manifests pass all 15 Phase-1 invariants \
                  ({} member(s) checked)",
                 discovered_members.len()
             );
@@ -155,7 +156,7 @@ fn run() -> Result<()> {
     } else {
         emit_findings_report(&findings);
         anyhow::bail!(
-            "manifest-audit detected {} drift finding(s)",
+            "uffs-manifest-audit detected {} drift finding(s)",
             findings.len()
         );
     }
@@ -199,7 +200,7 @@ fn discover_members_recursive(
 /// scannability.
 fn emit_findings_report(findings: &[Finding]) {
     eprintln!(
-        "❌ manifest-audit: {} drift finding(s) detected:",
+        "❌ uffs-manifest-audit: {} drift finding(s) detected:",
         findings.len()
     );
     eprintln!();

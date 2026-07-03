@@ -614,10 +614,10 @@ jobs:
           # Diagnostic tools (uffs-diag) — built by `--workspace --bins`
           # above; shipped ONLY in the `full` tier.  Kept in lockstep with
           # ALL_BINARIES in scripts/ci/build-cross-all.rs.
-          DIAG_BINS=(analyze-mft-parents dump-mft-records scan-mft-magic \
-                     dump-mft-extents cross-check-mft-reference compare-raw-mft \
-                     inspect-mft-record-flow analyze-diff compare-scan-parity \
-                     verify-iocp-capture)
+          DIAG_BINS=(uffs-analyze-mft-parents uffs-dump-mft-records uffs-scan-mft-magic \
+                     uffs-dump-mft-extents uffs-cross-check-mft-reference uffs-compare-raw-mft \
+                     uffs-inspect-mft-record-flow uffs-analyze-diff uffs-compare-scan-parity \
+                     uffs-verify-iocp-capture)
 
           # ── Fetch the free demo TUI (non-fatal) ────────────────────────────
           # Bundled into EVERY tier so `uffs-tui` works straight out of the

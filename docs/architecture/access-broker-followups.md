@@ -697,7 +697,7 @@ across reboots" isn't real.
 #### What to change
 Implement the standard service entry point (raw `windows`-crate FFI — the crate
 already depends on it; avoid the `windows-service` crate to dodge a new
-cargo-vet/manifest-audit cost unless the boilerplate proves error-prone):
+cargo-vet/uffs-manifest-audit cost unless the boilerplate proves error-prone):
 1. **No-arg invocation** (how the SCM launches it) →
    `StartServiceCtrlDispatcherW` with a `SERVICE_TABLE_ENTRYW` pointing at a
    `ServiceMain` callback. Keep `--run` as the foreground/debug path; both share

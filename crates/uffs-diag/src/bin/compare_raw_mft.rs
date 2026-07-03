@@ -9,7 +9,7 @@
 //! # Usage
 //!
 //! ```text
-//! compare-raw-mft <file_a> <file_b>
+//! uffs-compare-raw-mft <file_a> <file_b>
 //! ```
 
 #![expect(
@@ -122,7 +122,7 @@ fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        eprintln!("Usage: compare-raw-mft <file_a> <file_b>");
+        eprintln!("Usage: uffs-compare-raw-mft <file_a> <file_b>");
         std::process::exit(1);
     }
 

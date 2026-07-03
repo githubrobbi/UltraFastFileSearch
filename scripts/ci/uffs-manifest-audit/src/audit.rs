@@ -54,8 +54,8 @@ struct KnownExceptions {
     /// §10 deviation row 5.
     publish_explicit: BTreeSet<&'static str>,
     /// Members allowed underscore-style `[[bin]] name = ...` (vs. the
-    /// hyphen convention).  Source: gen-workflow comment in
-    /// `scripts/ci/gen-workflow/src/main.rs`.
+    /// hyphen convention).  Source: uffs-gen-workflow comment in
+    /// `scripts/ci/uffs-gen-workflow/src/main.rs`.
     underscore_bin_ok: BTreeSet<&'static str>,
     /// `(member, dep_name)` pairs allowed to bypass workspace
     /// inheritance.  Documented in Phase 1 §3.6.
@@ -838,7 +838,7 @@ workspace = true
         );
         assert_eq!(
             normalise_path_dep(
-                "scripts/ci/gen-hooks/Cargo.toml",
+                "scripts/ci/uffs-gen-hooks/Cargo.toml",
                 "../../../crates/uffs-core"
             ),
             "crates/uffs-core"
@@ -943,8 +943,8 @@ workspace = true
             "uffs-core"
         );
         assert_eq!(
-            member_id_from_path("scripts/ci/gen-hooks/Cargo.toml"),
-            "gen-hooks"
+            member_id_from_path("scripts/ci/uffs-gen-hooks/Cargo.toml"),
+            "uffs-gen-hooks"
         );
     }
 

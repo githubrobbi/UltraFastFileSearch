@@ -13,10 +13,10 @@
 //!
 //! ```bash
 //! # Compare trial_run.ps1 outputs (Windows)
-//! compare-scan-parity baseline_c.txt rust_reference_full_c.txt
+//! uffs-compare-scan-parity baseline_c.txt rust_reference_full_c.txt
 //!
 //! # Compare with report output
-//! compare-scan-parity baseline_c.txt rust_reference_full_c.txt --report parity_report.md
+//! uffs-compare-scan-parity baseline_c.txt rust_reference_full_c.txt --report parity_report.md
 //! ```
 
 #![expect(
@@ -547,7 +547,7 @@ fn main() -> Result<()> {
 
     if args.len() < 3 {
         eprintln!(
-            "Usage: compare-scan-parity <reference_output.txt> <rust_output.txt> [--report <file.md>] [-v]"
+            "Usage: uffs-compare-scan-parity <reference_output.txt> <rust_output.txt> [--report <file.md>] [-v]"
         );
         eprintln!();
         eprintln!("Compare reference and Rust UFFS scan outputs for parity verification.");

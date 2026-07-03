@@ -96,7 +96,7 @@ struct BucketCounts {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: scan-mft-magic <mft.raw> [bucket_size]");
+        eprintln!("Usage: uffs-scan-mft-magic <mft.raw> [bucket_size]");
         std::process::exit(1);
     }
 

@@ -102,7 +102,7 @@ actually defined in `_lint_fast.sh`, `_lint_pre_push.sh`, and
 
 [[gate]]
 id = "hooks-drift"
-label = "Hook codegen drift detector (gen-hooks --check)"
+label = "Hook codegen drift detector (uffs-gen-hooks --check)"
 command = [
   "cargo",
   "run",
@@ -123,11 +123,11 @@ order = 26
 notes = """
 Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Verifies that
 the on-disk `scripts/hooks/_lint_pre_push.sh` is byte-for-byte equal
-to what `gen-hooks` would emit from the canonical
+to what `uffs-gen-hooks` would emit from the canonical
 `scripts/ci/gates.toml`.  Catches the failure mode where someone
 manually edits the generated hook (whose AUTO-GENERATED banner
 explicitly warns "MANUAL EDITS WILL BE OVERWRITTEN") instead of
-editing the manifest and regenerating via `just gen-hooks`.
+editing the manifest and regenerating via `just uffs-gen-hooks`.
 
 Pairs with `gates-drift`: the latter ensures the manifest matches
 the *gate set* of every consumer; this one ensures the generator's
@@ -136,7 +136,7 @@ emitted hook matches what the manifest would produce.
 
 [[gate]]
 id = "workflow-drift"
-label = "Workflow structural drift detector (gen-workflow --check)"
+label = "Workflow structural drift detector (uffs-gen-workflow --check)"
 command = [
   "cargo",
   "run",
@@ -181,7 +181,7 @@ gate-manifest plan.
 
 [[gate]]
 id = "fast-drift"
-label = "Pre-commit hook codegen drift detector (gen-hooks --target pre-commit --check)"
+label = "Pre-commit hook codegen drift detector (uffs-gen-hooks --target pre-commit --check)"
 command = [
   "cargo",
   "run",
@@ -204,11 +204,11 @@ order = 28
 notes = """
 Phase 3a of `docs/architecture/gates-manifest-plan.md`.  Verifies that
 the on-disk `scripts/hooks/_lint_fast.sh` is byte-for-byte equal to
-what `gen-hooks --target pre-commit` would emit from this manifest.
+what `uffs-gen-hooks --target pre-commit` would emit from this manifest.
 A manual edit to the pre-commit hook (or a manifest change without a
 regen) hard-fails this gate at pre-push and CI.
 
-Sibling of `hooks-drift` for the pre-commit tier.  Same `gen-hooks`
+Sibling of `hooks-drift` for the pre-commit tier.  Same `uffs-gen-hooks`
 binary, same `--check` semantics, different `--target` (and therefore
 different output-path).  Lives in the pre-push + pr-fast tiers (NOT
 pre-commit) — running the pre-commit drift detector inside the
@@ -219,7 +219,7 @@ right place to catch the drift before it reaches the remote.
 
 [[gate]]
 id = "manifest-drift"
-label = "Workspace manifest-inheritance drift detector (manifest-audit --check)"
+label = "Workspace manifest-inheritance drift detector (uffs-manifest-audit --check)"
 command = [
   "cargo",
   "run",

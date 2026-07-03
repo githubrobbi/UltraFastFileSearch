@@ -113,8 +113,8 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 | Crate | Description | Path |
 |---|---|---|
 | `uffs-ci-pipeline` | Workspace CI driver (promoted from rust-script) | `scripts/ci-pipeline/` |
-| `uffs-gen-hooks` | Gate-manifest hook generator | `scripts/ci/gen-hooks/` |
-| `uffs-gen-workflow` | Gate-manifest workflow structural validator | `scripts/ci/gen-workflow/` |
+| `uffs-gen-hooks` | Gate-manifest hook generator | `scripts/ci/uffs-gen-hooks/` |
+| `uffs-gen-workflow` | Gate-manifest workflow structural validator | `scripts/ci/uffs-gen-workflow/` |
 
 **Tooling contract:** Parallel tree, NOT part of the runtime dep graph.  Tooling crates MUST NOT depend on any `uffs-*` runtime crate.  Tooling crates carry their own minimal deps (clap, anyhow, etc.) and exist solely to orchestrate the workspace's CI / hook lifecycle.
 

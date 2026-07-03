@@ -79,9 +79,9 @@ pre-push and CI:
 | Tool | What it catches | Where |
 |---|---|---|
 | `scripts/dev/build_codegen_audit.sh` | New `build.rs` / proc-macro / `macro_rules!` / codegen binary / env-var without a corresponding registry entry | On-demand (re-run before merging refactors that touch build / macros / env) |
-| `scripts/ci/manifest-audit` (`manifest-drift` gate) | Workspace-inheritance invariants in `Cargo.toml` | Pre-push + `pr-fast.yml::manifest-drift` |
-| `scripts/ci/gen-hooks` (`hooks-drift` + `fast-drift` gates) | `_lint_pre_push.sh` + `_lint_fast.sh` drift from `gates.toml` | Pre-push + `pr-fast.yml::hooks-drift` + `pr-fast.yml::fast-drift` |
-| `scripts/ci/gen-workflow` (`workflow-drift` gate) | `pr-fast.yml` drift from `gates.toml` | Pre-push + `pr-fast.yml::workflow-drift` |
+| `scripts/ci/uffs-manifest-audit` (`manifest-drift` gate) | Workspace-inheritance invariants in `Cargo.toml` | Pre-push + `pr-fast.yml::manifest-drift` |
+| `scripts/ci/uffs-gen-hooks` (`hooks-drift` + `fast-drift` gates) | `_lint_pre_push.sh` + `_lint_fast.sh` drift from `gates.toml` | Pre-push + `pr-fast.yml::hooks-drift` + `pr-fast.yml::fast-drift` |
+| `scripts/ci/uffs-gen-workflow` (`workflow-drift` gate) | `pr-fast.yml` drift from `gates.toml` | Pre-push + `pr-fast.yml::workflow-drift` |
 | `cargo build --workspace --timings` | Compile-time regression from a new `build.rs` or macro-heavy site | Pre-release + on-demand via `build_codegen_audit.sh --with-cargo` |
 
 The contract is positive (the audit script flags what's missing) rather
@@ -183,7 +183,7 @@ violations are caught at PR review.
 Adding a new emitter under `scripts/ci/` requires:
 
 1. A corresponding `*-drift` gate in `scripts/ci/gates.toml`.
-2. The gate wired into both `_lint_pre_push.sh` (via `gen-hooks`) and `.github/workflows/pr-fast.yml`.
+2. The gate wired into both `_lint_pre_push.sh` (via `uffs-gen-hooks`) and `.github/workflows/pr-fast.yml`.
 3. An integration test suite under `scripts/ci/<binary>/tests/`.
 
 An orchestrator (class C2) is exempt from the drift-detector requirement
@@ -331,9 +331,9 @@ entry (SHA `0433065c7`).  Adding one requires the §3.2 contract.
 
 | Binary | Class | Source of truth | Generated artifact | Drift gate |
 |---|---|---|---|---|
-| `scripts/ci/gen-hooks` | **C1** | `scripts/ci/gates.toml` | `scripts/hooks/_lint_pre_push.sh` + `scripts/hooks/_lint_fast.sh` | `hooks-drift` + `fast-drift` |
-| `scripts/ci/gen-workflow` | **C1** | `scripts/ci/gates.toml` | `.github/workflows/pr-fast.yml` (validated, not emitted) | `workflow-drift` |
-| `scripts/ci/manifest-audit` | **C1** | 15 Phase-1 manifest invariants | every member `Cargo.toml` (validated, not emitted) | `manifest-drift` |
+| `scripts/ci/uffs-gen-hooks` | **C1** | `scripts/ci/gates.toml` | `scripts/hooks/_lint_pre_push.sh` + `scripts/hooks/_lint_fast.sh` | `hooks-drift` + `fast-drift` |
+| `scripts/ci/uffs-gen-workflow` | **C1** | `scripts/ci/gates.toml` | `.github/workflows/pr-fast.yml` (validated, not emitted) | `workflow-drift` |
+| `scripts/ci/uffs-manifest-audit` | **C1** | 15 Phase-1 manifest invariants | every member `Cargo.toml` (validated, not emitted) | `manifest-drift` |
 | `scripts/ci-pipeline` | **C2** | N/A | N/A (process: tagged release on GitHub) | N/A — see §3.4 + `release-automation-plan.md` |
 
 ---
@@ -370,9 +370,9 @@ The audit explicitly checks for and rejects:
 
 - **Audit tool:** `scripts/dev/build_codegen_audit.sh` (Phase 9a — landed via PR #299).
 - **Companion policies:** `panic_policy.md` (Phase 5e — exempts `build.rs` from runtime panic policy), `allocation_policy.md` (Phase 6f), `trait_policy.md` (Phase 7g), `dependency_policy.md` (Phase 8c — same §988-mirror contract shape for features).
-- **Gates manifest:** `docs/architecture/gates-manifest-plan.md` (Phases 1-3 — defines the `gates.toml` substrate that `gen-hooks` + `gen-workflow` + `manifest-audit` consume; see §6.4).
+- **Gates manifest:** `docs/architecture/gates-manifest-plan.md` (Phases 1-3 — defines the `gates.toml` substrate that `uffs-gen-hooks` + `uffs-gen-workflow` + `uffs-manifest-audit` consume; see §6.4).
 - **Release automation:** `docs/architecture/release-automation-plan.md` (defines the `scripts/ci-pipeline` C2 contract).
-- **Phase 1 manifest plan** (local-only): defines the 15 invariants `manifest-audit` encodes.
+- **Phase 1 manifest plan** (local-only): defines the 15 invariants `uffs-manifest-audit` encodes.
 - **Workspace lints:** `Cargo.toml [workspace.lints.clippy]` + `clippy.toml` — Phase 9 adds **no new clippy lints**.
 - **Workspace dependencies:** `Cargo.toml [workspace.dependencies]` — `winresource` (used by `uffs-cli/build.rs`) is a workspace dep per `dependency_policy.md`.
 
@@ -388,7 +388,7 @@ Append-only.  Each entry: date, sub-phase, decision, PR.
 | 2026-05-19 | 9b | `uffs-cli/build.rs` audited.  Verdict: B2 + B3 (PE resource embedding + `/DELAYLOAD` link args).  No drift.  No refactor.  See `phase_9_build_audit_findings.md`. | #300 |
 | 2026-05-19 | 9c | Record deliberate "0 proc-macro crates" workspace posture.  Adding one requires the §3.2 contract. | #300 |
 | 2026-05-19 | 9d | All 6 `macro_rules!` sites audited.  Verdict: 5 × M1 (binary read helpers — embedded `?`-propagation + implicit captures), 1 × M2+M3 (`drive_letter_consts!` — 26-letter const declaration repetition).  No drift.  Refactor candidate (read helpers → `Cursor` struct) deferred — see `phase_9_macro_audit_findings.md` §5.1. | #300 |
-| 2026-05-19 | 9e | All 4 codegen binaries audited.  Verdict: 3 × C1 (`gen-hooks`, `gen-workflow`, `manifest-audit` — all `--check`-mode validators wired into `*-drift` gates) + 1 × C2 (`ci-pipeline` — release orchestrator, no idempotency contract).  No drift.  See `phase_9_codegen_inventory.md`. | #300 |
+| 2026-05-19 | 9e | All 4 codegen binaries audited.  Verdict: 3 × C1 (`uffs-gen-hooks`, `uffs-gen-workflow`, `uffs-manifest-audit` — all `--check`-mode validators wired into `*-drift` gates) + 1 × C2 (`ci-pipeline` — release orchestrator, no idempotency contract).  No drift.  See `phase_9_codegen_inventory.md`. | #300 |
 | 2026-05-19 | 9f | Env-var registry §5 populated: 36 distinct names across 7 scope categories (5 build-time, 11 standard-runtime, 5 logging, 9 UFFS runtime knobs, 2 client knobs, 2 build/release knobs, 2 test-only). | #300 |
 | 2026-05-19 | 9g | Policy doc + CONTRIBUTING §"Build, codegen, and env-var policy" cross-link landed.  Mirrors Phase 5e / 6f / 7g / 8c cadence. | #300 |
 | 2026-05-19 | 9-gap | **Gap closure post-#300.**  Deep audit against playbook §1013-1078 + plan §0.2 identified 5 gaps: (A) §5 was missing the **Set by** column required by plan §0.2 item 5; (B) per-crate `# Environment` rustdoc sections deferred (plan §1 row 9f deliverable); (C) `crates/uffs-cli/build.rs` rustdoc was missing the env-var listing required by plan §2 criterion 3; (D) `count_includes` over-counted doc-comments by 1; (E) audit script missed `env::var_os(…)` + const-name indirection detection, causing **6 env vars** to be absent from §5 (`UFFS_CACHE_PROFILE`, `UFFS_HOT_TO_WARM_IDLE_SECS`, `UFFS_REBUILD_CHILDREN_ALWAYS`, `UFFS_SEARCH_MAX_CONCURRENCY`, `UFFS_SKIP_ORPHANS`, `UFFS_USN_REFRESH_INTERVAL_SECS`).  Corrected workspace baseline 36 → 42 env vars + 2 → 1 include sites.  Also corrected stale defaults for `UFFS_PARKED_TO_COLD_IDLE_SECS` (300 → 86 400) and `UFFS_WARM_TO_PARKED_IDLE_SECS` (60 → 300). | this PR |

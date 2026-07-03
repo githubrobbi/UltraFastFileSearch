@@ -17,7 +17,7 @@
 //! # Usage
 //!
 //! ```bash
-//! analyze-mft-parents docs/trial_runs/f_mft.parquet
+//! uffs-analyze-mft-parents docs/trial_runs/f_mft.parquet
 //! ```
 
 #![expect(
@@ -46,7 +46,7 @@ use uffs_polars::{BooleanChunked, DataFrame, SerReader as _, UInt64Chunked};
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: analyze-mft-parents <mft.parquet>");
+        eprintln!("Usage: uffs-analyze-mft-parents <mft.parquet>");
         std::process::exit(1);
     }
 

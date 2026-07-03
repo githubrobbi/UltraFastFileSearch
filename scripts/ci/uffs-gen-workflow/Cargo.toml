@@ -1,31 +1,25 @@
-# =============================================================================
-# scripts/ci/gen-hooks/Cargo.toml — UFFS gate-manifest hook generator
-# =============================================================================
-#
 # SPDX-License-Identifier: MPL-2.0
 # Copyright (c) 2025-2026 SKY, LLC.
 #
-# Phase 2 of `docs/architecture/gates-manifest-plan.md`.  Reads the
-# canonical `scripts/ci/gates.toml` manifest and emits the matching
-# `scripts/hooks/_lint_pre_push.sh` so that the hook content is never
-# hand-maintained.  Pre-commit (`_lint_fast.sh`) stays hand-written
-# (Phase 3 picks it up).
+# UFFS — Gate-manifest workflow structural validator.
 #
-# Lint policy: same as `scripts/ci-pipeline` — does NOT inherit
-# `[lints] workspace = true`.  This is an internal tool; the production
-# library lints (deny unwrap, deny println, deny missing_docs_in_private_items)
-# fight readability for an operational binary.  Default clippy passes on
-# this crate via the standard `cargo clippy` invocation.
-# =============================================================================
+# Phase 3 deliverable from `docs/architecture/gates-manifest-plan.md`.
+# Reads `scripts/ci/gates.toml` AND `.github/workflows/pr-fast.yml`,
+# validates four structural properties (job presence, `if:` predicate
+# alignment, aggregator coverage, branch-protection guard), exits
+# non-zero on any drift.  This is a `--check`-only tool — it never
+# mutates the workflow file.  See plan §4.2 for the full property
+# specification and the rationale for the structural-validator design
+# (vs. the originally-planned YAML emitter).
 
 [package]
-name = "uffs-gen-hooks"
+name = "uffs-gen-workflow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "UFFS gate-manifest hook generator (Phase 2 of gates-manifest-plan); not published"
+description = "Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)"
 # Posture: **permanently non-publishable** — internal workspace CI tooling.
 # Distinct from the 8 Polars-blocked deferred-publishable crates: this
 # crate would remain non-publishable even if Polars upstream released,
@@ -42,38 +36,36 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[bin]]
-name = "gen-hooks"
+name = "uffs-gen-workflow"
 path = "src/main.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ─────────────────────────────────────────────────────────────────────────────
 # Every dependency is aliased to `[workspace.dependencies]` in the root
-# Cargo.toml so a single Cargo.lock entry serves this tool and every other
-# crate.  See `scripts/ci-pipeline/Cargo.toml` for the rationale.
+# Cargo.toml so a single Cargo.lock entry serves this tool and every
+# other crate.  See `scripts/ci/uffs-gen-hooks/Cargo.toml` for the rationale.
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lints policy
+# Lints (issue #212)
 # ─────────────────────────────────────────────────────────────────────────────
-# Inherit the full workspace lint stack (matches all 14 product crates).
-#
-# The previous wholesale opt-out (issue #212) was too coarse-grained:
-# only 4 lints in `[workspace.lints.clippy]` are CLI-inappropriate
-# (`print_stderr`, `print_stdout`, `indexing_slicing`, `min_ident_chars`,
-# `std_instead_of_alloc`); the other ~60 deny-level lints (cast_lossless,
-# redundant_clone, manual_memcpy, …) apply just as much to an operational
-# CLI tool as to product code.  Per workspace rule 1 ("targeted allow,
-# keep it minimal, scoped, justify in code comments"), intentional
-# stderr-printing sites carry function-scoped
-# `#[expect(clippy::print_stderr, reason = "…")]` rather than disabling
-# the lint workspace-wide.  See `CLIPPY_POSTURE.md` § CLI-tooling.
-# Embeds the UFFS icon + version info + shared app.manifest into `gen-hooks.exe`
-# (see build.rs) for branding consistency.
+# Inherit the full workspace lint stack (matches all 14 product crates +
+# uffs-diag).  The previous wholesale opt-out skipped ~60 high-value lints
+# (cast_lossless, redundant_clone, manual_memcpy, …) along with the 4-5
+# CLI-inappropriate ones it was meant to skip.  Per workspace rule 1
+# ("targeted allow, keep minimal, scoped, justify in comments"), the
+# CLI-inappropriate lints are suppressed via file-level `#![expect(...)]`
+# blocks in `src/*.rs` with `reason = "..."` strings, matching the
+# precedent in `crates/uffs-diag/src/bin/*.rs`.  See `CLIPPY_POSTURE.md`
+# § CLI-tooling for the policy.
+# Embeds the UFFS icon + version info + shared app.manifest into
+# `uffs-gen-workflow.exe` (see build.rs) for branding consistency.
 [build-dependencies]
 winresource.workspace = true
 

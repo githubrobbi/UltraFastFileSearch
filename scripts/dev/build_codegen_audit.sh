@@ -25,7 +25,7 @@
 #     `pub(crate)` / function-local), justification class per playbook
 #     §1064 (syntax shaping / trait impl repetition / pattern capture).
 #   * Codegen binaries — workspace-internal generator/validator binaries
-#     under `scripts/ci/` (`gen-hooks`, `gen-workflow`, `manifest-audit`,
+#     under `scripts/ci/` (`uffs-gen-hooks`, `uffs-gen-workflow`, `uffs-manifest-audit`,
 #     `ci-pipeline`) + their drift-detector wiring per `gates.toml`.
 #   * Env-var consumption — every `env::var(…)` / `env!(…)` /
 #     `option_env!(…)` use site, per env-var-name aggregation.
@@ -466,15 +466,15 @@ EOF
         elif [[ -f "scripts/ci/$bin/src/main.rs" || -f "scripts/ci/$bin/src/lib.rs" ]]; then
             bin_path="scripts/ci/$bin"
             case "$bin" in
-                gen-hooks)
+                uffs-gen-hooks)
                     purpose="Generates \`scripts/hooks/_lint_pre_push.sh\` + \`_lint_fast.sh\` from \`scripts/ci/gates.toml\`"
                     drift="\`hooks-drift\` + \`fast-drift\` gates (\`--check\` mode)"
                     ;;
-                gen-workflow)
+                uffs-gen-workflow)
                     purpose="Validates \`.github/workflows/pr-fast.yml\` structurally against \`scripts/ci/gates.toml\`"
                     drift="\`workflow-drift\` gate (\`--check\` only — no emission)"
                     ;;
-                manifest-audit)
+                uffs-manifest-audit)
                     purpose="Validates the 15 Phase-1 workspace-inheritance manifest invariants across every member \`Cargo.toml\`"
                     drift="\`manifest-drift\` gate (\`--check\` mode)"
                     ;;

@@ -10,7 +10,7 @@
 //! # Usage
 //!
 //! ```bash
-//! analyze-diff <baseline.txt> <rust.txt>
+//! uffs-analyze-diff <baseline.txt> <rust.txt>
 //! ```
 //!
 //! # Output
@@ -168,7 +168,7 @@ fn extract_ads_name(path: &str) -> Option<&str> {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: analyze-diff <reference.txt> <rust.txt>");
+        eprintln!("Usage: uffs-analyze-diff <reference.txt> <rust.txt>");
         std::process::exit(1);
     }
 

@@ -256,7 +256,7 @@ jobs:
   #   `notify-failure` job which fires inside the workflow run as soon as
   #   any gate job fails — well before this `auto-rerun-transient`
   #   workflow even sees the `workflow_run [completed]` event.  Property 3
-  #   of `gen-workflow/src/validate.rs` requires every gate to list
+  #   of `uffs-gen-workflow/src/validate.rs` requires every gate to list
   #   `notify-failure.needs:`, so we cannot simply delete those in-workflow
   #   notifiers without restructuring the gates manifest.
   #

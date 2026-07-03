@@ -10,10 +10,10 @@
     reason = "build scripts may panic on build-host failure; workspace deny-expect targets runtime code"
 )]
 
-//! Build script for `gen-workflow`.
+//! Build script for `uffs-gen-hooks`.
 //!
 //! Embeds the UFFS icon + version info + shared `app.manifest` into
-//! `gen-workflow.exe` via [`winresource`](https://crates.io/crates/winresource),
+//! `uffs-gen-hooks.exe` via [`winresource`](https://crates.io/crates/winresource),
 //! for branding consistency with the rest of the UFFS binary family.
 //! MSVC-Windows only; a no-op on every other build target.
 
@@ -31,10 +31,10 @@ fn main() {
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../../assets/brand/icons/uffs.ico")
         .set("ProductName", "UltraFastFileSearch")
-        .set("FileDescription", "UFFS CI: workflow generator")
+        .set("FileDescription", "UFFS CI: git hooks generator")
         .set("CompanyName", "SKY, LLC.")
         .set("LegalCopyright", "(c) 2025-2026 SKY, LLC. MPL-2.0.")
         .set_manifest_file("../../../assets/brand/app.manifest");
     res.compile()
-        .expect("winresource: failed to embed gen-workflow resources");
+        .expect("winresource: failed to embed uffs-gen-hooks resources");
 }

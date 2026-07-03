@@ -36,7 +36,7 @@ documentation.workspace = true
 publish.workspace = true
 
 # Phase R6 docs.rs build configuration — preserved for workspace-uniform
-# manifest shape (manifest-audit invariant 3.15).  This crate is
+# manifest shape (uffs-manifest-audit invariant 3.15).  This crate is
 # `publish = false`, so docs.rs never builds it; the block is inert but keeps
 # the member manifest consistent with every other workspace member.  The
 # orchestrator drives Windows-only competitor tooling in later phases, so the

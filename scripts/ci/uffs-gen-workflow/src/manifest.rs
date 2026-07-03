@@ -4,31 +4,31 @@
 //! Minimal subset of the gate-manifest schema needed by the workflow
 //! structural validator.
 //!
-//! # Why duplicate (a subset of) `scripts/ci/gen-hooks/src/manifest.rs`?
+//! # Why duplicate (a subset of) `scripts/ci/uffs-gen-hooks/src/manifest.rs`?
 //!
-//! `gen-hooks` and `gen-workflow` both read `scripts/ci/gates.toml`.
+//! `uffs-gen-hooks` and `uffs-gen-workflow` both read `scripts/ci/gates.toml`.
 //! A purist refactor would extract a shared `uffs-gates-schema`
 //! library crate that both binaries depend on.  We deliberately
 //! deferred that for this PR for two reasons:
 //!
-//! 1. The cross-tool dependency graph is currently zero-coupled (gen-hooks
-//!    doesn't depend on gen-workflow and vice versa); a shared crate would
+//! 1. The cross-tool dependency graph is currently zero-coupled (uffs-gen-hooks
+//!    doesn't depend on uffs-gen-workflow and vice versa); a shared crate would
 //!    introduce a new internal dependency just to hold ~30 lines of struct
 //!    definitions.
 //! 2. Serde's default `deserialize_unknown_fields = false` means additive
 //!    changes to the manifest schema (new fields in `[[gate]]`) are silently
-//!    absorbed by both deserializers — the common drift mode (gen-hooks gains a
-//!    field, gen-workflow stays blissfully unaware) is safe.  Removal of a
-//!    field gen-workflow uses fails noisily on first parse; loud regression
-//!    beats silent corruption every time.
+//!    absorbed by both deserializers — the common drift mode (uffs-gen-hooks
+//!    gains a field, uffs-gen-workflow stays blissfully unaware) is safe.
+//!    Removal of a field uffs-gen-workflow uses fails noisily on first parse;
+//!    loud regression beats silent corruption every time.
 //!
 //! When this assumption breaks (e.g. both generators need a complex
-//! shared validator), promote this module + the gen-hooks one into a
+//! shared validator), promote this module + the uffs-gen-hooks one into a
 //! `scripts/ci/gates-schema` library.  Until then: keep it simple.
 //!
 //! # Schema subset
 //!
-//! gen-workflow only needs:
+//! uffs-gen-workflow only needs:
 //! - `id` — gate's stable identifier
 //! - `label` — human-readable string (used in error messages)
 //! - `tiers` — to filter to `pr-fast`
@@ -59,7 +59,7 @@ pub(crate) struct Manifest {
 }
 
 /// A single gate entry — minimal subset.  Field ordering matches the
-/// canonical schema in `gen-hooks/src/manifest.rs::Gate` so a
+/// canonical schema in `uffs-gen-hooks/src/manifest.rs::Gate` so a
 /// reviewer comparing the two structs sees them line up.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Gate {
@@ -193,8 +193,8 @@ gate_when = "rust_changed"
 
     #[test]
     fn unknown_fields_are_silently_ignored() {
-        // Documents the schema-coupling design decision: gen-hooks
-        // can add new manifest fields without breaking gen-workflow.
+        // Documents the schema-coupling design decision: uffs-gen-hooks
+        // can add new manifest fields without breaking uffs-gen-workflow.
         let with_extra = r#"
 [[gate]]
 id = "fmt"

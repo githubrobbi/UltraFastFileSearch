@@ -1081,7 +1081,7 @@ shape.
 > - `fast-drift`     — pre-commit hook content (Phase 3a)
 >
 > Adding, renaming, or removing a gate is now a single edit to
-> `scripts/ci/gates.toml` followed by `just gen-hooks` /
+> `scripts/ci/gates.toml` followed by `just uffs-gen-hooks` /
 > `just gen-fast`; the workflow YAML still hand-owns its bespoke
 > per-job shape (eleven distinct shapes for ~thirteen pr-fast-tier
 > gates) but `workflow-drift` enforces structural alignment with

@@ -9,8 +9,8 @@
 //!
 //! Usage:
 //! ```text
-//!   dump-mft-records <raw_path> <frs1> [frs2] ...
-//!   dump-mft-records --test-merge <raw_path> <base_frs> <ext_frs>
+//!   uffs-dump-mft-records <raw_path> <frs1> [frs2] ...
+//!   uffs-dump-mft-records --test-merge <raw_path> <base_frs> <ext_frs>
 //! ```
 
 #![expect(
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: dump-mft-records <mft.raw> <frs1> [frs2 frs3 ...]\n       dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>"
+            "Usage: uffs-dump-mft-records <mft.raw> <frs1> [frs2 frs3 ...]\n       uffs-dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>"
         );
         std::process::exit(1);
     }
@@ -160,7 +160,7 @@ fn main() -> Result<()> {
     // Check for --test-merge mode
     if args.get(1).map(String::as_str) == Some("--test-merge") {
         if args.len() < 5 {
-            eprintln!("Usage: dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>");
+            eprintln!("Usage: uffs-dump-mft-records --test-merge <mft.raw> <base_frs> <ext_frs>");
             std::process::exit(1);
         }
         let raw_path = args

@@ -11,7 +11,7 @@
 //!
 //! # Usage
 //! ```text
-//! verify-iocp-capture <iocp_file.iocp> <reference.raw|.bin>
+//! uffs-verify-iocp-capture <iocp_file.iocp> <reference.raw|.bin>
 //! ```
 
 // Diagnostic binary: relaxed lints for user-facing output and one-time verification

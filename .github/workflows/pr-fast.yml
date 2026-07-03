@@ -216,10 +216,10 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   # hooks-drift — Phase 2 of `docs/architecture/gates-manifest-plan.md`.
   # Verifies the on-disk `scripts/hooks/_lint_pre_push.sh` is
-  # byte-for-byte equal to what `gen-hooks` would emit from the
+  # byte-for-byte equal to what `uffs-gen-hooks` would emit from the
   # canonical `scripts/ci/gates.toml`.  Always-on; bypass not
   # supported in CI.  Cache key is shared with `sanity` so the
-  # gen-hooks binary build piggybacks on the existing rust-cache.
+  # uffs-gen-hooks binary build piggybacks on the existing rust-cache.
   # ─────────────────────────────────────────────────────────────────────
   hooks-drift:
     name: Hook codegen drift
@@ -244,7 +244,7 @@ jobs:
   # `declare -A R=(...)` table + `notify-failure.needs:`), and the
   # branch-protection guard string `PR Fast CI / required`.  Read-only
   # — never mutates the workflow file; risk profile matches Phase 1's
-  # `gates-drift`.  Cache key shared with `sanity` so the gen-workflow
+  # `gates-drift`.  Cache key shared with `sanity` so the uffs-gen-workflow
   # binary build piggybacks on the existing rust-cache.
   # ─────────────────────────────────────────────────────────────────────
   workflow-drift:
@@ -265,10 +265,10 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   # fast-drift — Phase 3a of `docs/architecture/gates-manifest-plan.md`.
   # Verifies the on-disk `scripts/hooks/_lint_fast.sh` is byte-for-byte
-  # equal to what `gen-hooks --target pre-commit` would emit from the
+  # equal to what `uffs-gen-hooks --target pre-commit` would emit from the
   # canonical `scripts/ci/gates.toml`.  Sibling of `hooks-drift` for
   # the pre-commit tier — same binary, different `--target`.  Cache
-  # key shared with `sanity` so the gen-hooks binary build piggybacks
+  # key shared with `sanity` so the uffs-gen-hooks binary build piggybacks
   # on the existing rust-cache.
   # ─────────────────────────────────────────────────────────────────────
   fast-drift:

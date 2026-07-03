@@ -136,7 +136,7 @@ fn runtime_binaries_split_into_the_post_shutdown_group() {
     // the first group; uffsd/uffs-broker (image locked while running) land
     // in "Runtime binaries (after shutdown)", after the shutdown group.
     let mut mixed = root(Channel::Unmanaged, Scope::User, "/opt/uffs");
-    mixed.binaries = ["uffs", "analyze-diff", "uffsd", "uffs-broker"]
+    mixed.binaries = ["uffs", "uffs-analyze-diff", "uffsd", "uffs-broker"]
         .into_iter()
         .map(|name| BinaryInfo {
             name: name.to_owned(),
@@ -169,7 +169,7 @@ fn runtime_binaries_split_into_the_post_shutdown_group() {
             .flatten()
             .collect()
     };
-    assert_eq!(stems_of("Binaries"), vec!["uffs", "analyze-diff"]);
+    assert_eq!(stems_of("Binaries"), vec!["uffs", "uffs-analyze-diff"]);
     assert_eq!(stems_of("Runtime binaries (after shutdown)"), vec![
         "uffsd",
         "uffs-broker"

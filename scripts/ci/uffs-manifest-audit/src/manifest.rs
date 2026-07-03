@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Minimal Cargo.toml model for the manifest-audit drift detector.
+//! Minimal Cargo.toml model for the uffs-manifest-audit drift detector.
 //!
 //! Only the fields the audit cares about are deserialised — the rest
 //! of every member's `Cargo.toml` is captured as an untyped

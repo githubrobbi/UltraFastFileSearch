@@ -10,10 +10,10 @@
     reason = "build scripts may panic on build-host failure; workspace deny-expect targets runtime code"
 )]
 
-//! Build script for `manifest-audit`.
+//! Build script for `uffs-manifest-audit`.
 //!
 //! Embeds the UFFS icon + version info + shared `app.manifest` into
-//! `manifest-audit.exe` via [`winresource`](https://crates.io/crates/winresource),
+//! `uffs-manifest-audit.exe` via [`winresource`](https://crates.io/crates/winresource),
 //! for branding consistency with the rest of the UFFS binary family.
 //! MSVC-Windows only; a no-op on every other build target.
 
@@ -36,5 +36,5 @@ fn main() {
         .set("LegalCopyright", "(c) 2025-2026 SKY, LLC. MPL-2.0.")
         .set_manifest_file("../../../assets/brand/app.manifest");
     res.compile()
-        .expect("winresource: failed to embed manifest-audit resources");
+        .expect("winresource: failed to embed uffs-manifest-audit resources");
 }

@@ -214,7 +214,7 @@ now runs `cargo vet check --locked` at pre-push, dep-gated on
 on PRs that could possibly fail it.  Formalised on 2026-05-06 via PR
 #140 / PR #141 (gates manifest Phases 1–2): the gate now appears as
 `[[gate]] id = "vet"` in `scripts/ci/gates.toml` and is regenerated
-into the pre-push hook by `just gen-hooks`.  An adjacent
+into the pre-push hook by `just uffs-gen-hooks`.  An adjacent
 `vet-audit-discipline` gate (PR #172, 2026-05-12) enforces that every
 `[[exemptions.<crate>]]` version-bump carries a matching
 `[[audits.<crate>]]` delta + `Vet-Reviewed-Diff:` commit trailer.
@@ -277,7 +277,7 @@ the `/// ```rust` blocks as actual tests) was CI-only.
 --locked` at pre-push.  Codified into the gates manifest on
 2026-05-06 via PR #141 as `[[gate]] id = "doc-tests"` in
 `scripts/ci/gates.toml`; the gate is regenerated into the hook by
-`just gen-hooks`.
+`just uffs-gen-hooks`.
 
 ### 4.4 GAP 4 — unused-dependency detection is weekly-only (✅ CLOSED 2026-05-12)
 
@@ -398,7 +398,7 @@ compile on stable at all.
 - `msrv` / `check-incompatible-msrv-in-tests` removed from `clippy.toml`.
 - `tier-2.yml::msrv` **job removed**; its position is held by a
   rationale comment citing #267 for archaeology.
-- `manifest-audit` invariant 3.4 (`rust-version` consistency)
+- `uffs-manifest-audit` invariant 3.4 (`rust-version` consistency)
   **retired**.
 - `rust-toolchain.toml` is the single source of truth for the
   required toolchain (pinned nightly).
@@ -651,7 +651,7 @@ adopted in favour of the structural fix.
 > **Gates manifest** (PRs #140 → #144, 2026-05-06 → 2026-05-07).
 > The pre-push hook (`scripts/hooks/_lint_pre_push.sh`) and the
 > fast-lint hook (`scripts/hooks/_lint_fast.sh`) are now generated
-> by `just gen-hooks` from a single source of truth
+> by `just uffs-gen-hooks` from a single source of truth
 > (`scripts/ci/gates.toml`).  PR CI carries matching drift-detection
 > jobs so the manifest stays authoritative.
 

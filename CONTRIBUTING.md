@@ -38,7 +38,7 @@ The single source of truth for the required toolchain is **`rust-toolchain.toml`
 Practical implications for contributors:
 
 - **Don't run `cargo +stable …` against the workspace.**  The polars-bound graph will not compile on any stable toolchain; the failure mode is `error[E0554]` inside `foldhash`.
-- **Don't add `rust-version = …` to any new manifest.**  The workspace-level claim was dropped in the change that closed #267; per-crate manifests do not carry `rust-version.workspace = true` either.  The `manifest-audit` tool no longer enforces invariant 3.4 (`rust-version` consistency) — adding back the field will pass the audit silently but will be reverted on review.
+- **Don't add `rust-version = …` to any new manifest.**  The workspace-level claim was dropped in the change that closed #267; per-crate manifests do not carry `rust-version.workspace = true` either.  The `uffs-manifest-audit` tool no longer enforces invariant 3.4 (`rust-version` consistency) — adding back the field will pass the audit silently but will be reverted on review.
 - **Bumping the nightly pin** is handled by `just toolchain-sync` (or `just ship --fresh`, which runs `toolchain-sync` as part of the pipeline).  Both update `rust-toolchain.toml` to the latest nightly that compiles the workspace cleanly, log the bump in CHANGELOG, and revert if the new channel regresses any gate.
 - **Future MSRV path.**  If a publishable-leaf crate (`uffs-time`, `uffs-text`, `uffs-broker-protocol`) ever needs MSRV verification independent of the polars-bound graph, set MSRV per-crate via that crate's `[package.rust-version]` field and add a focused `cargo +stable check -p <crate>` CI job — do NOT resurrect a workspace-wide claim.
 

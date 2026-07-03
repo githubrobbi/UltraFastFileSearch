@@ -6,15 +6,15 @@
 # without requiring live NTFS access.
 #
 # Binaries:
-#   - analyze-mft-parents: Analyze parent/child coverage in Parquet files
-#   - dump-mft-records: Dump raw MFT record headers for specific FRS values
-#   - scan-mft-magic: Scan magic values across all records in a raw MFT
-#   - dump-mft-extents: (Windows-only) Dump $MFT extent list for a drive
-#   - cross-check-mft-reference: Cross-check MFT records against reference CSV
-#   - compare-raw-mft: Compare two raw MFT files record-by-record
-#   - inspect-mft-record-flow: Inspect raw->fixup->parse pipeline for FRS
-#   - analyze-diff: Deep comparison of legacy vs Rust UFFS outputs
-#   - compare-scan-parity: Comprehensive legacy vs Rust scan output parity check
+#   - uffs-analyze-mft-parents: Analyze parent/child coverage in Parquet files
+#   - uffs-dump-mft-records: Dump raw MFT record headers for specific FRS values
+#   - uffs-scan-mft-magic: Scan magic values across all records in a raw MFT
+#   - uffs-dump-mft-extents: (Windows-only) Dump $MFT extent list for a drive
+#   - uffs-cross-check-mft-reference: Cross-check MFT records against reference CSV
+#   - uffs-compare-raw-mft: Compare two raw MFT files record-by-record
+#   - uffs-inspect-mft-record-flow: Inspect raw->fixup->parse pipeline for FRS
+#   - uffs-analyze-diff: Deep comparison of legacy vs Rust UFFS outputs
+#   - uffs-compare-scan-parity: Comprehensive legacy vs Rust scan output parity check
 # ============================================================================
 
 [package]
@@ -37,8 +37,8 @@ categories.workspace = true
 #   developer's machine even if they bypass release-plz.
 #
 # Rationale: `uffs-diag` is a workspace-only diagnostic toolchain.  Its
-# binaries (`analyze-mft-parents`, `dump-mft-records`, `compare-raw-mft`,
-# `compare-scan-parity`, `inspect-mft-record-flow`, …) operate on raw MFT
+# binaries (`uffs-analyze-mft-parents`, `uffs-dump-mft-records`, `uffs-compare-raw-mft`,
+# `uffs-compare-scan-parity`, `uffs-inspect-mft-record-flow`, …) operate on raw MFT
 # snapshots and Parquet exports — they're internal correctness-validation
 # instruments, not user-facing tools.  Shipping them to crates.io would
 # (a) clutter the crates.io namespace, (b) bind us to API stability we
@@ -64,8 +64,8 @@ publish.workspace = true
 # publishable, the block is already in place.
 #
 # `targets` mirrors `uffs-mft` / `uffs-broker`: the diagnostic tools include
-# Windows-only entry points (`dump-mft-extents`, `scan-mft-magic`) alongside
-# cross-platform analysis tools (`analyze-diff`, `compare-scan-parity`).
+# Windows-only entry points (`uffs-dump-mft-extents`, `uffs-scan-mft-magic`) alongside
+# cross-platform analysis tools (`uffs-analyze-diff`, `uffs-compare-scan-parity`).
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
@@ -81,43 +81,43 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # filename flips.  uffs-diag is `publish = false`, so this rename has
 # zero release-artifact blast radius.
 [[bin]]
-name = "analyze-mft-parents"
+name = "uffs-analyze-mft-parents"
 path = "src/bin/analyze_mft_parents.rs"
 
 [[bin]]
-name = "dump-mft-records"
+name = "uffs-dump-mft-records"
 path = "src/bin/dump_mft_records.rs"
 
 [[bin]]
-name = "scan-mft-magic"
+name = "uffs-scan-mft-magic"
 path = "src/bin/scan_mft_magic.rs"
 
 [[bin]]
-name = "dump-mft-extents"
+name = "uffs-dump-mft-extents"
 path = "src/bin/dump_mft_extents.rs"
 
 [[bin]]
-name = "cross-check-mft-reference"
+name = "uffs-cross-check-mft-reference"
 path = "src/bin/cross_check_mft_reference.rs"
 
 [[bin]]
-name = "compare-raw-mft"
+name = "uffs-compare-raw-mft"
 path = "src/bin/compare_raw_mft.rs"
 
 [[bin]]
-name = "inspect-mft-record-flow"
+name = "uffs-inspect-mft-record-flow"
 path = "src/bin/inspect_mft_record_flow.rs"
 
 [[bin]]
-name = "analyze-diff"
+name = "uffs-analyze-diff"
 path = "src/bin/analyze_diff.rs"
 
 [[bin]]
-name = "compare-scan-parity"
+name = "uffs-compare-scan-parity"
 path = "src/bin/compare_scan_parity.rs"
 
 [[bin]]
-name = "verify-iocp-capture"
+name = "uffs-verify-iocp-capture"
 path = "src/bin/verify_iocp_capture.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────

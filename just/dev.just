@@ -595,7 +595,7 @@ baseline-snapshot DATE=`date -u +%Y-%m-%d`:
       for c in crates/uffs-polars crates/uffs-security crates/uffs-text crates/uffs-time \
                crates/uffs-mft crates/uffs-format crates/uffs-core crates/uffs-daemon \
                crates/uffs-client crates/uffs-mcp crates/uffs-broker crates/uffs-cli \
-               crates/uffs-diag scripts/ci-pipeline scripts/ci/gen-hooks scripts/ci/gen-workflow; do
+               crates/uffs-diag scripts/ci-pipeline scripts/ci/uffs-gen-hooks scripts/ci/uffs-gen-workflow; do
         name=$(basename "$c")
         src="$c/src"
         [ -d "$src" ] || { printf "| %s | (no src/) | | | | | | | | | | | |\n" "$name"; continue; }
@@ -639,7 +639,7 @@ baseline-snapshot DATE=`date -u +%Y-%m-%d`:
       echo
       echo "| crate | unsafe { blocks | SAFETY comments | coverage |"
       echo "|---|---:|---:|---:|"
-      for c in crates/uffs-* scripts/ci-pipeline scripts/ci/gen-hooks scripts/ci/gen-workflow; do
+      for c in crates/uffs-* scripts/ci-pipeline scripts/ci/uffs-gen-hooks scripts/ci/uffs-gen-workflow; do
         name=$(basename "$c"); src="$c/src"; [ -d "$src" ] || continue
         nbl=$(rg --count-matches -U --multiline '^[^/]*\bunsafe\s*\{' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')
         nsa=$(rg --count-matches 'SAFETY:' "$src" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')

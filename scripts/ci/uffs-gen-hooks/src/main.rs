@@ -6,7 +6,7 @@
     reason = "operational CLI tool — error/verbose output goes to stderr (issue #212)"
 )]
 
-//! `gen-hooks` — gate-manifest hook generator.
+//! `uffs-gen-hooks` — gate-manifest hook generator.
 //!
 //! Phase 2/3a of `docs/architecture/gates-manifest-plan.md`.  Reads
 //! `scripts/ci/gates.toml` and emits one of two hook files depending
@@ -22,7 +22,7 @@
 //! # Usage
 //!
 //! ```text
-//! gen-hooks [--check] [--target {pre-push|pre-commit}] [--verbose]
+//! uffs-gen-hooks [--check] [--target {pre-push|pre-commit}] [--verbose]
 //! ```
 //!
 //! # Exit codes
@@ -65,12 +65,12 @@ const TARGET_PRE_PUSH: &str = "pre-push";
 /// [`TARGET_PRE_PUSH`].
 const TARGET_PRE_COMMIT: &str = "pre-commit";
 
-/// CLI arguments for `gen-hooks`.  Flags follow the pattern set by
+/// CLI arguments for `uffs-gen-hooks`.  Flags follow the pattern set by
 /// `scripts/ci-pipeline` and the rest of the workspace's internal
 /// tools.  See the file-level doc-comment for exit-code semantics.
 #[derive(Parser, Debug)]
 #[command(
-    name = "gen-hooks",
+    name = "uffs-gen-hooks",
     version,
     about = "Generate _lint_pre_push.sh from gates.toml (Phase 2 of gates-manifest-plan.md)"
 )]
@@ -112,7 +112,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("gen-hooks: {err:#}");
+            eprintln!("uffs-gen-hooks: {err:#}");
             ExitCode::from(2)
         }
     }
@@ -160,16 +160,16 @@ fn run(args: &Args) -> Result<ExitCode> {
             .with_context(|| format!("reading output at {}", output_path.display()))?;
         if on_disk == emitted {
             if args.verbose {
-                eprintln!("gen-hooks: --check passed (no diff)");
+                eprintln!("uffs-gen-hooks: --check passed (no diff)");
             }
             return Ok(ExitCode::SUCCESS);
         }
         let recipe = match target {
-            EmitTarget::PrePush => "just gen-hooks",
+            EmitTarget::PrePush => "just uffs-gen-hooks",
             EmitTarget::PreCommit => "just gen-fast",
         };
         eprintln!(
-            "gen-hooks: --check FAILED — {} is out of sync with the manifest.\n\
+            "uffs-gen-hooks: --check FAILED — {} is out of sync with the manifest.\n\
              \n\
              Regenerate it with:\n    {recipe}\n\
              \n\
@@ -184,7 +184,7 @@ fn run(args: &Args) -> Result<ExitCode> {
         .with_context(|| format!("writing {}", output_path.display()))?;
     if args.verbose {
         eprintln!(
-            "gen-hooks: wrote {} ({} bytes)",
+            "uffs-gen-hooks: wrote {} ({} bytes)",
             output_path.display(),
             emitted.len()
         );
@@ -200,7 +200,7 @@ fn run(args: &Args) -> Result<ExitCode> {
 /// `expected_runtime_secs` budget and the first line of `notes`.
 fn emit_verbose_dump(manifest: &Manifest, manifest_path: &std::path::Path, tier: &str) {
     eprintln!(
-        "gen-hooks: parsed manifest at {} (schema v{}{})",
+        "uffs-gen-hooks: parsed manifest at {} (schema v{}{})",
         manifest_path.display(),
         manifest.header.version,
         manifest
@@ -214,13 +214,13 @@ fn emit_verbose_dump(manifest: &Manifest, manifest_path: &std::path::Path, tier:
         let mut keys: Vec<&str> = cls.patterns.keys().map(String::as_str).collect();
         keys.sort_unstable();
         eprintln!(
-            "gen-hooks: classification keys ({}): {}",
+            "uffs-gen-hooks: classification keys ({}): {}",
             keys.len(),
             keys.join(", ")
         );
     }
     eprintln!(
-        "gen-hooks: {} gates total, emitting tier `{}`",
+        "uffs-gen-hooks: {} gates total, emitting tier `{}`",
         manifest.gate.len(),
         tier
     );

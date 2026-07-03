@@ -218,7 +218,7 @@ gates-drift:
 # Regenerate the pre-push hook from the canonical gates manifest
 # (Phase 2 of `docs/architecture/gates-manifest-plan.md`).
 #
-# The generator (`scripts/ci/gen-hooks`) reads `scripts/ci/gates.toml`
+# The generator (`scripts/ci/uffs-gen-hooks`) reads `scripts/ci/gates.toml`
 # and writes `scripts/hooks/_lint_pre_push.sh`.  Use this recipe
 # whenever you change the manifest; the on-disk hook carries an
 # AUTO-GENERATED banner and any manual edits will be overwritten on
@@ -227,14 +227,14 @@ gates-drift:
 # Idempotency contract (plan §4.4): running this twice in a row
 # leaves the file byte-identical; the `hooks-drift` recipe below is
 # the CI-side check that enforces the same property.
-gen-hooks:
+uffs-gen-hooks:
     @cargo run -q --release -p uffs-gen-hooks
 
 # Hook-codegen drift detector (Phase 2 of
 # `docs/architecture/gates-manifest-plan.md`).
 #
 # Verifies that the on-disk `scripts/hooks/_lint_pre_push.sh` matches
-# what `gen-hooks` would produce from the canonical
+# what `uffs-gen-hooks` would produce from the canonical
 # `scripts/ci/gates.toml`.  Catches the failure mode where someone
 # manually edits the generated hook (whose header banner explicitly
 # warns "MANUAL EDITS WILL BE OVERWRITTEN") instead of editing the
@@ -270,7 +270,7 @@ workflow-drift:
 # Regenerate the pre-commit hook from the canonical gates manifest
 # (Phase 3a of `docs/architecture/gates-manifest-plan.md`).
 #
-# Same `gen-hooks` binary as the pre-push generator; `--target
+# Same `uffs-gen-hooks` binary as the pre-push generator; `--target
 # pre-commit` selects the `_lint_fast.sh` template + dispatch shape.
 # Use this recipe whenever you change a `tier="pre-commit"` gate in
 # the manifest; the on-disk hook carries an AUTO-GENERATED banner and
@@ -286,7 +286,7 @@ gen-fast:
 # `docs/architecture/gates-manifest-plan.md`).
 #
 # Verifies that the on-disk `scripts/hooks/_lint_fast.sh` matches
-# what `gen-hooks --target pre-commit` would produce from the
+# what `uffs-gen-hooks --target pre-commit` would produce from the
 # canonical `scripts/ci/gates.toml`.  Sibling of `hooks-drift` for
 # the pre-commit tier — same binary, different `--target`.  Wired
 # into the pre-push hook (Bucket 1) and the `pr-fast.yml::fast-drift`

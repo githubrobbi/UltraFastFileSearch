@@ -17,7 +17,7 @@
 //! Usage (typical):
 //!
 //! ```bash
-//! cargo run -p uffs-diag --release --bin cross-check-mft-reference -- \
+//! cargo run -p uffs-diag --release --bin uffs-cross-check-mft-reference -- \
 //!   docs/trial_runs/UltraFastFileSearch/f_mft_reference.csv \
 //!   docs/trial_runs/UltraFastFileSearch/f_mft.parquet
 //! ```
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     if args.len() != 3 {
         let program = args
             .first()
-            .map_or("cross-check-mft-reference", String::as_str);
+            .map_or("uffs-cross-check-mft-reference", String::as_str);
         eprintln!("Usage: {program} <f_mft_reference.csv> <f_mft.parquet>");
         std::process::exit(1);
     }

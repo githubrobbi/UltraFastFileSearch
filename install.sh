@@ -82,15 +82,37 @@ detect_platform() {
 # ── resolve the version to install (latest, or pinned via UFFS_VERSION) ──────
 resolve_version() {
   if [ -n "${UFFS_VERSION:-}" ]; then
-    VERSION="$UFFS_VERSION"
+    # Accept both `v0.6.18` and `0.6.18` — release tags carry the `v`.
+    case "$UFFS_VERSION" in
+      v*) VERSION="$UFFS_VERSION" ;;
+      *) VERSION="v$UFFS_VERSION" ;;
+    esac
     return
   fi
   info "Resolving the latest release..."
-  # Parse tag_name out of the releases API (no jq dependency).
-  VERSION="$(download - "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -m1 '"tag_name"' \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
-  [ -n "$VERSION" ] || err "could not resolve the latest release version"
+  # Fetch the WHOLE response first, then parse WITHOUT pipes. The old
+  # `curl | grep -m1 | sed` died intermittently: grep -m1 closes the pipe as
+  # soon as it sees tag_name (near the top of a large JSON body), the writer
+  # takes SIGPIPE, and `pipefail` fails the install even though the parse
+  # succeeded (curl exit 23 in the wild). Any early-exiting reader — grep -m1,
+  # head, sed q — recreates it, so the parse below is pure parameter
+  # expansion: zero subprocesses, zero pipes, zero SIGPIPE (and no jq).
+  local body
+  body="$(download - "https://api.github.com/repos/$REPO/releases/latest")" \
+    || err "could not reach the GitHub releases API"
+  case "$body" in
+    *'"tag_name"'*) ;;
+    *) err "could not resolve the latest release version \
+(GitHub API rate limit? Pin one instead: UFFS_VERSION=v0.6.18)" ;;
+  esac
+  # `"tag_name": "vX.Y.Z"` -> cut everything through the value's opening
+  # quote, then keep up to the closing quote.
+  VERSION="${body#*\"tag_name\"}"
+  VERSION="${VERSION#*:}"
+  VERSION="${VERSION#*\"}"
+  VERSION="${VERSION%%\"*}"
+  [ -n "$VERSION" ] || err "could not resolve the latest release version \
+(GitHub API rate limit? Pin one instead: UFFS_VERSION=v0.6.18)"
 }
 
 # ── verify one downloaded file against SHA256SUMS ────────────────────────────
@@ -117,6 +139,10 @@ main() {
   download "$tmp/SHA256SUMS" "$base/SHA256SUMS"
   mkdir -p "$INSTALL_DIR"
 
+  # Two-phase install: download + verify EVERYTHING into the temp dir first,
+  # then move the whole set into place. A failed download or checksum aborts
+  # before a single file is touched, so ~/.local/bin is never left half old /
+  # half new (a partial upgrade can pair an old daemon with a new CLI).
   local bin asset
   for bin in "${BINARIES[@]}"; do
     asset="$bin-$PLATFORM"
@@ -124,6 +150,8 @@ main() {
     download "$tmp/$bin" "$base/$asset"
     verify_asset "$tmp/$bin" "$asset" "$tmp/SHA256SUMS"
     chmod +x "$tmp/$bin"
+  done
+  for bin in "${BINARIES[@]}"; do
     mv "$tmp/$bin" "$INSTALL_DIR/$bin"
   done
 

@@ -442,7 +442,14 @@ pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
 
     // Left items are always the broker after a declined elevation (Windows-only):
     // one clear next step, not the generic file-in-use hint.
-    if skipped > 0 {
+    // The broker-specific hint only applies to broker LEFT items — a LEFT
+    // winget delegation carries the OPPOSITE instruction (non-admin terminal)
+    // in its own reason line, so a blanket "re-run as Administrator" here
+    // would be misleading.
+    let broker_left = outcome.results.iter().any(|(_, status)| {
+        matches!(status, ItemStatus::Skipped(reason) if reason.contains("Access Broker"))
+    });
+    if broker_left {
         println!(
             "\nThe Access Broker was left because elevation was declined. Re-run\n\
              `uffs --uninstall` from an Administrator terminal to remove it."

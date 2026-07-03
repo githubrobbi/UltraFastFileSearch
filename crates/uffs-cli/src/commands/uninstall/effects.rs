@@ -411,6 +411,15 @@ fn remove_service_via_uac(service: &str) -> Result<()> {
 
 /// Delegate removal of a `WinGet`-managed root to `winget uninstall`.
 fn winget_uninstall(package_id: &str, scope: Scope) -> Result<()> {
+    // Winget refuses to uninstall a USER-scope package from an elevated
+    // session (deliberate scope-safety on their side). Detect it up front and
+    // return the typed marker so the executor records a clean LEFT with the
+    // "run it from a normal terminal" instruction — the elevated re-run we
+    // advertise for the broker service must not report this as a raw failure.
+    #[cfg(windows)]
+    if matches!(scope, Scope::User) && uffs_mft::is_elevated() {
+        return Err(super::remove::WingetNeedsNonElevated.into());
+    }
     let mut command = Command::new("winget");
     command.args([
         "uninstall",

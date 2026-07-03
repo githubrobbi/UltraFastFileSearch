@@ -176,6 +176,15 @@ toolchain-sync:
         printf "\033[0;31m   Install it with: cargo install cargo-xwin\033[0m\n"
         exit 1
     fi
+    # The Linux release leg (x86_64-unknown-linux-gnu on ubuntu-22.04) gets the
+    # same treatment via cargo-zigbuild (zig provides the cross C compiler +
+    # linker) — Phase 2c below. Refuse rather than fall back to a gate that
+    # skips a shipped target.
+    if ! command -v cargo-zigbuild >/dev/null 2>&1 || ! command -v zig >/dev/null 2>&1; then
+        printf "\033[0;31m❌ cargo-zigbuild + zig are required: toolchain-sync validates the Linux target before a bump.\033[0m\n"
+        printf "\033[0;31m   Install them with: cargo install cargo-zigbuild && brew install zig (or cargo install zig-bin)\033[0m\n"
+        exit 1
+    fi
 
     START_DATE=$(date -u +%Y-%m-%d)
     printf "\033[0;34m   Start date:  nightly-%s (today UTC)\033[0m\n\n" "$START_DATE"
@@ -434,6 +443,48 @@ toolchain-sync:
                 printf "\n\033[0;31m❌ Current pin %s no longer compiles for x86_64-pc-windows-msvc.\033[0m\n" "$CURRENT"
                 printf "\033[0;31m   Full log: /tmp/toolchain-sync-xwin.log\033[0m\n"
                 printf "\033[0;31m   Manual intervention required — the merge gate's Windows build will reject this pin.\033[0m\n"
+                exit 1
+            fi
+            CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")
+            ITER=$((ITER+1))
+            continue
+        fi
+
+        # ── Phase 2c: Linux cross-compile gate ──────────────────
+        # The release also ships x86_64-unknown-linux-gnu (built natively on
+        # the ubuntu-22.04 runner), so a bump must not be accepted on a nightly
+        # that cannot build that leg either — the exact class of the ring
+        # episode, just pointed at Linux. cargo-zigbuild supplies the cross C
+        # compiler + linker (zig), so crates with native code (ring, mimalloc)
+        # compile for the real GNU triple from this host. `zigbuild` performs a
+        # full build (compile + link) — the faithful equivalent of what the
+        # release runner does; lint drift is already covered by the host clippy
+        # leg. Reuses the per-candidate scratch CARGO_TARGET_DIR.
+        printf "\033[0;34m   Adding x86_64-unknown-linux-gnu target to %s...\033[0m\n" "$CANDIDATE"
+        if ! rustup target add x86_64-unknown-linux-gnu --toolchain "$CANDIDATE" \
+                >/tmp/toolchain-sync-linuxtarget.log 2>&1; then
+            printf "\033[0;33m   ⚠️  could not add the linux target to %s — stepping back one day.\033[0m\n" "$CANDIDATE"
+            if [ "$CANDIDATE" = "$CURRENT" ]; then
+                printf "\n\033[0;31m❌ Current pin %s cannot add x86_64-unknown-linux-gnu.\033[0m\n" "$CURRENT"
+                exit 1
+            fi
+            CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")
+            ITER=$((ITER+1))
+            continue
+        fi
+        printf "\033[0;34m   Running cargo +%s zigbuild --target x86_64-unknown-linux-gnu...\033[0m\n" "$CANDIDATE"
+        if CARGO_TARGET_DIR="$PROBE_ROOT/$CANDIDATE" \
+            cargo "+$CANDIDATE" zigbuild --target x86_64-unknown-linux-gnu --workspace --all-features --locked --quiet \
+            >/tmp/toolchain-sync-zigbuild.log 2>&1; then
+            printf "\033[0;32m   ✅ linux zigbuild ok\033[0m\n"
+        else
+            printf "\033[0;33m   ⚠️  linux zigbuild failed under %s — stepping back one day.\033[0m\n" "$CANDIDATE"
+            printf "\033[0;33m      (last 5 lines from /tmp/toolchain-sync-zigbuild.log:)\033[0m\n"
+            tail -n 5 /tmp/toolchain-sync-zigbuild.log | sed 's/^/        /'
+            if [ "$CANDIDATE" = "$CURRENT" ]; then
+                printf "\n\033[0;31m❌ Current pin %s no longer compiles for x86_64-unknown-linux-gnu.\033[0m\n" "$CURRENT"
+                printf "\033[0;31m   Full log: /tmp/toolchain-sync-zigbuild.log\033[0m\n"
+                printf "\033[0;31m   Manual intervention required — the release build's Linux leg will reject this pin.\033[0m\n"
                 exit 1
             fi
             CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")

@@ -78,9 +78,20 @@ rustflags = [
 # =============================================================================
 # Linux x86_64
 # =============================================================================
+# NOTE: Do NOT use target-cpu=native here (same reasoning as the Windows
+# section above) — it breaks cross-compilation from macOS ARM64 (the host CPU
+# "apple-m4" is not valid for x86_64), and worse: release CI builds this leg
+# natively on whatever GitHub runner it lands on, so `native` baked the
+# RUNNER's CPU features into the shipped binaries (an AVX-512 runner emits
+# binaries that crash on older user CPUs). x86-64-v3 pins a deterministic
+# baseline with AVX2 (Intel Haswell 2013+, AMD Zen 2017+) — matching the
+# Windows leg.
+# NOTE: the `linker` below only applies to host-native builds; cross builds
+# from macOS go through cargo-zigbuild, which injects its own zig-cc linker
+# (toolchain-sync Phase 2c).
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-Wl,--gc-sections"]
+rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-Wl,--gc-sections"]
 
 # =============================================================================
 # Terminal

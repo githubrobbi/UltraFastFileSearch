@@ -195,7 +195,8 @@ fn execute_all(
 
     // M4 execute (U-40..42): run the plan(s) once against the live effects sink,
     // accumulating a single outcome so the summary + retry hint print once.
-    let mut effects = effects::SystemEffects::new(self_paths.clone(), elevate_via_uac);
+    let mut effects =
+        effects::SystemEffects::new(self_paths.clone(), elevate_via_uac, broker_remains);
     let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
         outcome.absorb(remove::execute(removal_plan, &mut effects, broker_remains));

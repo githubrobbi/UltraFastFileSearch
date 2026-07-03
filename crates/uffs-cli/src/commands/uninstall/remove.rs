@@ -66,6 +66,25 @@ impl core::fmt::Display for WingetDeferred {
 
 impl core::error::Error for WingetDeferred {}
 
+/// Marker error: the Access Broker service is staying (elevation declined or
+/// deliberately kept) and it runs FROM the winget package dir, so even a
+/// deferred `winget uninstall` would hit the service's locked image — the
+/// exact `remove_all: Access is denied` failure seen live. The delegation is
+/// left with the two-step instruction instead of a doomed attempt.
+#[derive(Debug)]
+pub(crate) struct WingetBlockedByBroker;
+
+impl core::fmt::Display for WingetBlockedByBroker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("the broker service still runs from the winget package")
+    }
+}
+
+impl core::error::Error for WingetBlockedByBroker {}
+
+/// Reason recorded when the winget uninstall is blocked by the kept broker.
+const WINGET_BLOCKED_BY_BROKER: &str = "the Access Broker service still runs from this winget package and locks its      files; remove the service from an Administrator terminal (`uffs --uninstall`),      then run `winget uninstall SkyLLC.UFFS`";
+
 /// Reason recorded when the winget uninstall is deferred past process exit.
 const WINGET_DEFERRED: &str = "winget uninstall runs right after this process exits (the running      uffs.exe is part of the winget package)";
 
@@ -236,6 +255,9 @@ fn run_item(
             }
             Err(err) if err.downcast_ref::<WingetDeferred>().is_some() => {
                 ItemStatus::Skipped(WINGET_DEFERRED.to_owned())
+            }
+            Err(err) if err.downcast_ref::<WingetBlockedByBroker>().is_some() => {
+                ItemStatus::Skipped(WINGET_BLOCKED_BY_BROKER.to_owned())
             }
             Err(err) => ItemStatus::Failed(format!("{err:#}")),
         };

@@ -15,6 +15,7 @@
 
 #![cfg(windows)]
 
+use std::os::windows::ffi::OsStringExt as _;
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -80,7 +81,10 @@ fn image_path_of(handle: HANDLE) -> Option<PathBuf> {
     outcome.ok()?;
     let written = usize::try_from(size).ok()?;
     let slice = buf.get(..written)?;
-    Some(PathBuf::from(String::from_utf16_lossy(slice)))
+    // Lossless: Windows paths are arbitrary u16 sequences (not necessarily
+    // valid Unicode); `OsString::from_wide` preserves every code unit, so the
+    // resulting `PathBuf` compares exactly against real paths — no decode.
+    Some(PathBuf::from(std::ffi::OsString::from_wide(slice)))
 }
 
 /// Snapshot all process ids on the system via `EnumProcesses`, growing

@@ -117,6 +117,9 @@ pub(crate) fn find_pids_by_name(stem: &str) -> Vec<u32> {
         .ok()
         .filter(|out| out.status.success())
         .map(|out| {
+            // AUDIT-OK(bytes): pgrep emits one ASCII pid per line; a lossy
+            // decode cannot fabricate digits (U+FFFD fails `parse::<u32>`),
+            // it can only drop a line — best-effort by design.
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter_map(|line| line.trim().parse::<u32>().ok())
@@ -173,6 +176,9 @@ fn sc_output(args: &[&str]) -> Option<String> {
     if !out.status.success() {
         return None;
     }
+    // AUDIT-OK(bytes): Windows console tools emit OEM/ANSI-codepage bytes, so
+    // a strict UTF-8 parse would fail on any localized system; the text is a
+    // best-effort display/substring probe, and lossy can only fail a match.
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     (!text.trim().is_empty()).then_some(text)
 }
@@ -189,6 +195,8 @@ fn unix_cmdline(pid: u32) -> Option<String> {
         let joined = raw
             .split(|byte| *byte == 0)
             .filter(|seg| !seg.is_empty())
+            // AUDIT-OK(bytes): kernel cmdline segments are OS-arbitrary bytes
+            // with no encoding guarantee; best-effort display/probe text.
             .map(|seg| String::from_utf8_lossy(seg).into_owned())
             .collect::<Vec<_>>()
             .join(" ");
@@ -218,6 +226,8 @@ fn ps_field(pid: u32, field: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
+    // AUDIT-OK(bytes): `ps` field bytes have no encoding guarantee (they echo
+    // the process's own argv); best-effort display/probe text.
     let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     (!text.is_empty()).then_some(text)
 }

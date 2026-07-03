@@ -200,9 +200,13 @@ fn probe_version_bounded(path: &Path) -> ProbeOutcome {
     let Ok(output) = child.wait_with_output() else {
         return ProbeOutcome::None;
     };
+    // AUDIT-OK(bytes): ASCII version-token extraction from a probed binary's
+    // output. A lossy decode cannot fabricate a `MAJOR.MINOR.PATCH` token
+    // (U+FFFD is not a digit), only fail to yield one -> "legacy" label.
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     if text.trim().is_empty() {
         // Some tools print `--version` to stderr; fall back to it.
+        // AUDIT-OK(bytes): same ASCII-token argument as stdout above.
         text = String::from_utf8_lossy(&output.stderr).into_owned();
     }
     crate::commands::update::binaries::parse_version(&text)
@@ -397,7 +401,10 @@ fn payload_paths(payload: uffs_client::protocol::response::SearchPayload) -> Vec
         Payload::ShmemBlob(path) => {
             let mut buf: Vec<u8> = Vec::new();
             if uffs_client::shmem::stream_paths_blob_into(Path::new(&path), &mut buf).is_ok() {
-                blob_lines_to_paths(&String::from_utf8_lossy(&buf))
+                // Strict parse: these paths feed the EXTRA delete list, so a
+                // corrupt blob is rejected outright rather than risking a
+                // lossy-mangled path. The daemon always emits valid UTF-8.
+                core::str::from_utf8(&buf).map_or_else(|_| Vec::new(), blob_lines_to_paths)
             } else {
                 Vec::new()
             }

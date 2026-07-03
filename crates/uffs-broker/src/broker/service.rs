@@ -45,7 +45,10 @@ fn wide(text: &str) -> Vec<u16> {
 /// stderr-only message comes out empty (as seen on a failed `sc create`).
 #[cfg(windows)]
 fn sc_output(output: &std::process::Output) -> String {
+    // AUDIT-OK(bytes): operator-facing diagnostic text only — the combined
+    // output is formatted into an error message, never parsed or matched.
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // AUDIT-OK(bytes): same display-only argument as stdout above.
     let stderr = String::from_utf8_lossy(&output.stderr);
     format!("{} {}", stdout.trim(), stderr.trim())
         .trim()

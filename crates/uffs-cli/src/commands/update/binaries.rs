@@ -98,9 +98,13 @@ pub(crate) fn enumerate(dir: &Path) -> Vec<BinaryInfo> {
 /// version token is found.
 pub(crate) fn probe_version(path: &Path) -> Option<String> {
     let output = Command::new(path).arg("--version").output().ok()?;
+    // AUDIT-OK(bytes): ASCII version-token extraction from a probed binary's
+    // output. A lossy decode cannot fabricate a `MAJOR.MINOR.PATCH` token
+    // (U+FFFD is not a digit), only fail to yield one -> `None`.
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     if text.trim().is_empty() {
         // Some tools print `--version` to stderr; fall back to it.
+        // AUDIT-OK(bytes): same ASCII-token argument as stdout above.
         text = String::from_utf8_lossy(&output.stderr).into_owned();
     }
     parse_version(&text)

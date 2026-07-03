@@ -91,7 +91,10 @@ pub(super) fn latest_version() -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
+    // Strict parse: the helper is our own binary emitting ASCII `latest=`
+    // lines; non-UTF-8 output means something is wrong -> treat as no answer.
+    core::str::from_utf8(&output.stdout)
+        .ok()?
         .lines()
         .find_map(|line| line.strip_prefix("latest="))
         .map(|tag| tag.trim().to_owned())

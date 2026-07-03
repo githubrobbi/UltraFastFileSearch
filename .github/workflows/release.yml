@@ -491,15 +491,17 @@ jobs:
           # cross-toolchain (mimalloc's C compiles cleanly) and a static musl
           # link, without the musl-gcc / CC_* env fiddling plain cargo needs.
           # Pinned zig via the `ziglang` PyPI wheel (no marketplace action).
+          # Pinned to the exact zig + cargo-zigbuild the maintainer validated
+          # the static-musl build with locally (this workflow leg only runs at
+          # release time, so it cannot drift-test itself — pin what is proven).
           rustup target add ${{ matrix.target }}
-          python3 -m pip install --user "ziglang==0.13.0"
+          python3 -m pip install --user "ziglang==0.14.1"
           # cargo-zigbuild finds zig via `python3 -m ziglang`; expose it on PATH
           # as `zig` for good measure.
-          ZIG_DIR="$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
           printf 'exec python3 -m ziglang "$@"\n' | sudo tee /usr/local/bin/zig >/dev/null
           sudo chmod +x /usr/local/bin/zig
           zig version
-          cargo install --locked cargo-zigbuild@0.19.8
+          cargo install --locked cargo-zigbuild@0.22.3
           cargo zigbuild --version
 
       - name: Build optimized release binaries

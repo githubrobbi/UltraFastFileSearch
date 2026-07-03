@@ -30,6 +30,7 @@ pub(crate) mod procinfo;
 mod report;
 mod self_heal;
 mod snapshot;
+mod winget;
 
 use std::path::{Path, PathBuf};
 
@@ -63,6 +64,22 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         .first()
         .map(String::as_str)
         .filter(|tok| !tok.starts_with('-'));
+
+    // Hidden elevated-child mode (see `winget::run_broker_cycle_helper`):
+    // stop the broker service, wait for the release file, restart it. Spawned
+    // via UAC by the winget orchestration; never part of the interactive flow
+    // and deliberately absent from the visible action list below.
+    if action == Some("broker-cycle-helper") {
+        let release_file = args
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if release_file.is_empty() {
+            bail!("broker-cycle-helper needs the release-file path argument");
+        }
+        return winget::run_broker_cycle_helper(&release_file);
+    }
     if let Some(act) = action
         && !matches!(
             act,
@@ -274,6 +291,10 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
             acquire::spawn(&snapshot_path, None, verbose)?;
             apply::spawn(&snapshot_path, verbose)?;
             print_updated(&latest);
+            // The winget-managed root (if any) is updated by its owner —
+            // orchestrated so a bare `winget upgrade`'s locked-image failures
+            // (daemon/broker/self running FROM the package) cannot occur.
+            winget::orchestrate(report, &latest)?;
             Ok(())
         }
     }

@@ -1,186 +1,446 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `WinGet` upgrade orchestration for `uffs --update` (task: the "update flow,
+//! `WinGet` upgrade orchestration for `uffs --update` (the "update flow,
 //! winget-delegating").
 //!
 //! `winget upgrade` on a portable/zip package is an uninstall + reinstall, so
 //! it fails with `remove_all: Access is denied` whenever a UFFS process runs
-//! FROM the package dir (reproduced live on v0.6.20: the daemon and the broker
-//! service both ran from the winget root). The old behavior — printing "run
-//! `winget upgrade` yourself" — therefore dead-ended for exactly the users it
-//! addressed.
+//! FROM the package dir (reproduced live: the daemon and the broker service
+//! both ran from the winget root). The user verb stays `uffs --update`; winget
+//! hears its own verb internally.
 //!
-//! This module makes `uffs --update` orchestrate the whole thing:
+//! Flow (Windows; a no-op elsewhere), quiesce-first so BOTH the hand-rolled
+//! `~\bin` update and the winget upgrade run against a stopped install:
 //!
-//! 1. Stop the daemon if its image lives under the winget root (shutdown RPC —
-//!    no privileges needed, works on an elevated daemon too).
-//! 2. Cycle the broker service around the upgrade when ITS image lives under
-//!    the root: directly when already elevated, otherwise through ONE UAC
-//!    prompt — a persistent elevated helper (`--update broker-cycle-helper`)
-//!    stops the service, waits for a release file, restarts the service.
-//! 3. Run `winget upgrade` — winget's own verb on winget's own turf. If the
-//!    running `uffs.exe` is itself inside the package, the upgrade is deferred
-//!    to right after this process exits (detached `cmd`, mirroring the
-//!    uninstall's deferred delegation) and the release file is written by the
-//!    deferred script, so the broker still restarts after the upgrade.
-//! 4. Restart the daemon (it auto-starts on the next search anyway; a direct
-//!    restart just closes the gap).
+//! 1. [`quiesce`] — stop the daemon (shutdown RPC; no privileges) and, when the
+//!    broker service runs from the winget package, stop it via ONE elevated
+//!    helper held open across the whole update. The helper reports its real
+//!    outcome (and the measured stop/start durations) through result files, so
+//!    a slow stop is surfaced honestly — never a bogus "UAC declined".
+//! 2. The caller runs the hand-rolled update, then [`run_upgrade`] runs `winget
+//!    upgrade` (deferred past process exit when the running uffs.exe is itself
+//!    part of the package).
+//! 3. [`resume`] — release the helper (it restarts the broker) and restart the
+//!    daemon.
 //!
-//! Windows-only in substance: off Windows there are no winget roots and
-//! [`orchestrate`] is a no-op.
+//! Every wait shows a spinner: on an AV-throttled box service control legit-
+//! imately takes a minute-plus (~90s broker start observed), and silent
+//! minutes read as a hang.
 
 use anyhow::Result;
 
 use super::model::DetectionReport;
 
-/// The `WinGet` package id UFFS publishes under (same id the uninstall
-/// delegation uses). Only the Windows implementation consumes it.
+/// The `WinGet` package id UFFS publishes under.
 #[cfg(windows)]
 pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
 
-/// Run the winget leg of an update: orchestrate `winget upgrade` for a
-/// winget-managed root, working around the locked-image failures a bare
-/// `winget upgrade` hits. No-op when the report has no winget root.
+/// What [`quiesce`] stopped, so [`resume`] can restore exactly that. Opaque +
+/// `Default` off Windows (nothing is ever quiesced there).
+#[derive(Default)]
+pub(crate) struct Quiesce {
+    /// The Windows quiesce state (what was stopped); `None` when nothing was
+    /// quiesced. Absent off Windows.
+    #[cfg(windows)]
+    inner: Option<windows_impl::QuiesceState>,
+}
+
+/// Whether [`run_upgrade`] ran winget now or deferred it past process exit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpgradeOutcome {
+    /// winget ran (or there was nothing to upgrade) — `resume` restores now.
+    Ran,
+    /// The upgrade was deferred to a post-exit script (the running uffs.exe is
+    /// part of the package); that script restores the broker, so `resume` must
+    /// NOT act. Only the Windows implementation constructs this.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "constructed only by the Windows implementation")
+    )]
+    Deferred,
+}
+
+/// Stop the daemon + (winget-package) broker before any file replacement.
+/// No-op when there is no winget-managed root, or nothing is running from it.
 ///
 /// # Errors
 ///
-/// Best-effort by design: individual failures are narrated and degrade to
-/// printed instructions; only setup-level failures (e.g. spawning the UAC
-/// helper machinery) propagate.
+/// Propagates a failure to obtain elevation / stop the broker (the upgrade
+/// would just fail locked); the caller aborts the winget leg and restores.
 #[cfg(windows)]
-pub(crate) fn orchestrate(report: &DetectionReport, latest: &str) -> Result<()> {
-    windows_impl::orchestrate(report, latest)
+pub(crate) fn quiesce(report: &DetectionReport) -> Result<Quiesce> {
+    Ok(Quiesce {
+        inner: windows_impl::quiesce(report)?,
+    })
 }
 
-/// Non-Windows: winget does not exist and detection never yields a winget
-/// root, so there is nothing to orchestrate.
+/// Non-Windows: nothing to quiesce.
+#[cfg(not(windows))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "signature mirrors the fallible Windows implementation"
+)]
+pub(crate) fn quiesce(_report: &DetectionReport) -> Result<Quiesce> {
+    Ok(Quiesce::default())
+}
+
+/// Run `winget upgrade` for the winget-managed root, if any. No-op when the
+/// root is already current or absent.
+///
+/// # Errors
+///
+/// Best-effort: winget failures are narrated, not propagated; only setup
+/// failures (spawning the deferred script) propagate.
+#[cfg(windows)]
+pub(crate) fn run_upgrade(
+    report: &DetectionReport,
+    latest: &str,
+    quiesce: &Quiesce,
+) -> Result<UpgradeOutcome> {
+    windows_impl::run_upgrade(report, latest, quiesce.inner.as_ref())
+}
+
+/// Non-Windows: no winget.
 #[cfg(not(windows))]
 #[expect(
     clippy::unnecessary_wraps,
     clippy::missing_const_for_fn,
-    reason = "signature mirrors the Windows implementation, which is fallible"
+    reason = "signature mirrors the fallible Windows implementation"
 )]
-pub(crate) fn orchestrate(_report: &DetectionReport, _latest: &str) -> Result<()> {
-    Ok(())
+pub(crate) fn run_upgrade(
+    _report: &DetectionReport,
+    _latest: &str,
+    _quiesce: &Quiesce,
+) -> Result<UpgradeOutcome> {
+    Ok(UpgradeOutcome::Ran)
 }
 
+/// Restart whatever [`quiesce`] stopped. Skipped when the upgrade was deferred
+/// (the post-exit script owns the restore then).
+#[cfg(windows)]
+pub(crate) fn resume(quiesce: Quiesce, outcome: UpgradeOutcome) {
+    if let Some(state) = quiesce.inner {
+        windows_impl::resume(state, outcome);
+    }
+}
+
+/// Non-Windows: nothing was quiesced.
+#[cfg(not(windows))]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "signature mirrors the stateful Windows implementation"
+)]
+pub(crate) fn resume(_quiesce: Quiesce, _outcome: UpgradeOutcome) {}
+
 /// Elevated persistent helper behind `uffs --update broker-cycle-helper
-/// <release-file>`: stop the broker service, wait (bounded) for the release
-/// file to appear, start the service again, exit. Spawned via a single UAC
-/// prompt by [`orchestrate`]; never part of the interactive flow.
+/// <base-file>`: stop the broker, report the outcome + measured duration via
+/// `<base>.stopped` / `<base>.error`, wait for `<base>.release`, restart the
+/// broker, report via `<base>.started` / `<base>.error`, exit. Spawned via one
+/// UAC prompt.
 ///
 /// # Errors
 ///
-/// Fails when not elevated, or when the service stop/start fails.
+/// Fails when not elevated. Service failures are written to the result file
+/// (so the non-elevated orchestrator can surface them) as well as returned.
 #[cfg(windows)]
-pub(crate) fn run_broker_cycle_helper(release_file: &str) -> Result<()> {
-    windows_impl::run_broker_cycle_helper(release_file)
+pub(crate) fn run_broker_cycle_helper(base_file: &str) -> Result<()> {
+    windows_impl::run_broker_cycle_helper(base_file)
 }
 
-/// Non-Windows stub for the helper entry point (the action token is accepted
-/// on every platform; there is no service to cycle off Windows).
+/// Non-Windows stub for the helper entry point.
 #[cfg(not(windows))]
-pub(crate) fn run_broker_cycle_helper(_release_file: &str) -> Result<()> {
+pub(crate) fn run_broker_cycle_helper(_base_file: &str) -> Result<()> {
     anyhow::bail!("broker-cycle-helper is Windows-only (there is no broker service here)")
 }
 
 #[cfg(windows)]
-/// The real Windows implementation (see the module docs above); split so the
+/// The real Windows implementation (see the module docs); split so the
 /// cross-platform facade stays free of Win32-only imports.
 mod windows_impl {
     use core::time::Duration;
+    use std::io::Write as _;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::time::Instant;
 
     use anyhow::{Context as _, Result, bail};
 
-    use super::WINGET_PACKAGE_ID;
+    use super::{UpgradeOutcome, WINGET_PACKAGE_ID};
     use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
     use crate::commands::update::strip_verbatim_prefix;
 
+    /// Generous per-service-control ceiling: on an AV-throttled box (Norton /
+    /// Defender re-scanning uffs-broker.exe on every access) a stop or start
+    /// legitimately takes over a minute (~90s broker start observed) — the 45s
+    /// library default was the original "broker did not stop" false failure.
+    /// A ceiling only, not a fixed wait: the poll returns the instant the state
+    /// is reached, so a fast box pays nothing.
+    const SERVICE_TIMEOUT: Duration = Duration::from_secs(300);
+
+    /// How long the orchestrator waits on a helper result file (stop or start)
+    /// before giving up — above `SERVICE_TIMEOUT` so the helper's own timeout
+    /// fires first with a specific error.
+    const RESULT_WAIT: Duration = Duration::from_secs(360);
+
     /// How long the elevated helper waits for the release file before
-    /// restarting the service anyway (an abandoned upgrade must not leave the
-    /// broker down forever).
-    const RELEASE_WAIT: Duration = Duration::from_secs(600);
+    /// restarting anyway (an abandoned update must not leave the broker down).
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "no stable Duration::from_mins; seconds reads clearly here"
+    )]
+    const RELEASE_WAIT: Duration = Duration::from_secs(1_800);
 
-    /// How long the orchestrator waits for the helper to get the service
-    /// stopped before giving up on the winget leg.
-    const STOP_WAIT: Duration = Duration::from_secs(60);
+    /// Spinner + result-file poll interval.
+    const POLL: Duration = Duration::from_millis(150);
 
-    /// Poll interval for both waits.
-    const POLL: Duration = Duration::from_millis(500);
+    /// What was stopped, for [`resume`].
+    pub(super) struct QuiesceState {
+        /// The broker cycle helper (present iff the broker was stopped).
+        broker: Option<BrokerHelper>,
+        /// Whether the daemon was stopped (so `resume` restarts it).
+        daemon_stopped: bool,
+    }
 
-    /// See [`super::orchestrate`].
+    /// Handle to the elevated broker helper, coordinated by result files under
+    /// a shared base path in the temp dir.
+    struct BrokerHelper {
+        /// `<temp>/uffs-broker-cycle-<pid>` — the `.stopped` / `.started` /
+        /// `.error` / `.release` files hang off this stem.
+        base: PathBuf,
+    }
+
+    impl BrokerHelper {
+        /// Result file written when the broker stopped OK (carries the
+        /// duration).
+        fn stopped_file(&self) -> PathBuf {
+            self.base.with_extension("stopped")
+        }
+        /// Result file written when the broker restarted OK (carries the
+        /// duration).
+        fn started_file(&self) -> PathBuf {
+            self.base.with_extension("started")
+        }
+        /// Result file written on any stop/start failure (carries the message).
+        fn error_file(&self) -> PathBuf {
+            self.base.with_extension("error")
+        }
+        /// File the orchestrator writes to release the helper into its restart.
+        fn release_file(&self) -> PathBuf {
+            self.base.with_extension("release")
+        }
+        /// Remove any stale result files from a crashed prior run.
+        fn clear(&self) {
+            for path in [
+                self.stopped_file(),
+                self.started_file(),
+                self.error_file(),
+                self.release_file(),
+            ] {
+                let _cleared: Result<(), std::io::Error> = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    /// See [`super::quiesce`].
     #[expect(clippy::print_stdout, reason = "CLI user-facing narration")]
-    pub(super) fn orchestrate(report: &DetectionReport, latest: &str) -> Result<()> {
+    pub(super) fn quiesce(report: &DetectionReport) -> Result<Option<QuiesceState>> {
         let Some(root) = winget_root(report) else {
-            return Ok(());
+            return Ok(None);
         };
-        if root_is_current(root, latest) {
-            return Ok(());
+        // winget refuses user-scope changes in an elevated session; there is
+        // nothing to quiesce because we cannot upgrade anyway. `run_upgrade`
+        // prints the "use a normal terminal" guidance.
+        if matches!(root.scope, Scope::User) && uffs_mft::is_elevated() {
+            return Ok(None);
         }
 
-        // winget refuses to touch a USER-scope package from an elevated
-        // session (its scope-safety; reproduced live). Nothing to orchestrate
-        // — hand the user the one command that works.
+        let root_dir = strip_verbatim_prefix(root.dir.clone());
+
+        // Only quiesce when something actually runs from the package (else
+        // winget can replace the files unimpeded and there is nothing to stop).
+        let daemon_inside = report.running.iter().any(|proc| {
+            proc.component.label() == "daemon" && image_under(proc.image_path.as_ref(), &root_dir)
+        });
+        let broker_inside = uffs_winsvc::is_installed(uffs_broker_protocol::SERVICE_NAME)
+            && report.running.iter().any(|proc| {
+                proc.component.label() == "broker"
+                    && image_under(proc.image_path.as_ref(), &root_dir)
+            });
+        if !daemon_inside && !broker_inside {
+            return Ok(None);
+        }
+
+        println!("\nPreparing the winget package update \u{2026}");
+        let daemon_stopped = daemon_inside && stop_daemon();
+        let broker = if broker_inside {
+            start_broker_cycle(&root_dir)?
+        } else {
+            None
+        };
+        Ok(Some(QuiesceState {
+            broker,
+            daemon_stopped,
+        }))
+    }
+
+    /// See [`super::run_upgrade`].
+    #[expect(clippy::print_stdout, reason = "CLI user-facing narration")]
+    pub(super) fn run_upgrade(
+        report: &DetectionReport,
+        latest: &str,
+        quiesce: Option<&QuiesceState>,
+    ) -> Result<UpgradeOutcome> {
+        let Some(root) = winget_root(report) else {
+            return Ok(UpgradeOutcome::Ran);
+        };
+        if root_is_current(root, latest) {
+            return Ok(UpgradeOutcome::Ran);
+        }
         if matches!(root.scope, Scope::User) && uffs_mft::is_elevated() {
             println!(
                 "\nThe winget package updates from a NORMAL (non-admin) terminal — winget\n\
                  refuses user-scope changes in elevated sessions. Run there:\n\
                  \x20   uffs --update"
             );
-            return Ok(());
+            return Ok(UpgradeOutcome::Ran);
         }
 
         let root_dir = strip_verbatim_prefix(root.dir.clone());
         println!("\nUpdating the winget package \u{2192} {latest} (via winget) \u{2026}");
 
-        // 1. Daemon out of the way (only when its image is inside the package; the
-        //    shutdown RPC needs no privileges and stops elevated daemons).
-        let daemon_stopped = stop_daemon_if_under(&root_dir, report);
-
-        // 2. Broker service cycled around the upgrade when it runs from the package (a
-        //    running service locks its own image, which is exactly the `remove_all:
-        //    Access is denied` a bare `winget upgrade` hits).
-        let broker_cycle = cycle_broker_if_under(&root_dir, report)?;
-
-        // 3. The upgrade itself — deferred past process exit when this very uffs.exe is
-        //    part of the package being replaced.
+        // Deferred when the running uffs.exe is itself part of the package:
+        // winget can't replace a running image, so a post-exit script runs the
+        // upgrade AND (if a broker cycle is in flight) writes the release file.
         let self_inside = std::env::current_exe()
             .map(strip_verbatim_prefix)
             .is_ok_and(|exe| exe.starts_with(&root_dir));
         if self_inside {
-            schedule_deferred_upgrade(root.scope, broker_cycle.as_ref())?;
+            let release = quiesce
+                .and_then(|state| state.broker.as_ref())
+                .map(BrokerHelper::release_file);
+            schedule_deferred_upgrade(root.scope, release.as_deref())?;
             println!(
                 "\nwinget finishes the update once this process exits (the running uffs.exe\n\
                  is part of the winget package). The daemon restarts on the next search."
             );
-            return Ok(());
+            return Ok(UpgradeOutcome::Deferred);
         }
 
-        let upgraded = run_winget_upgrade(root.scope);
-        if let Some(cycle) = &broker_cycle {
-            cycle.release();
-        }
-        match upgraded {
+        match spinner_while("Running winget upgrade", || run_winget_upgrade(root.scope)) {
             Ok(()) => println!("\u{2713} winget package updated to {latest}."),
             Err(err) => println!(
                 "\u{26a0} winget upgrade did not complete ({err:#}).\n\
                  \x20  Re-run `uffs --update`, or `winget upgrade {WINGET_PACKAGE_ID}` directly."
             ),
         }
-
-        // 4. Bring the daemon back if we took it down (best-effort — it also
-        //    auto-starts on the next search).
-        if daemon_stopped {
-            restart_daemon();
-        }
-        Ok(())
+        Ok(UpgradeOutcome::Ran)
     }
 
-    /// The first winget-managed root in the report, if any.
+    /// See [`super::resume`].
+    #[expect(clippy::print_stdout, reason = "CLI user-facing narration")]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "resume consumes the quiesce — by-value expresses it is finished"
+    )]
+    pub(super) fn resume(state: QuiesceState, outcome: UpgradeOutcome) {
+        if outcome == UpgradeOutcome::Deferred {
+            // The post-exit script releases the broker helper; nothing to do
+            // here (this process is about to exit).
+            return;
+        }
+        if let Some(broker) = &state.broker {
+            // Release the helper → it restarts the broker service.
+            let _released: Result<(), std::io::Error> =
+                std::fs::write(broker.release_file(), b"go");
+            match wait_for_result(
+                broker,
+                &broker.started_file(),
+                "Restarting the broker service",
+            ) {
+                Ok(()) => {}
+                Err(err) => {
+                    println!("\u{26a0} the broker service did not restart ({err:#}).");
+                    println!(
+                        "\x20  Start it from an elevated terminal: `uffs-broker --install` \
+                         re-registers + starts it."
+                    );
+                }
+            }
+            broker.clear();
+        }
+        if state.daemon_stopped {
+            // The daemon start blocks until Ready (measured ~7s warm, up to
+            // ~69s on a cold cache), so animate a spinner — a silent minute is
+            // the very "looks hung" symptom this rework set out to remove.
+            spinner_while("Restarting the index daemon", restart_daemon);
+        }
+    }
+
+    /// See [`super::run_broker_cycle_helper`] — the elevated child.
+    pub(super) fn run_broker_cycle_helper(base_file: &str) -> Result<()> {
+        if !uffs_mft::is_elevated() {
+            bail!(
+                "broker-cycle-helper must run elevated (it is spawned via a UAC prompt by \
+                 `uffs --update`)"
+            );
+        }
+        let helper = BrokerHelper {
+            base: PathBuf::from(base_file),
+        };
+        let service = uffs_broker_protocol::SERVICE_NAME;
+
+        // Stop → report (with the measured duration, so the real number lands
+        // in the log/output instead of a guess).
+        let t_stop = Instant::now();
+        match uffs_winsvc::stop_with(service, SERVICE_TIMEOUT) {
+            Ok(()) => write_result(
+                &helper.stopped_file(),
+                &format!("stopped in {}ms", t_stop.elapsed().as_millis()),
+            ),
+            Err(err) => {
+                write_result(
+                    &helper.error_file(),
+                    &format!(
+                        "stop failed after {}ms: {err:#}",
+                        t_stop.elapsed().as_millis()
+                    ),
+                );
+                bail!("broker stop failed: {err:#}");
+            }
+        }
+
+        // Wait for the orchestrator to finish the update.
+        let release = helper.release_file();
+        let deadline = Instant::now() + RELEASE_WAIT;
+        while !release.exists() && Instant::now() < deadline {
+            std::thread::sleep(POLL);
+        }
+
+        // Restart → report (with the measured duration).
+        let t_start = Instant::now();
+        match uffs_winsvc::start_with(service, SERVICE_TIMEOUT) {
+            Ok(()) => {
+                write_result(
+                    &helper.started_file(),
+                    &format!("started in {}ms", t_start.elapsed().as_millis()),
+                );
+                Ok(())
+            }
+            Err(err) => {
+                write_result(
+                    &helper.error_file(),
+                    &format!(
+                        "restart failed after {}ms: {err:#}",
+                        t_start.elapsed().as_millis()
+                    ),
+                );
+                bail!("broker restart failed: {err:#}")
+            }
+        }
+    }
+
+    /// The first winget-managed root, if any.
     fn winget_root(report: &DetectionReport) -> Option<&InstallRoot> {
         report
             .roots
@@ -200,35 +460,22 @@ mod windows_impl {
         !versions.is_empty() && versions.iter().all(|have| *have == want)
     }
 
-    /// Stop the daemon iff its image path lies under `root_dir`. Returns
-    /// whether a stop was performed.
-    fn stop_daemon_if_under(root_dir: &Path, report: &DetectionReport) -> bool {
-        let daemon_inside = report.running.iter().any(|proc| {
-            proc.component.label() == "daemon"
-                && proc
-                    .image_path
-                    .clone()
-                    .map(strip_verbatim_prefix)
-                    .is_some_and(|img| img.starts_with(root_dir))
-        });
-        if !daemon_inside {
-            return false;
-        }
-        // Graceful shutdown RPC first (no privileges; works on an elevated
-        // daemon), then the kill handler as fallback.
+    /// Stop the daemon via the graceful shutdown RPC (no privileges; also stops
+    /// an elevated daemon), falling back to the kill handler. Returns whether a
+    /// stop was attempted-and-plausibly-succeeded.
+    fn stop_daemon() -> bool {
         let stopped = uffs_client::connect_sync::UffsClientSync::connect_raw()
             .is_ok_and(|mut client| client.shutdown().is_ok());
         if !stopped {
             let _killed: Result<()> =
                 crate::commands::daemon_mgmt::daemon_quiet(&crate::args::DaemonAction::Kill);
         }
-        // Give the image a beat to unlock (IPC down lags the loader).
         std::thread::sleep(Duration::from_millis(750));
         true
     }
 
-    /// Best-effort daemon restart after the upgrade (`--daemon start` handler,
-    /// silenced). Auto-start on the next search covers any failure.
+    /// Best-effort daemon restart after the upgrade (auto-start on the next
+    /// search covers any failure).
     fn restart_daemon() {
         let _started: Result<()> =
             crate::commands::daemon_mgmt::daemon_quiet(&crate::args::DaemonAction::Start {
@@ -242,115 +489,118 @@ mod windows_impl {
             });
     }
 
-    /// A broker service cycle in flight: the service is stopped, and writing
-    /// the release file lets the elevated helper (or the elevated path's
-    /// deferred logic) start it again.
-    pub(super) struct BrokerCycle {
-        /// Path of the release file the waiting side polls for.
-        release_file: PathBuf,
-        /// `true` when THIS process is elevated and owns the restart directly
-        /// (no helper was spawned).
-        direct: bool,
-    }
-
-    impl BrokerCycle {
-        /// Signal that the upgrade is done: restart directly (elevated path)
-        /// or release the waiting helper by writing the file.
-        #[expect(clippy::print_stdout, reason = "CLI user-facing narration")]
-        pub(super) fn release(&self) {
-            if self.direct {
-                if let Err(err) = uffs_winsvc::start(uffs_broker_protocol::SERVICE_NAME) {
-                    println!("\u{26a0} could not restart the broker service ({err:#}).");
-                }
-                return;
-            }
-            // The helper restarts the service the moment this file exists.
-            let _released: Result<(), std::io::Error> = std::fs::write(&self.release_file, b"done");
-        }
-
-        /// The release-file path (for embedding into a deferred script).
-        pub(super) fn release_file(&self) -> &Path {
-            &self.release_file
-        }
-    }
-
-    /// If the broker service's image lives under `root_dir`, stop it for the
-    /// upgrade and arrange its restart: directly when elevated, else through
-    /// the one-UAC persistent helper. `Ok(None)` when the broker is not
-    /// involved; `Err` aborts the winget leg (the upgrade would just fail).
+    /// Spawn the elevated helper (one UAC) and wait for it to report the broker
+    /// stopped. `Err` aborts the update (the upgrade would just fail locked).
     #[expect(clippy::print_stdout, reason = "CLI user-facing narration")]
-    fn cycle_broker_if_under(
-        root_dir: &Path,
-        report: &DetectionReport,
-    ) -> Result<Option<BrokerCycle>> {
-        let service = uffs_broker_protocol::SERVICE_NAME;
-        if !uffs_winsvc::is_installed(service) {
-            return Ok(None);
-        }
-        let broker_inside = report.running.iter().any(|proc| {
-            proc.component.label() == "broker"
-                && proc
-                    .image_path
-                    .clone()
-                    .map(strip_verbatim_prefix)
-                    .is_some_and(|img| img.starts_with(root_dir))
-        });
-        if !broker_inside {
-            return Ok(None);
-        }
+    fn start_broker_cycle(_root_dir: &Path) -> Result<Option<BrokerHelper>> {
+        let helper = BrokerHelper {
+            base: std::env::temp_dir().join(format!("uffs-broker-cycle-{}", std::process::id())),
+        };
+        helper.clear();
 
-        let release_file =
-            std::env::temp_dir().join(format!("uffs-broker-cycle-{}.release", std::process::id()));
-        // Stale file from a crashed prior run would release the helper
-        // instantly — clear it first.
-        let _removed: Result<(), std::io::Error> = std::fs::remove_file(&release_file);
-
-        if uffs_mft::is_elevated() {
-            println!("  stopping the broker service for the upgrade\u{2026}");
-            uffs_winsvc::stop(service).context("stopping the broker service")?;
-            return Ok(Some(BrokerCycle {
-                release_file,
-                direct: true,
-            }));
-        }
-
-        // One UAC prompt: the elevated helper stops the service, waits for the
-        // release file, restarts the service.
         println!(
             "  the broker service runs from the winget package — cycling it around the\n\
-             \x20 upgrade (Windows shows one UAC prompt)\u{2026}"
+             \x20 update (Windows shows one UAC prompt)\u{2026}"
         );
-        spawn_broker_cycle_helper(&release_file)?;
-        let deadline = Instant::now() + STOP_WAIT;
-        while uffs_winsvc::status(service) != uffs_winsvc::ServiceState::Stopped {
-            if Instant::now() >= deadline {
-                // Unblock the helper (it would otherwise restart the service
-                // only after its own timeout) and give the user the way out.
-                let _released: Result<(), std::io::Error> = std::fs::write(&release_file, b"abort");
-                bail!(
-                    "the broker service did not stop (UAC declined?) — run `uffs --update` \
-                     from an Administrator terminal, or stop the service and retry"
-                );
-            }
-            std::thread::sleep(POLL);
-        }
-        Ok(Some(BrokerCycle {
-            release_file,
-            direct: false,
-        }))
+        spawn_broker_cycle_helper(&helper.base)?;
+        wait_for_result(
+            &helper,
+            &helper.stopped_file(),
+            "Stopping the broker service",
+        )
+        .context("the broker service could not be stopped for the update")?;
+        Ok(Some(helper))
     }
 
-    /// Spawn this same `uffs.exe` elevated (single UAC prompt) in the hidden
-    /// `--update broker-cycle-helper <release-file>` mode. `PowerShell`
-    /// `Start-Process -Verb RunAs` mirrors the uninstall's service helper.
-    fn spawn_broker_cycle_helper(release_file: &Path) -> Result<()> {
+    /// Whether `image` (a running process's path) lies under `root_dir`.
+    fn image_under(image: Option<&PathBuf>, root_dir: &Path) -> bool {
+        image
+            .cloned()
+            .map(strip_verbatim_prefix)
+            .is_some_and(|img| img.starts_with(root_dir))
+    }
+
+    /// Spinner-poll for `success_file` OR the helper's `.error` file. `Ok` when
+    /// the success file appears (its measured-duration text is echoed); `Err`
+    /// when the error file appears (with its message) or the wait times out.
+    #[expect(clippy::print_stdout, reason = "interactive progress spinner")]
+    fn wait_for_result(helper: &BrokerHelper, success_file: &Path, label: &str) -> Result<()> {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let error_file = helper.error_file();
+        let deadline = Instant::now() + RESULT_WAIT;
+        let mut frame = 0_usize;
+        loop {
+            if success_file.exists() {
+                clear_line();
+                if let Ok(raw) = std::fs::read_to_string(success_file) {
+                    let note = raw.trim();
+                    if !note.is_empty() {
+                        println!("  \u{2713} {label} \u{2014} {note}.");
+                    }
+                }
+                return Ok(());
+            }
+            if error_file.exists() {
+                clear_line();
+                let msg = std::fs::read_to_string(&error_file)
+                    .unwrap_or_else(|_| "unknown error".to_owned());
+                bail!("{}", msg.trim());
+            }
+            if Instant::now() >= deadline {
+                clear_line();
+                bail!("timed out after {}s", RESULT_WAIT.as_secs());
+            }
+            let glyph = FRAMES.get(frame % FRAMES.len()).copied().unwrap_or("*");
+            print!("\r  {glyph} {label}\u{2026}      ");
+            let _flushed = std::io::stdout().flush();
+            std::thread::sleep(POLL);
+            frame = frame.wrapping_add(1);
+        }
+    }
+
+    /// Run `body` on a scoped thread while animating a spinner (for a blocking
+    /// call with no incremental progress, e.g. `winget upgrade`).
+    #[expect(clippy::print_stdout, reason = "interactive progress spinner")]
+    fn spinner_while<T: Send>(label: &str, body: impl FnOnce() -> T + Send) -> T {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(body);
+            let mut frame = 0_usize;
+            while !handle.is_finished() {
+                let glyph = FRAMES.get(frame % FRAMES.len()).copied().unwrap_or("*");
+                print!("\r  {glyph} {label}\u{2026}      ");
+                let _flushed = std::io::stdout().flush();
+                std::thread::sleep(POLL);
+                frame = frame.wrapping_add(1);
+            }
+            clear_line();
+            // Our closures never panic; if one somehow did, aborting is safer
+            // than an unwrap that the workspace lints forbid anyway.
+            handle.join().unwrap_or_else(|_| std::process::abort())
+        })
+    }
+
+    /// Erase the spinner line.
+    #[expect(clippy::print_stdout, reason = "interactive progress spinner")]
+    fn clear_line() {
+        print!("\r{:60}\r", "");
+        let _flushed = std::io::stdout().flush();
+    }
+
+    /// Write a one-line result file for the orchestrator to read.
+    fn write_result(path: &Path, text: &str) {
+        let _written: Result<(), std::io::Error> = std::fs::write(path, text.as_bytes());
+    }
+
+    /// Spawn this uffs.exe elevated (one UAC) in the hidden broker-cycle mode.
+    fn spawn_broker_cycle_helper(base: &Path) -> Result<()> {
         let raw_exe = std::env::current_exe().context("locating uffs.exe for the UAC helper")?;
         let exe = strip_verbatim_prefix(raw_exe);
         let exe_escaped = exe.display().to_string().replace('\'', "''");
-        let file_escaped = release_file.display().to_string().replace('\'', "''");
+        let base_escaped = base.display().to_string().replace('\'', "''");
         let script = format!(
             "Start-Process -FilePath '{exe_escaped}' \
-             -ArgumentList '--update','broker-cycle-helper','{file_escaped}' \
+             -ArgumentList '--update','broker-cycle-helper','{base_escaped}' \
              -Verb RunAs -WindowStyle Hidden"
         );
         let status = Command::new("powershell")
@@ -363,28 +613,6 @@ mod windows_impl {
             bail!("could not launch the elevated broker-cycle helper (UAC declined?)");
         }
         Ok(())
-    }
-
-    /// See [`super::run_broker_cycle_helper`].
-    pub(super) fn run_broker_cycle_helper(release_file: &str) -> Result<()> {
-        if !uffs_mft::is_elevated() {
-            bail!(
-                "broker-cycle-helper must run elevated (it is spawned via a UAC prompt by \
-                 `uffs --update`)"
-            );
-        }
-        let service = uffs_broker_protocol::SERVICE_NAME;
-        uffs_winsvc::stop(service).context("stopping the broker service")?;
-        // Wait for the orchestrator (or its deferred script) to finish the
-        // upgrade; a bounded wait so an abandoned run cannot leave the broker
-        // down forever.
-        let release = Path::new(release_file);
-        let deadline = Instant::now() + RELEASE_WAIT;
-        while !release.exists() && Instant::now() < deadline {
-            std::thread::sleep(POLL);
-        }
-        let _removed: Result<(), std::io::Error> = std::fs::remove_file(release);
-        uffs_winsvc::start(service).context("restarting the broker service")
     }
 
     /// Run `winget upgrade` for the package, scope-aware, silent.
@@ -418,11 +646,11 @@ mod windows_impl {
         }
     }
 
-    /// Defer the upgrade past process exit (the running uffs.exe is part of
-    /// the package): a detached `cmd` waits ~2s, runs `winget upgrade`, and —
-    /// when a broker cycle is in flight — writes the release file so the
+    /// Defer the upgrade past process exit (the running uffs.exe is part of the
+    /// package): a detached `cmd` waits ~2s, runs `winget upgrade`, and — when
+    /// a broker cycle is in flight — writes the release file so the
     /// elevated helper restarts the service after the upgrade.
-    fn schedule_deferred_upgrade(scope: Scope, cycle: Option<&BrokerCycle>) -> Result<()> {
+    fn schedule_deferred_upgrade(scope: Scope, release_file: Option<&Path>) -> Result<()> {
         use std::os::windows::process::CommandExt as _;
 
         let scope_arg = match scope {
@@ -430,15 +658,13 @@ mod windows_impl {
             Scope::User => " --scope user",
             Scope::Unknown => "",
         };
-        let release_leg = cycle.map_or_else(String::new, |in_flight| {
-            format!(" & echo done > \"{}\"", in_flight.release_file().display())
+        let release_leg = release_file.map_or_else(String::new, |path| {
+            format!(" & echo go > \"{}\"", path.display())
         });
         let script = format!(
             "ping 127.0.0.1 -n 3 >nul & winget upgrade --id {WINGET_PACKAGE_ID} --silent \
              --accept-source-agreements{scope_arg}{release_leg} & rem deferred winget upgrade"
         );
-        // `raw_arg`, NOT `args`: std's default Windows quoting mangles the
-        // `/c` payload for cmd.exe (same lesson as the uninstall self-delete).
         Command::new("cmd")
             .raw_arg("/c")
             .raw_arg(&script)

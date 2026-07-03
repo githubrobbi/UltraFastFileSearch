@@ -23,7 +23,7 @@ use crate::{ServiceInfo, ServiceState};
 /// Poll interval while waiting for a service state transition.
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Overall budget for a service to reach the requested state.
-const WAIT_TIMEOUT: Duration = Duration::from_secs(20);
+const WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// NUL-terminated UTF-16 encoding of `text` for the `*W` Win32 calls.
 fn wide(text: &str) -> Vec<u16> {
@@ -114,6 +114,11 @@ fn query_inner(service: &str) -> Result<(ServiceState, Option<u32>)> {
 
 /// Start the service and wait for Running; a no-op if already running.
 pub(crate) fn start(service: &str) -> Result<()> {
+    start_with(service, WAIT_TIMEOUT)
+}
+
+/// Start the service and wait up to `timeout` for Running (see `stop_with`).
+pub(crate) fn start_with(service: &str, timeout: Duration) -> Result<()> {
     let scm = open_scm()?;
     let svc = open_service(&scm, service, SERVICE_START | SERVICE_QUERY_STATUS)?;
     if query_status(&svc)?.0 == ServiceState::Running {
@@ -122,12 +127,19 @@ pub(crate) fn start(service: &str) -> Result<()> {
     // SAFETY: `svc.0` is a valid service handle; no start argv.
     #[expect(unsafe_code, reason = "Win32 FFI — StartServiceW")]
     unsafe { StartServiceW(svc.0, None) }.context("StartServiceW")?;
-    wait_for(&svc, ServiceState::Running)
+    wait_for(&svc, ServiceState::Running, timeout)
 }
 
 /// Stop the service and wait for Stopped; a no-op if already stopped or not
 /// installed.
 pub(crate) fn stop(service: &str) -> Result<()> {
+    stop_with(service, WAIT_TIMEOUT)
+}
+
+/// Stop the service and wait up to `timeout` for Stopped. A generous `timeout`
+/// covers AV-throttled boxes where service control (touching the on-disk image
+/// Defender/Norton re-scans) legitimately takes a minute or more.
+pub(crate) fn stop_with(service: &str, timeout: Duration) -> Result<()> {
     let scm = open_scm()?;
     let Ok(svc) = open_service(&scm, service, SERVICE_STOP | SERVICE_QUERY_STATUS) else {
         return Ok(()); // not installed → nothing to stop
@@ -147,12 +159,12 @@ pub(crate) fn stop(service: &str) -> Result<()> {
         )
     }
     .context("ControlService(STOP)")?;
-    wait_for(&svc, ServiceState::Stopped)
+    wait_for(&svc, ServiceState::Stopped, timeout)
 }
 
 /// Poll the open service until it reaches `target` or the timeout elapses.
-fn wait_for(service: &ScHandle, target: ServiceState) -> Result<()> {
-    let deadline = std::time::Instant::now() + WAIT_TIMEOUT;
+fn wait_for(service: &ScHandle, target: ServiceState, timeout: Duration) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
     loop {
         if query_status(service)?.0 == target {
             return Ok(());
@@ -161,7 +173,7 @@ fn wait_for(service: &ScHandle, target: ServiceState) -> Result<()> {
             bail!(
                 "service did not reach {} within {}s",
                 target.label(),
-                WAIT_TIMEOUT.as_secs()
+                timeout.as_secs()
             );
         }
         std::thread::sleep(POLL_INTERVAL);

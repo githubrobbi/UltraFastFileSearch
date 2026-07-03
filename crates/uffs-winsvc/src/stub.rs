@@ -30,6 +30,15 @@ pub(crate) fn start(_service: &str) -> Result<()> {
     bail!("Windows service control is unavailable on this platform")
 }
 
+/// Non-Windows stub for [`super::start_with`].
+///
+/// # Errors
+///
+/// Always errors: there is no SCM off Windows.
+pub(crate) fn start_with(_service: &str, _timeout: core::time::Duration) -> Result<()> {
+    bail!("service control is only available on Windows")
+}
+
 /// Nothing to stop — idempotent no-op.
 #[expect(
     clippy::missing_const_for_fn,
@@ -41,6 +50,15 @@ pub(crate) fn start(_service: &str) -> Result<()> {
 )]
 pub(crate) fn stop(_service: &str) -> Result<()> {
     Ok(())
+}
+
+/// Non-Windows stub for [`super::stop_with`].
+///
+/// # Errors
+///
+/// Always errors: there is no SCM off Windows.
+pub(crate) fn stop_with(_service: &str, _timeout: core::time::Duration) -> Result<()> {
+    bail!("service control is only available on Windows")
 }
 
 /// No broker pipe exists, so readiness is vacuously `true`.

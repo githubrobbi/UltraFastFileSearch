@@ -134,6 +134,16 @@ pub fn start(service: &str) -> Result<()> {
     sys::start(service)
 }
 
+/// Like [`start`], but waits up to `timeout` for the Running state — a generous
+/// timeout for AV-throttled boxes where service control is slow.
+///
+/// # Errors
+///
+/// Same as [`start`].
+pub fn start_with(service: &str, timeout: core::time::Duration) -> Result<()> {
+    sys::start_with(service, timeout)
+}
+
 /// Stop `service` and wait until it reports Stopped (or a timeout). A no-op
 /// if it is already stopped or not installed.
 ///
@@ -142,6 +152,16 @@ pub fn start(service: &str) -> Result<()> {
 /// Open/control failures, or the service not reaching Stopped in time.
 pub fn stop(service: &str) -> Result<()> {
     sys::stop(service)
+}
+
+/// Like [`stop`], but waits up to `timeout` for the Stopped state — a generous
+/// timeout for AV-throttled boxes where service control is slow.
+///
+/// # Errors
+///
+/// Same as [`stop`].
+pub fn stop_with(service: &str, timeout: core::time::Duration) -> Result<()> {
+    sys::stop_with(service, timeout)
 }
 
 /// Wait up to `timeout_ms` for `pipe_name` to be serving.

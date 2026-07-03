@@ -289,12 +289,16 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
             print_updating(&latest);
             let snapshot_path = snapshot::write_snapshot(report, Some(&latest))?;
             acquire::spawn(&snapshot_path, None, verbose)?;
+            // Quiesce-first: on a winget-managed install, stop the daemon +
+            // (package) broker up front — ONE UAC — so BOTH the hand-rolled
+            // ~\bin update and the winget upgrade run against a stopped
+            // install (a bare `winget upgrade` fails on locked images). No-op
+            // for a plain unmanaged install (apply keeps its own daemon stop).
+            let quiesce = winget::quiesce(report)?;
             apply::spawn(&snapshot_path, verbose)?;
+            let outcome = winget::run_upgrade(report, &latest, &quiesce)?;
+            winget::resume(quiesce, outcome);
             print_updated(&latest);
-            // The winget-managed root (if any) is updated by its owner —
-            // orchestrated so a bare `winget upgrade`'s locked-image failures
-            // (daemon/broker/self running FROM the package) cannot occur.
-            winget::orchestrate(report, &latest)?;
             Ok(())
         }
     }

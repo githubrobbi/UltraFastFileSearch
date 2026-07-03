@@ -308,9 +308,10 @@ pub(crate) fn build_plan(
     // running uffs.exe / uffs-update.exe are deferred past process exit
     // (self-delete) by the executor.
 
-    // 1. Tool binaries — per root: unmanaged/dev delete, winget delegate. The
-    // runtime binaries (daemon, broker, MCP servers) are split into the final
-    // group below: their images are locked while those processes/services run.
+    // 1. Tool binaries — per root (unmanaged/dev roots only). The runtime
+    // binaries (daemon, broker, MCP servers) AND the winget delegation are
+    // deferred to the final group below: their images are locked while those
+    // processes/services run, and winget cannot delete locked files either.
     let binaries: Vec<PlanItem> = report
         .roots
         .iter()
@@ -478,8 +479,9 @@ fn is_runtime_stem(stem: &str) -> bool {
 
 /// Build the per-root binary plan item for the requested stem set, or `None`
 /// when the root has no matching binaries. A `WinGet` root delegates whole to
-/// `winget uninstall` in the Tools pass (winget owns the stop/delete order for
-/// its own package), so its Runtime pass is empty.
+/// `winget uninstall` in the RUNTIME (post-shutdown) pass — winget cannot
+/// delete the locked images of a daemon/broker still running from its package
+/// dir — so its Tools pass is empty.
 fn binary_item(root: &InstallRoot, set: StemSet) -> Option<PlanItem> {
     if root.binaries.is_empty() {
         return None;
@@ -492,7 +494,12 @@ fn binary_item(root: &InstallRoot, set: StemSet) -> Option<PlanItem> {
     };
     let target = match root.channel {
         Channel::WinGet => {
-            if set == StemSet::Runtime {
+            // The delegation runs AFTER the shutdown group: a pure-winget
+            // install has uffsd (and possibly the running uffs.exe) inside the
+            // winget package dir, and `winget uninstall` cannot delete locked
+            // images. Delegating before the daemon/broker stop made winget
+            // fail on its own still-running files.
+            if set == StemSet::Tools {
                 return None;
             }
             PlanTarget::DelegateWinget {

@@ -61,6 +61,44 @@ fn built(report: &DetectionReport, inventory: &Inventory, args: &UninstallArgs) 
 }
 
 #[test]
+fn winget_delegation_runs_after_the_shutdown_group() {
+    // A pure-winget install: uffsd runs FROM the winget package dir, and
+    // winget cannot delete locked images — so the delegation must execute
+    // after the daemon/broker shutdown, never before.
+    let report = DetectionReport {
+        roots: vec![root(Channel::WinGet, Scope::User, r"C:\winget\uffs")],
+        running: vec![RunningProcess {
+            component: Component::Daemon,
+            pid: 4242,
+            image_path: None,
+            command_line: None,
+            version: None,
+        }],
+    };
+    let plan = built(
+        &report,
+        &inventory(BrokerServiceState::Absent, 1024),
+        &UninstallArgs::default(),
+    );
+    let order: Vec<&'static str> = plan
+        .items()
+        .map(|item| item.target.action_label())
+        .collect();
+    let stop = order
+        .iter()
+        .position(|label| *label == "stop-process")
+        .expect("daemon stop present");
+    let winget = order
+        .iter()
+        .position(|label| *label == "delegate-winget")
+        .expect("winget delegation present");
+    assert!(
+        stop < winget,
+        "shutdown must precede the winget delegation: {order:?}"
+    );
+}
+
+#[test]
 fn winget_root_is_delegated_not_deleted() {
     let report = DetectionReport {
         roots: vec![root(Channel::WinGet, Scope::User, r"C:\winget\uffs")],

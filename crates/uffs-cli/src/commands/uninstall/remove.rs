@@ -50,6 +50,25 @@ impl core::fmt::Display for WingetNeedsNonElevated {
 
 impl core::error::Error for WingetNeedsNonElevated {}
 
+/// Marker error: the running uffs.exe lives INSIDE the winget package dir, so
+/// a synchronous `winget uninstall` would hit its own locked image. The
+/// effects layer schedules the uninstall to run right after this process
+/// exits (same detached-script mechanism as the self-delete) and returns this
+/// marker; the executor records the item as deliberately deferred.
+#[derive(Debug)]
+pub(crate) struct WingetDeferred;
+
+impl core::fmt::Display for WingetDeferred {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("winget uninstall deferred until this process exits")
+    }
+}
+
+impl core::error::Error for WingetDeferred {}
+
+/// Reason recorded when the winget uninstall is deferred past process exit.
+const WINGET_DEFERRED: &str = "winget uninstall runs right after this process exits (the running      uffs.exe is part of the winget package)";
+
 /// Reason recorded when the winget package is left because this run is
 /// elevated: the user needs one command in a normal terminal.
 const WINGET_LEFT: &str = "user-scope winget packages cannot be uninstalled from an admin session; run      `winget uninstall SkyLLC.UFFS` in a normal (non-admin) terminal";
@@ -80,8 +99,9 @@ pub(crate) trait Effects {
     /// Windows deep-sweep hits found outside the known roots.
     #[cfg(windows)]
     fn delete_file(&mut self, path: &Path) -> Result<()>;
-    /// Hand a `WinGet`-managed root to `winget uninstall`.
-    fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()>;
+    /// Hand a `WinGet`-managed root to `winget uninstall`. `dir` is the
+    /// package root (used to detect the running-self-inside-the-package case).
+    fn delegate_winget(&mut self, package_id: &str, scope: Scope, dir: &Path) -> Result<()>;
     /// Recursively delete a directory (absent is a no-op).
     fn remove_dir(&mut self, path: &Path) -> Result<()>;
     /// Remove `dir` from the user's PATH (Windows: the registry; Unix: print a
@@ -214,6 +234,9 @@ fn run_item(
             Err(err) if err.downcast_ref::<WingetNeedsNonElevated>().is_some() => {
                 ItemStatus::Skipped(WINGET_LEFT.to_owned())
             }
+            Err(err) if err.downcast_ref::<WingetDeferred>().is_some() => {
+                ItemStatus::Skipped(WINGET_DEFERRED.to_owned())
+            }
             Err(err) => ItemStatus::Failed(format!("{err:#}")),
         };
         outcome.record(description, status);
@@ -276,8 +299,10 @@ fn dispatch(target: &PlanTarget, effects: &mut dyn Effects) -> Result<()> {
         #[cfg(windows)]
         PlanTarget::DeleteFile { path, .. } => effects.delete_file(path),
         PlanTarget::DelegateWinget {
-            package_id, scope, ..
-        } => effects.delegate_winget(package_id, *scope),
+            package_id,
+            scope,
+            dir,
+        } => effects.delegate_winget(package_id, *scope, dir),
         PlanTarget::DeleteDir { path, .. } => effects.remove_dir(path),
         PlanTarget::RemovePathEntry { dir } => effects.remove_path_entry(dir),
     }
@@ -336,7 +361,7 @@ mod tests {
             self.calls.push(format!("delete_file:{}", path.display()));
             Ok(())
         }
-        fn delegate_winget(&mut self, package_id: &str, _scope: Scope) -> Result<()> {
+        fn delegate_winget(&mut self, package_id: &str, _scope: Scope, _dir: &Path) -> Result<()> {
             self.calls.push(format!("delegate_winget:{package_id}"));
             if self.winget_elevated {
                 return Err(super::WingetNeedsNonElevated.into());

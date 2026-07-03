@@ -385,6 +385,17 @@ pub(crate) fn print_self_delete_scheduled() {
     println!("\nThe uffs command removes itself once this process exits.");
 }
 
+/// Note that the deferred `winget uninstall` finishes the job after the
+/// process exits: it removes the whole winget package (including this running
+/// uffs.exe) and cleans winget's own metadata.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_winget_deferred() {
+    println!(
+        "\nwinget finishes the removal once this process exits (the running uffs.exe\n\
+         is part of the winget package; winget deletes it and cleans its metadata)."
+    );
+}
+
 /// Warn that the running self-binary could not be scheduled for deletion.
 #[expect(clippy::print_stderr, reason = "CLI user-facing error")]
 pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {

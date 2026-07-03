@@ -213,7 +213,13 @@ fn execute_all(
 
     // M8 self-delete (U-80): finish the deferred delete of the running
     // self-binaries the executor skipped. If even scheduling fails, say so.
-    if !self_paths.is_empty() {
+    // When the running uffs.exe is INSIDE the winget package, the deferred
+    // `winget uninstall` owns deleting the whole package dir (self included)
+    // — running the plain del script too would race winget over the same
+    // files, so it is skipped in favour of the owner-driven cleanup.
+    if effects.winget_deferred() {
+        render::print_winget_deferred();
+    } else if !self_paths.is_empty() {
         render::print_self_delete_scheduled();
         if let Err(err) = effects::schedule_self_delete(&self_paths) {
             render::print_self_delete_warning(&err);

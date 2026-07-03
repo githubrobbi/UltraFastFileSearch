@@ -313,8 +313,10 @@ jobs:
   # Three targets, each earning its slot:
   #   - x86_64-pc-windows-msvc   — primary product: live NTFS MFT indexing
   #   - aarch64-apple-darwin     — offline MFT analysis on Apple Silicon
-  #   - x86_64-unknown-linux-gnu — offline MFT analysis on Linux (servers,
-  #                                forensics VMs, Docker, CI harnesses)
+  #   - x86_64-unknown-linux-musl — offline MFT analysis on Linux (servers,
+  #                                 forensics VMs, Docker, CI harnesses).
+  #                                 STATIC (no glibc floor) → runs on every
+  #                                 Linux incl. old LTS / WSL / Alpine.
   #
   # Dropped vs previous iterations:
   #   - x86_64-apple-darwin (Intel Mac) — Apple deprecated the platform;
@@ -359,7 +361,14 @@ jobs:
             binary-suffix: ""
             rustflags: "-C target-cpu=apple-m1 -C link-arg=-Wl,-dead_strip"
             timeout: 45
-          - target: x86_64-unknown-linux-gnu
+          # musl = fully STATIC binary, zero glibc dependency: the gnu build on
+          # ubuntu-22.04 (glibc 2.35) baked a glibc floor that broke Ubuntu
+          # 20.04 / WSL (glibc 2.31: "GLIBC_2.33 not found"). The static musl
+          # binary runs on every Linux (20.04, Alpine, old servers) forever. No
+          # perf cost here — the daemon uses mimalloc globally, so libc's
+          # allocator is irrelevant. Built via cargo-zigbuild (zig supplies the
+          # C cross-toolchain + static link cleanly, incl. the mimalloc C dep).
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-22.04
             artifact-name: uffs-linux-x64
             binary-suffix: ""
@@ -474,6 +483,25 @@ jobs:
           rustup default "$(rustup show active-toolchain | awk '{print $1}')"
           cargo --version
 
+      - name: Set up cargo-zigbuild for static musl (Linux only)
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          # musl static Linux is built with cargo-zigbuild: zig provides the C
+          # cross-toolchain (mimalloc's C compiles cleanly) and a static musl
+          # link, without the musl-gcc / CC_* env fiddling plain cargo needs.
+          # Pinned zig via the `ziglang` PyPI wheel (no marketplace action).
+          rustup target add ${{ matrix.target }}
+          python3 -m pip install --user "ziglang==0.13.0"
+          # cargo-zigbuild finds zig via `python3 -m ziglang`; expose it on PATH
+          # as `zig` for good measure.
+          ZIG_DIR="$(python3 -c 'import ziglang, os; print(os.path.dirname(ziglang.__file__))')"
+          printf 'exec python3 -m ziglang "$@"\n' | sudo tee /usr/local/bin/zig >/dev/null
+          sudo chmod +x /usr/local/bin/zig
+          zig version
+          cargo install --locked cargo-zigbuild@0.19.8
+          cargo zigbuild --version
+
       - name: Build optimized release binaries
         shell: bash
         run: |
@@ -492,7 +520,13 @@ jobs:
           # may differ from what the tests validated — worst-case a
           # silent dep drift ships to end-users.  CI fails loudly
           # instead.
-          cargo build --locked --release --target ${{ matrix.target }} --workspace --bins
+          # musl → cargo-zigbuild (static C toolchain via zig); everything else
+          # → the native cargo build. Same flags/profile either way.
+          if [[ "${{ matrix.target }}" == *musl* ]]; then
+            cargo zigbuild --locked --release --target ${{ matrix.target }} --workspace --bins
+          else
+            cargo build --locked --release --target ${{ matrix.target }} --workspace --bins
+          fi
 
           echo "✅ Build completed for ${{ matrix.target }}"
 

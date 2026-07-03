@@ -24,6 +24,18 @@ use crate::commands::update::model::{Channel, Component, DetectionReport, Instal
 /// The `WinGet` package id UFFS publishes under.
 pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
 
+/// Heading of the shutdown group (daemon stop + broker service removal). Shared
+/// so `RemovalPlan::ensure_daemon_shutdown` (Windows-only) can find / recreate
+/// it verbatim.
+const SHUTDOWN_GROUP_TITLE: &str = "Shutdown (stopped last)";
+
+/// Heading of the data / cache / config group (the shutdown group must precede
+/// it — a running daemon holds handles inside these dirs).
+const DATA_GROUP_TITLE: &str = "Data / cache / config";
+
+/// Heading of the runtime-binaries group (deletable only after shutdown).
+const RUNTIME_GROUP_TITLE: &str = "Runtime binaries (after shutdown)";
+
 /// The concrete target of a plan item: everything the executor needs, and
 /// everything the renderer describes. Group ordering (in [`build_plan`]) plus
 /// this discriminant define the safe removal order.
@@ -202,6 +214,69 @@ impl RemovalPlan {
         dropped
     }
 
+    /// Fill in the reclaim bytes of every binary-delete item, so the summary's
+    /// "Reclaims ~N" reflects the binaries too (not just the data dirs).
+    /// Statting files is IO, which this pure module leaves to the caller:
+    /// `size_of` maps a `(dir, stems)` binary-delete target to its on-disk
+    /// total (best-effort — an absent file contributes 0). `WinGet`
+    /// delegations and directory / process items are untouched (winget owns
+    /// its bytes; dir sizes already came from the inventory).
+    pub(crate) fn size_binaries(&mut self, size_of: impl Fn(&Path, &[String]) -> u64) {
+        for item in self.groups.iter_mut().flat_map(|group| &mut group.items) {
+            if let PlanTarget::DeleteBinaries { dir, stems } = &item.target {
+                item.bytes = size_of(dir, stems);
+            }
+        }
+    }
+
+    /// Make sure the plan stops the daemon at `pid` before its binary is
+    /// deleted. The deep sweep can *start* the daemon (the no-broker path's UAC
+    /// start) **after** the plan was snapshotted, so `report.running` had none
+    /// and the shutdown group carries no stop for it — without this the
+    /// freshly-started, possibly elevated daemon keeps its image locked and the
+    /// runtime-binary delete fails with Access-denied. No-op when a daemon stop
+    /// already exists. The executor stops it with a graceful shutdown RPC (no
+    /// caller elevation needed), so the elevation obtained to *start* it need
+    /// not be re-acquired to stop it.
+    #[cfg(windows)]
+    pub(crate) fn ensure_daemon_shutdown(&mut self, pid: u32) {
+        let already = self.items().any(|item| {
+            matches!(&item.target, PlanTarget::StopProcess { component, .. } if component == "daemon")
+        });
+        if already {
+            return;
+        }
+        let stop = PlanItem {
+            target: PlanTarget::StopProcess {
+                component: Component::Daemon.label().to_owned(),
+                pid,
+            },
+            needs_elevation: false,
+            scope: ItemScope::Any,
+            bytes: 0,
+        };
+        // Prepend to the existing shutdown group, or create it just before the
+        // data / runtime-binary groups it must precede (Windows locks the image
+        // of a running process, so the stop has to run first).
+        if let Some(group) = self
+            .groups
+            .iter_mut()
+            .find(|group| group.title == SHUTDOWN_GROUP_TITLE)
+        {
+            group.items.insert(0, stop);
+            return;
+        }
+        let at = self
+            .groups
+            .iter()
+            .position(|group| group.title == DATA_GROUP_TITLE || group.title == RUNTIME_GROUP_TITLE)
+            .unwrap_or(self.groups.len());
+        self.groups.insert(at, PlanGroup {
+            title: SHUTDOWN_GROUP_TITLE,
+            items: vec![stop],
+        });
+    }
+
     /// Number of items across all groups.
     pub(crate) fn item_count(&self) -> usize {
         self.groups.iter().map(|group| group.items.len()).sum()
@@ -308,7 +383,7 @@ pub(crate) fn build_plan(
             bytes: 0,
         });
     }
-    push_group(&mut groups, "Shutdown (stopped last)", shutdown, args.scope);
+    push_group(&mut groups, SHUTDOWN_GROUP_TITLE, shutdown, args.scope);
 
     // 4. Data / cache / config dirs that exist (skip config under
     // --keep-config). After the daemon shutdown: a running daemon holds open
@@ -328,7 +403,7 @@ pub(crate) fn build_plan(
             bytes: dir.size_bytes,
         })
         .collect();
-    push_group(&mut groups, "Data / cache / config", dirs, args.scope);
+    push_group(&mut groups, DATA_GROUP_TITLE, dirs, args.scope);
 
     // 5. Runtime binaries — deletable only now that their processes/services
     // are stopped (Windows locks a running image).
@@ -337,12 +412,7 @@ pub(crate) fn build_plan(
         .iter()
         .filter_map(|root| binary_item(root, StemSet::Runtime))
         .collect();
-    push_group(
-        &mut groups,
-        "Runtime binaries (after shutdown)",
-        runtime,
-        args.scope,
-    );
+    push_group(&mut groups, RUNTIME_GROUP_TITLE, runtime, args.scope);
 
     RemovalPlan { groups }
 }

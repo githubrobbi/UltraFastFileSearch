@@ -14,6 +14,7 @@
 //! | macOS/Linux | `std::os::unix::net::UnixStream`                   |
 //! | Windows     | Named pipe via `std::fs::OpenOptions` (no Winsock) |
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::io::{BufRead as _, BufReader, Read, Write};
 
 use crate::connect_sync_autostart::auto_start_daemon;
@@ -21,6 +22,26 @@ use crate::daemon_ctl::{pid_file_path, socket_path};
 use crate::daemon_spawn::{ElevationPolicy, resolve_elevation_policy};
 use crate::error::ClientError;
 use crate::protocol::response::DaemonStatus;
+
+/// When set, the auto-start connect loop suppresses its user-facing
+/// `[uffs] connect attempt …` retry chatter (default off). A caller driving a
+/// daemon (re)start *behind its own progress UI* — the uninstall deep-sweep
+/// coverage reload, which runs under a spinner on another thread — sets this so
+/// the retry lines do not garble that display. Process-wide, best set via a
+/// scoped guard on the caller's side so it never sticks.
+static QUIET_AUTOSTART: AtomicBool = AtomicBool::new(false);
+
+/// Suppress (or restore) the auto-start connect retry chatter (the
+/// `[uffs] connect attempt …` lines). The caller owns balancing this back to
+/// `false` — best via a scoped guard so it never sticks.
+pub fn set_quiet_autostart(quiet: bool) {
+    QUIET_AUTOSTART.store(quiet, Ordering::Relaxed);
+}
+
+/// Whether the auto-start retry chatter is currently suppressed.
+fn quiet_autostart() -> bool {
+    QUIET_AUTOSTART.load(Ordering::Relaxed)
+}
 
 /// Synchronous thin client for the UFFS daemon.
 ///
@@ -304,7 +325,7 @@ impl UffsClientSync {
 
             // Log sparingly — eprintln is intentional user-facing output
             // during daemon auto-start retries (no tracing in thin client).
-            if attempt <= 3 || attempt == max_attempts {
+            if !quiet_autostart() && (attempt <= 3 || attempt == max_attempts) {
                 #[expect(
                     clippy::print_stderr,
                     reason = "intentional user-facing retry progress"

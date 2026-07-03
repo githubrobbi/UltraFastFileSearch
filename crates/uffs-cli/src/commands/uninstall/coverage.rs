@@ -41,12 +41,26 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for shutdown.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Whether the daemon already covers every NTFS drive — a cheap RPC check used
+/// by the sweep-elevation decision *before* the gather starts (a daemon with
+/// full coverage needs no reload, elevated or not).
+pub(crate) fn coverage_complete() -> bool {
+    let all = detect_ntfs_drives();
+    if all.is_empty() {
+        return true;
+    }
+    let managed = current_managed_drives();
+    all.iter().all(|drive| managed.contains(drive))
+}
+
 /// Ensure the daemon covers every NTFS drive before the deep sweep. No-op when
 /// coverage is already complete; otherwise reload the daemon (kill + start)
-/// via the real CLI handlers. Returns the deferred narration notes (always
-/// empty in loud mode, where everything printed live). Best-effort: any
-/// failure just means the sweep covers whatever is currently loaded.
-pub(crate) fn ensure_drive_coverage(quiet: bool) -> Vec<String> {
+/// via the real CLI handlers — with `elevate_daemon` the start requests a UAC
+/// prompt (the user opted in at the sweep gate: without the Access Broker a
+/// daemon can only read the MFT elevated). Returns the deferred narration
+/// notes (always empty in loud mode, where everything printed live).
+/// Best-effort: any failure just means the sweep covers whatever is loaded.
+pub(crate) fn ensure_drive_coverage(quiet: bool, elevate_daemon: bool) -> Vec<String> {
     let mut notes: Vec<String> = Vec::new();
     let all = detect_ntfs_drives();
     if all.is_empty() {
@@ -62,7 +76,7 @@ pub(crate) fn ensure_drive_coverage(quiet: bool) -> Vec<String> {
         // The daemon already covers every system drive — nothing to do.
         return notes;
     }
-    reload_daemon_for_coverage(&all, &missing, quiet, &mut notes);
+    reload_daemon_for_coverage(&all, &missing, quiet, elevate_daemon, &mut notes);
     notes
 }
 
@@ -89,6 +103,7 @@ fn reload_daemon_for_coverage(
     all: &[DriveLetter],
     missing: &[DriveLetter],
     quiet: bool,
+    elevate_daemon: bool,
     notes: &mut Vec<String>,
 ) {
     let list = missing
@@ -96,12 +111,11 @@ fn reload_daemon_for_coverage(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    if quiet {
-        notes.push(format!(
-            "\nNote: the index daemon was reloaded (kill + start) to cover every drive\n\
-             for the deep sweep (it was missing {list})."
-        ));
-    } else {
+    // Loud mode announces the attempt live; quiet mode stays silent until the
+    // OUTCOME is known — a pre-declared "reloaded" note would contradict a later
+    // start failure (e.g. a declined UAC prompt), which is exactly what the user
+    // saw. The truthful note is pushed only once `start` actually succeeds.
+    if !quiet {
         emit(
             quiet,
             notes,
@@ -119,24 +133,25 @@ fn reload_daemon_for_coverage(
             quiet,
             notes,
             format!(
-                "  could not kill the daemon: {err}\n\
-                   Continuing the deep sweep with whatever is loaded."
+                "\nNote: could not stop the running daemon ({err}).\n\
+                   The deep sweep will scan the drives already indexed."
             ),
         );
         return;
     }
     wait_until_daemon_down();
 
-    if let Err(err) = run_handler(quiet, &start_action()) {
-        emit(
-            quiet,
-            notes,
-            format!(
-                "  could not start the daemon: {err}\n\
-                   Continuing the deep sweep with whatever is loaded."
-            ),
-        );
+    if let Err(err) = run_handler(quiet, &start_action(elevate_daemon)) {
+        emit(quiet, notes, start_failure_note(elevate_daemon, &err));
         return;
+    }
+
+    // Success: the daemon is back with full coverage, so the note is truthful.
+    if quiet {
+        notes.push(format!(
+            "\nNote: the index daemon was restarted to cover every drive for the deep\n\
+             sweep (it was missing {list})."
+        ));
     }
 
     let managed = current_managed_drives();
@@ -150,6 +165,24 @@ fn reload_daemon_for_coverage(
                 total = all.len(),
             ),
         );
+    }
+}
+
+/// A coherent note for a failed coverage start — the elevated no-broker case
+/// names the likely cause (a declined UAC prompt) so the message does not read
+/// as a bug. Never claims the daemon "was reloaded" (it was not).
+fn start_failure_note(elevate_daemon: bool, err: &anyhow::Error) -> String {
+    if elevate_daemon {
+        format!(
+            "\nNote: the elevated index daemon a full deep sweep needs could not be\n\
+             started (the UAC prompt was likely declined: {err}).\n\
+             The deep sweep will scan the drives already indexed."
+        )
+    } else {
+        format!(
+            "\nNote: the index daemon could not be started ({err}).\n\
+             The deep sweep will scan the drives already indexed."
+        )
     }
 }
 
@@ -175,8 +208,10 @@ fn emit(quiet: bool, notes: &mut Vec<String>, line: String) {
 }
 
 /// The [`DaemonAction::Start`] a bare `uffs --daemon start` produces: auto-
-/// discover every NTFS drive, use the cache, default logging, no UAC prompt.
-fn start_action() -> DaemonAction {
+/// discover every NTFS drive, use the cache, default logging. `elevate`
+/// requests the UAC prompt (`--daemon start --elevate`) for the no-broker
+/// sweep path the user opted into.
+fn start_action(elevate: bool) -> DaemonAction {
     DaemonAction::Start {
         mft_file: Vec::new(),
         data_dir: None,
@@ -184,7 +219,7 @@ fn start_action() -> DaemonAction {
         no_cache: false,
         log_level: "info".to_owned(),
         log_file: None,
-        elevate: false,
+        elevate,
     }
 }
 

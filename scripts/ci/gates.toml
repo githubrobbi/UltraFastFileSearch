@@ -440,6 +440,22 @@ only links reachable from the public API surface, so a broken
 sibling) silently renders as dead text instead of failing.  Cross-
 platform — `#[cfg(windows)]` items absent on the macOS/Linux runner
 are written as code spans, not links.
+
+INTENTIONAL: we do NOT add `-D rustdoc::private_intra_doc_links`, and
+this is the desired posture — do not "harden" it in.  `-Dwarnings`
+already denies the whole default warning set; that lint stays quiet
+here because `--document-private-items` documents the internals, so a
+`//!`/public link to a `pub(crate)` sibling is a *valid internal
+cross-reference*, not a leak.  (Verified: `-Dwarnings` +
+`--document-private-items` = 0 warnings; adding an explicit
+`-D rustdoc::private_intra_doc_links` flips 2 such links in
+`uffs-cli/src/main.rs` to errors.)  That lint guards a *published*
+crate's public docs from dangling to items a downstream user cannot
+see — a concern that does not apply to our internal-only doc build.
+Turning it on would force valid internal `[symbol]` links down to
+dead code spans (a doc regression) for zero correctness gain.  The
+real failure class we care about — broken / unresolved links anywhere
+— is already caught by `broken-intra-doc-links` under `-Dwarnings`.
 """
 
 [[gate]]

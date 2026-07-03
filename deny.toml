@@ -20,6 +20,22 @@ ignore = [
   # No action required from our side - Polars team will handle migration
   # See: https://rustsec.org/advisories/RUSTSEC-2025-0141
   "RUSTSEC-2025-0141",
+  # quick-xml <0.41: unbounded namespace-declaration allocation in NsReader (DoS on
+  # untrusted XML). Transitive-only: polars-io -> object_store 0.13 -> quick-xml ^0.39.
+  # NOT reachable in UFFS: the vulnerable path is object_store's cloud-store XML LIST
+  # parsing; UFFS only reads the local NTFS MFT and local index files, never a cloud
+  # object path. No upstream fix exists to bump to as of 2026-07-02 — the newest
+  # object_store (0.14.0) still requires quick-xml ^0.40.1 (< the fixed 0.41), and we
+  # are already on the latest polars (0.54.4). Remove this ignore when object_store
+  # ships a quick-xml >=0.41 release AND polars adopts it.
+  # See: https://rustsec.org/advisories/RUSTSEC-2026-0195
+  "RUSTSEC-2026-0195",
+  # Same crate, same path, same reasoning as RUSTSEC-2026-0195 above: quick-xml <0.41
+  # quadratic run time checking a start tag for duplicate attribute names (DoS on
+  # untrusted XML). Unreachable in UFFS (no cloud object paths); no upstream fix
+  # reachable yet. Remove together with the ignore above.
+  # See: https://rustsec.org/advisories/RUSTSEC-2026-0194
+  "RUSTSEC-2026-0194",
 ]
 
 [licenses]

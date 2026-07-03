@@ -5,10 +5,12 @@
 //! resolution table + the artifact inventory, in human form and as `--json`.
 //! The removal plan is layered on in later milestones.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::{Value, json};
 
 use super::inventory::Inventory;
-use super::plan::RemovalPlan;
+use super::plan::{PlanTarget, RemovalPlan};
 use super::remove::{ItemStatus, RemovalOutcome};
 use super::resolve_order::{ResolutionState, StemResolution};
 #[cfg(windows)]
@@ -162,47 +164,82 @@ pub(crate) fn print_plan(plan: &RemovalPlan, extra: &RemovalPlan) {
         println!("\nNothing to remove: no UFFS install or artifacts were found.");
         return;
     }
-    println!("\nThe following will be PERMANENTLY removed (no recovery):");
+    println!("\nThe following will be PERMANENTLY removed (no recovery):\n");
     let mut index: usize = 1;
-    for group in &plan.groups {
-        println!("\n {}", group.title);
-        for item in &group.items {
-            let elevated = if item.needs_elevation {
-                "  (needs Administrator)"
-            } else {
-                ""
-            };
+    let mut shown_binary_dirs: Vec<PathBuf> = Vec::new();
+    for item in plan.items() {
+        // Coalesce all binary deletes for one directory into a single
+        // "N binaries in <dir>" line. The internal tools-vs-runtime split (and
+        // its group headings) is a teardown-ordering detail — the user just
+        // wants to know how many binaries in which folder go away.
+        if let PlanTarget::DeleteBinaries { dir, .. } = &item.target {
+            if shown_binary_dirs.iter().any(|shown| shown == dir) {
+                continue;
+            }
+            shown_binary_dirs.push(dir.clone());
+            let (count, needs_admin) = binary_dir_totals(plan, dir);
             println!(
-                "  [{index}] {desc}{elevated}",
-                desc = item.target.describe()
+                "  [{index}] {count} binaries in {}{}",
+                dir.display(),
+                admin_flag(needs_admin),
             );
             index = index.saturating_add(1);
+            continue;
         }
+        println!(
+            "  [{index}] {desc}{elevated}",
+            desc = item.target.describe(),
+            elevated = admin_flag(item.needs_elevation),
+        );
+        index = index.saturating_add(1);
     }
     // The EXTRA files ride the same summary so nothing is hidden from the
     // final picture, but they are a separate choice: the ALL/CORE question.
     if !extra.is_empty() {
-        println!("\n Found elsewhere (EXTRA)");
         println!(
-            "  [{index}] {count} UFFS file(s) outside the standard install locations \
-             (listed above; removed only with ALL)",
+            "  [{index}] {count} file(s) found elsewhere (removed only with ALL)",
             count = extra.item_count(),
         );
     }
     if extra.is_empty() {
-        println!(
-            "\nReclaims ~{} across {} item(s).",
-            human_bytes(plan.total_bytes()),
-            plan.item_count(),
-        );
+        println!("\nReclaims ~{}.", human_bytes(plan.total_bytes()));
     } else {
         println!(
-            "\nReclaims ~{} across {} CORE item(s), plus {} EXTRA file(s) with ALL.",
+            "\nReclaims ~{}, plus {} file(s) removed only with ALL.",
             human_bytes(plan.total_bytes()),
-            plan.item_count(),
             extra.item_count(),
         );
     }
+}
+
+/// The `  (needs Administrator)` suffix, or empty when the item is removable
+/// as the current user.
+const fn admin_flag(needs_elevation: bool) -> &'static str {
+    if needs_elevation {
+        "  (needs Administrator)"
+    } else {
+        ""
+    }
+}
+
+/// Sum the binary stems across every `DeleteBinaries` item targeting `dir` (the
+/// tools and runtime passes land in separate groups), and whether any of them
+/// needs Administrator. Used to fold the split into one consent line.
+fn binary_dir_totals(plan: &RemovalPlan, dir: &Path) -> (usize, bool) {
+    let mut count: usize = 0;
+    let mut needs_admin = false;
+    for item in plan.items() {
+        if let PlanTarget::DeleteBinaries {
+            dir: item_dir,
+            stems,
+        } = &item.target
+            && item_dir == dir
+        {
+            count = count.saturating_add(stems.len());
+            needs_admin |= item.needs_elevation;
+        }
+    }
+    (count, needs_admin)
 }
 
 /// The up-front elevation gate (U-30): the FIRST thing a non-elevated run says.
@@ -340,14 +377,12 @@ pub(crate) fn print_journal_warning(error: &anyhow::Error) {
     eprintln!("note: uninstall progress marker could not be updated ({error:#}).");
 }
 
-/// Note that the running self-binaries are deferred to a post-exit delete
-/// (the OS locks a running image, so they can't be removed in place).
+/// Note that the running `uffs` binary finishes removing itself after the
+/// process exits (the OS locks a running image). One quiet line — the exact
+/// paths are a mechanism detail the user does not need.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_self_delete_scheduled(paths: &[std::path::PathBuf]) {
-    println!("\nThe running UFFS binary is removed after this process exits:");
-    for path in paths {
-        println!("  {}", path.display());
-    }
+pub(crate) fn print_self_delete_scheduled() {
+    println!("\nThe uffs command removes itself once this process exits.");
 }
 
 /// Warn that the running self-binary could not be scheduled for deletion.
@@ -359,11 +394,17 @@ pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {
     );
 }
 
-/// Print the post-removal verification: clean, or the locations that survived.
+/// Print the post-removal verification. The upbeat "all gone" is claimed only
+/// when the run was `clean` — nothing failed and nothing was left (a declined
+/// broker removal is NOT "all gone", even though the leftover service/binary
+/// are not among the stat-checked `remaining` paths). `print_outcome` already
+/// explained any leftovers, so this stays quiet in that case.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_verification(remaining: &[std::path::PathBuf]) {
+pub(crate) fn print_verification(remaining: &[PathBuf], clean: bool) {
     if remaining.is_empty() {
-        println!("\nVerified: all targeted UFFS locations are gone.");
+        if clean {
+            println!("\nVerified: all targeted UFFS locations are gone.");
+        }
         return;
     }
     println!(
@@ -376,29 +417,38 @@ pub(crate) fn print_verification(remaining: &[std::path::PathBuf]) {
     }
 }
 
-/// Print the outcome of a removal run: counts, any failures, and a retry hint.
+/// Print the outcome of a removal run: counts, any failures / left items, and
+/// the matching next-step hint.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
-    println!(
-        "\nRemoval finished: {} removed, {} failed.",
-        outcome.done_count(),
-        outcome.failed_count(),
-    );
+    let failed = outcome.failed_count();
+    let skipped = outcome.skipped_count();
+    let mut parts = vec![format!("{} removed", outcome.done_count())];
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if skipped > 0 {
+        parts.push(format!("{skipped} left"));
+    }
+    println!("\nRemoval finished: {}.", parts.join(", "));
+
     for (description, status) in &outcome.results {
-        if let ItemStatus::Failed(error) = status {
-            println!("  FAILED  {description}  ({error})");
+        match status {
+            ItemStatus::Failed(error) => println!("  FAILED  {description}  ({error})"),
+            ItemStatus::Skipped(reason) => println!("  LEFT    {description}  ({reason})"),
+            ItemStatus::Done => {}
         }
     }
-    if !outcome.all_done() {
-        // Elevation only exists on Windows (the broker is a LocalSystem service);
-        // every non-Windows uninstall runs entirely in user-land, so a failure
-        // there is a file in use, never a privilege problem — no sudo hint.
-        #[cfg(windows)]
+
+    // Left items are always the broker after a declined elevation (Windows-only):
+    // one clear next step, not the generic file-in-use hint.
+    if skipped > 0 {
         println!(
-            "\nSome items could not be removed — e.g. the broker, a LocalSystem service. \
-             Re-run `uffs --uninstall` from an elevated (Administrator) terminal."
+            "\nThe Access Broker was left because elevation was declined. Re-run\n\
+             `uffs --uninstall` from an Administrator terminal to remove it."
         );
-        #[cfg(not(windows))]
+    }
+    if failed > 0 {
         println!(
             "\nSome items could not be removed (a file may be in use). Close anything \
              using them and re-run."

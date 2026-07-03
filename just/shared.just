@@ -164,6 +164,19 @@ toolchain-sync:
     fi
     printf "\033[0;34m   Current pin: %s (floor — will not step below this)\033[0m\n" "$CURRENT"
 
+    # Cross-target gate (Phase 2b below) validates the Windows build before a
+    # bump, not just the host — a host-only probe green-lights x86 / Windows-only
+    # regressions (cf. the ring 0.17.x episode: nightly-2026-06-27..30 failed to
+    # compile ring for x86_64-pc-windows-msvc while the aarch64 host built clean,
+    # so a host-only bump shipped a Windows-broken nightly that only blew up at
+    # the pre-push xwin step). That gate needs cargo-xwin; refuse to run without
+    # it rather than silently fall back to a host-only — and thus unsafe — bump.
+    if ! command -v cargo-xwin >/dev/null 2>&1; then
+        printf "\033[0;31m❌ cargo-xwin is required: toolchain-sync now validates the Windows target before a bump.\033[0m\n"
+        printf "\033[0;31m   Install it with: cargo install cargo-xwin\033[0m\n"
+        exit 1
+    fi
+
     START_DATE=$(date -u +%Y-%m-%d)
     printf "\033[0;34m   Start date:  nightly-%s (today UTC)\033[0m\n\n" "$START_DATE"
 
@@ -352,10 +365,11 @@ toolchain-sync:
         # path that only surfaces under test targets).  CARGO_TARGET_DIR is
         # scoped per-candidate so cross-toolchain artifact hash mismatches
         # ("please recompile that crate using this compiler") can't produce
-        # false negatives, and the two feature-set runs share it.  Windows-only
-        # lints stay the Nightly Canary's job; this probe runs on the
-        # maintainer's host.  `clippy` ships in the `--profile default` install
-        # (Phase 1), so it is already present.
+        # false negatives, and the two feature-set runs share it.  This is the
+        # HOST leg of the gate (aarch64 here); the Windows cross-compile is
+        # validated separately in Phase 2b below, so a host-only pass can no
+        # longer green-light an x86 / Windows-only regression.  `clippy` ships in
+        # the `--profile default` install (Phase 1), so it is already present.
         CLIPPY_OK=1
         for CLIPPY_FEATURES in "--all-features" "--no-default-features"; do
             printf "\033[0;34m   Running cargo +%s clippy %s -- -D warnings...\033[0m\n" "$CANDIDATE" "$CLIPPY_FEATURES"
@@ -376,6 +390,50 @@ toolchain-sync:
                 printf "\n\033[0;31m❌ Current pin %s no longer compiles + passes clippy -D warnings.\033[0m\n" "$CURRENT"
                 printf "\033[0;31m   Full log: /tmp/toolchain-sync-clippy.log\033[0m\n"
                 printf "\033[0;31m   Manual intervention required — fix the lints; the merge gate will reject this pin.\033[0m\n"
+                exit 1
+            fi
+            CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")
+            ITER=$((ITER+1))
+            continue
+        fi
+
+        # ── Phase 2b: Windows cross-compile gate ────────────────
+        # The host clippy above only proves the build works on the maintainer's
+        # arch (aarch64).  A bump must not be accepted on a nightly that cannot
+        # build the SHIPPED Windows binary, or a Windows-only regression sails
+        # through here and only surfaces at the pre-push `cargo xwin` step (cf.
+        # the ring 0.17.x episode).  Compile the workspace for
+        # x86_64-pc-windows-msvc via cargo-xwin under `-D warnings`; on any
+        # failure step back exactly like the host clippy gate.  The candidate
+        # needs the Windows rust-std first (`--profile default` installs neither
+        # extra targets nor components — components come in Phase 3).  Reuses the
+        # per-candidate scratch CARGO_TARGET_DIR (artifacts land under its
+        # `x86_64-pc-windows-msvc/` subdir, separate from the host leg).
+        printf "\033[0;34m   Adding x86_64-pc-windows-msvc target to %s...\033[0m\n" "$CANDIDATE"
+        if ! rustup target add x86_64-pc-windows-msvc --toolchain "$CANDIDATE" \
+                >/tmp/toolchain-sync-wintarget.log 2>&1; then
+            printf "\033[0;33m   ⚠️  could not add the windows target to %s — stepping back one day.\033[0m\n" "$CANDIDATE"
+            if [ "$CANDIDATE" = "$CURRENT" ]; then
+                printf "\n\033[0;31m❌ Current pin %s cannot add x86_64-pc-windows-msvc.\033[0m\n" "$CURRENT"
+                exit 1
+            fi
+            CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")
+            ITER=$((ITER+1))
+            continue
+        fi
+        printf "\033[0;34m   Running cargo +%s xwin clippy --target x86_64-pc-windows-msvc...\033[0m\n" "$CANDIDATE"
+        if CARGO_TARGET_DIR="$PROBE_ROOT/$CANDIDATE" \
+            cargo "+$CANDIDATE" xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --all-features --locked --no-deps --quiet -- -D warnings \
+            >/tmp/toolchain-sync-xwin.log 2>&1; then
+            printf "\033[0;32m   ✅ windows xwin clippy ok\033[0m\n"
+        else
+            printf "\033[0;33m   ⚠️  windows xwin clippy failed under %s — stepping back one day.\033[0m\n" "$CANDIDATE"
+            printf "\033[0;33m      (last 5 lines from /tmp/toolchain-sync-xwin.log:)\033[0m\n"
+            tail -n 5 /tmp/toolchain-sync-xwin.log | sed 's/^/        /'
+            if [ "$CANDIDATE" = "$CURRENT" ]; then
+                printf "\n\033[0;31m❌ Current pin %s no longer compiles for x86_64-pc-windows-msvc.\033[0m\n" "$CURRENT"
+                printf "\033[0;31m   Full log: /tmp/toolchain-sync-xwin.log\033[0m\n"
+                printf "\033[0;31m   Manual intervention required — the merge gate's Windows build will reject this pin.\033[0m\n"
                 exit 1
             fi
             CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")

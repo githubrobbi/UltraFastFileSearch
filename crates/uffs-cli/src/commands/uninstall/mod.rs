@@ -195,7 +195,8 @@ fn execute_all(
 
     // M4 execute (U-40..42): run the plan(s) once against the live effects sink,
     // accumulating a single outcome so the summary + retry hint print once.
-    let mut effects = effects::SystemEffects::new(self_paths.clone(), elevate_via_uac);
+    let mut effects =
+        effects::SystemEffects::new(self_paths.clone(), elevate_via_uac, broker_remains);
     let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
         outcome.absorb(remove::execute(removal_plan, &mut effects, broker_remains));
@@ -213,7 +214,13 @@ fn execute_all(
 
     // M8 self-delete (U-80): finish the deferred delete of the running
     // self-binaries the executor skipped. If even scheduling fails, say so.
-    if !self_paths.is_empty() {
+    // When the running uffs.exe is INSIDE the winget package, the deferred
+    // `winget uninstall` owns deleting the whole package dir (self included)
+    // — running the plain del script too would race winget over the same
+    // files, so it is skipped in favour of the owner-driven cleanup.
+    if effects.winget_deferred() {
+        render::print_winget_deferred();
+    } else if !self_paths.is_empty() {
         render::print_self_delete_scheduled();
         if let Err(err) = effects::schedule_self_delete(&self_paths) {
             render::print_self_delete_warning(&err);
@@ -485,6 +492,10 @@ fn sweep_decision(parsed: &UninstallArgs) -> Result<SweepDecision> {
          Choice [d/S]: ",
     )?;
     if matches!(choice.as_str(), "d" | "deep" | "deep sweep") {
+        // Breathing room between the answered prompt and the gather spinner
+        // (emitted here, not in the spinner, so the silent no-question paths
+        // do not accumulate stray blank lines under the run header).
+        println!();
         Ok(SweepDecision::Proceed {
             elevate_daemon: true,
         })
@@ -616,9 +627,6 @@ fn spinner_wait<T>(handle: &std::thread::JoinHandle<T>) {
     use std::io::Write as _;
 
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    // One blank line between the sweep-decision prompt and the spinner, so the
-    // gather does not butt right up against "Choice [d/S]: d".
-    println!();
     let mut frame = 0_usize;
     while !handle.is_finished() {
         let label = if GATHER_PHASE.load(core::sync::atomic::Ordering::Relaxed) == 0 {

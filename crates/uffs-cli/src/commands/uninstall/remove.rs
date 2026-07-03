@@ -34,6 +34,64 @@ impl core::fmt::Display for ElevationDeclined {
 
 impl core::error::Error for ElevationDeclined {}
 
+/// Marker error: winget refuses to uninstall a USER-scope package from an
+/// elevated session ("The package installed for user scope cannot be
+/// uninstalled when running with administrator privileges") — winget's
+/// deliberate scope-safety, not a failure to force through. The executor
+/// records the delegation as LEFT with the exact non-admin instruction.
+#[derive(Debug)]
+pub(crate) struct WingetNeedsNonElevated;
+
+impl core::fmt::Display for WingetNeedsNonElevated {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("winget cannot uninstall a user-scope package from an elevated session")
+    }
+}
+
+impl core::error::Error for WingetNeedsNonElevated {}
+
+/// Marker error: the running uffs.exe lives INSIDE the winget package dir, so
+/// a synchronous `winget uninstall` would hit its own locked image. The
+/// effects layer schedules the uninstall to run right after this process
+/// exits (same detached-script mechanism as the self-delete) and returns this
+/// marker; the executor records the item as deliberately deferred.
+#[derive(Debug)]
+pub(crate) struct WingetDeferred;
+
+impl core::fmt::Display for WingetDeferred {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("winget uninstall deferred until this process exits")
+    }
+}
+
+impl core::error::Error for WingetDeferred {}
+
+/// Marker error: the Access Broker service is staying (elevation declined or
+/// deliberately kept) and it runs FROM the winget package dir, so even a
+/// deferred `winget uninstall` would hit the service's locked image — the
+/// exact `remove_all: Access is denied` failure seen live. The delegation is
+/// left with the two-step instruction instead of a doomed attempt.
+#[derive(Debug)]
+pub(crate) struct WingetBlockedByBroker;
+
+impl core::fmt::Display for WingetBlockedByBroker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("the broker service still runs from the winget package")
+    }
+}
+
+impl core::error::Error for WingetBlockedByBroker {}
+
+/// Reason recorded when the winget uninstall is blocked by the kept broker.
+const WINGET_BLOCKED_BY_BROKER: &str = "the Access Broker service still runs from this winget package and locks its      files; remove the service from an Administrator terminal (`uffs --uninstall`),      then run `winget uninstall SkyLLC.UFFS`";
+
+/// Reason recorded when the winget uninstall is deferred past process exit.
+const WINGET_DEFERRED: &str = "winget uninstall runs right after this process exits (the running      uffs.exe is part of the winget package)";
+
+/// Reason recorded when the winget package is left because this run is
+/// elevated: the user needs one command in a normal terminal.
+const WINGET_LEFT: &str = "user-scope winget packages cannot be uninstalled from an admin session; run      `winget uninstall SkyLLC.UFFS` in a normal (non-admin) terminal";
+
 /// Reason recorded when the broker service is left because elevation was
 /// declined at the UAC prompt.
 const BROKER_SERVICE_LEFT: &str = "the Access Broker (a LocalSystem service) needs Administrator";
@@ -60,8 +118,9 @@ pub(crate) trait Effects {
     /// Windows deep-sweep hits found outside the known roots.
     #[cfg(windows)]
     fn delete_file(&mut self, path: &Path) -> Result<()>;
-    /// Hand a `WinGet`-managed root to `winget uninstall`.
-    fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()>;
+    /// Hand a `WinGet`-managed root to `winget uninstall`. `dir` is the
+    /// package root (used to detect the running-self-inside-the-package case).
+    fn delegate_winget(&mut self, package_id: &str, scope: Scope, dir: &Path) -> Result<()>;
     /// Recursively delete a directory (absent is a no-op).
     fn remove_dir(&mut self, path: &Path) -> Result<()>;
     /// Remove `dir` from the user's PATH (Windows: the registry; Unix: print a
@@ -185,6 +244,26 @@ fn run_item(
         }
         return;
     }
+    // Winget refuses user-scope uninstalls from an elevated session — record
+    // the delegation as deliberately LEFT with the exact next step, instead of
+    // a raw failure.
+    if let PlanTarget::DelegateWinget { .. } = &item.target {
+        let status = match dispatch(&item.target, effects) {
+            Ok(()) => ItemStatus::Done,
+            Err(err) if err.downcast_ref::<WingetNeedsNonElevated>().is_some() => {
+                ItemStatus::Skipped(WINGET_LEFT.to_owned())
+            }
+            Err(err) if err.downcast_ref::<WingetDeferred>().is_some() => {
+                ItemStatus::Skipped(WINGET_DEFERRED.to_owned())
+            }
+            Err(err) if err.downcast_ref::<WingetBlockedByBroker>().is_some() => {
+                ItemStatus::Skipped(WINGET_BLOCKED_BY_BROKER.to_owned())
+            }
+            Err(err) => ItemStatus::Failed(format!("{err:#}")),
+        };
+        outcome.record(description, status);
+        return;
+    }
     // The broker service is staying (declined, or the non-elevated run left it),
     // so it still runs and locks uffs-broker.exe: delete the other runtime
     // binaries, leave the broker's alongside its service.
@@ -242,8 +321,10 @@ fn dispatch(target: &PlanTarget, effects: &mut dyn Effects) -> Result<()> {
         #[cfg(windows)]
         PlanTarget::DeleteFile { path, .. } => effects.delete_file(path),
         PlanTarget::DelegateWinget {
-            package_id, scope, ..
-        } => effects.delegate_winget(package_id, *scope),
+            package_id,
+            scope,
+            dir,
+        } => effects.delegate_winget(package_id, *scope, dir),
         PlanTarget::DeleteDir { path, .. } => effects.remove_dir(path),
         PlanTarget::RemovePathEntry { dir } => effects.remove_path_entry(dir),
     }
@@ -275,6 +356,9 @@ mod tests {
         /// When set, `remove_service` returns [`super::ElevationDeclined`], as
         /// a declined UAC prompt does.
         decline_service: bool,
+        /// When set, `delegate_winget` returns
+        /// [`super::WingetNeedsNonElevated`], as an elevated session does.
+        winget_elevated: bool,
     }
 
     impl Effects for RecordingEffects {
@@ -299,8 +383,11 @@ mod tests {
             self.calls.push(format!("delete_file:{}", path.display()));
             Ok(())
         }
-        fn delegate_winget(&mut self, package_id: &str, _scope: Scope) -> Result<()> {
+        fn delegate_winget(&mut self, package_id: &str, _scope: Scope, _dir: &Path) -> Result<()> {
             self.calls.push(format!("delegate_winget:{package_id}"));
+            if self.winget_elevated {
+                return Err(super::WingetNeedsNonElevated.into());
+            }
             Ok(())
         }
         fn remove_dir(&mut self, path: &Path) -> Result<()> {
@@ -484,6 +571,69 @@ mod tests {
                 .iter()
                 .any(|call| call == "delete_binaries:/opt/uffs:1"),
             "the non-broker runtime binary is still removed: {:?}",
+            effects.calls
+        );
+    }
+
+    #[test]
+    fn elevated_winget_refusal_is_left_with_the_non_admin_instruction() {
+        // An elevated run delegating to winget: winget refuses user-scope
+        // uninstalls from an admin session — the item must be LEFT (with the
+        // run-it-non-admin reason), never a raw failure, and the rest of the
+        // plan still executes.
+        let report = DetectionReport {
+            roots: vec![InstallRoot {
+                dir: PathBuf::from(r"C:\winget\uffs"),
+                channel: Channel::WinGet,
+                scope: Scope::User,
+                anchored_by: Vec::new(),
+                binaries: vec![BinaryInfo {
+                    name: "uffs".to_owned(),
+                    version: None,
+                }],
+            }],
+            running: Vec::new(),
+        };
+        let inventory = Inventory {
+            dirs: vec![ArtifactDir {
+                kind: ArtifactKind::Cache,
+                path: PathBuf::from("/x/cache"),
+                exists: true,
+                size_bytes: 1,
+            }],
+            broker_service: BrokerServiceState::Absent,
+        };
+        let plan = build_plan(&report, &inventory, &UninstallArgs::default(), &[]);
+        let mut effects = RecordingEffects {
+            winget_elevated: true,
+            ..RecordingEffects::default()
+        };
+        let outcome = execute(&plan, &mut effects, false);
+
+        assert_eq!(outcome.failed_count(), 0, "no raw failure");
+        assert_eq!(outcome.skipped_count(), 1, "the delegation is LEFT");
+        let left = outcome
+            .results
+            .iter()
+            .find_map(|(_, status)| {
+                if let ItemStatus::Skipped(reason) = status {
+                    Some(reason.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("a LEFT item");
+        assert!(
+            left.contains("non-admin"),
+            "the reason carries the non-admin instruction: {left}"
+        );
+        // The cache dir still got removed (best-effort continues).
+        assert!(
+            effects
+                .calls
+                .iter()
+                .any(|call| call == "remove_dir:/x/cache"),
+            "rest of the plan still ran: {:?}",
             effects.calls
         );
     }

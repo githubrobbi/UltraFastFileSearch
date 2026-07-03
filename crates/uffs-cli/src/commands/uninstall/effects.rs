@@ -22,6 +22,16 @@ use crate::commands::update::model::Scope;
 /// directly fails; [`schedule_self_delete`] removes them after this process
 /// exits instead.
 pub(crate) struct SystemEffects {
+    /// Whether the Access Broker service stays installed after this run (the
+    /// non-elevated "continue without" path, or a declined UAC). A kept
+    /// broker running FROM the winget package locks its files, so the winget
+    /// delegation must be left, not attempted.
+    broker_remains: bool,
+    /// Set when `delegate_winget` scheduled a post-exit `winget uninstall`
+    /// (the running uffs.exe is inside the winget package). The orchestrator
+    /// must then SKIP the plain self-delete script — winget owns deleting the
+    /// package dir, including the running image.
+    winget_deferred: bool,
     /// Absolute paths of the running self-binaries to skip in-place deletes.
     self_paths: Vec<PathBuf>,
     /// Windows: the user chose "elevate at removal time" at the elevation gate,
@@ -43,11 +53,25 @@ impl SystemEffects {
     /// skip in-place (they are deferred to [`schedule_self_delete`]) and
     /// whether admin-only service removal goes through the Windows UAC helper
     /// (`elevate_via_uac`; meaningless off Windows).
-    pub(crate) const fn new(self_paths: Vec<PathBuf>, elevate_via_uac: bool) -> Self {
+    pub(crate) const fn new(
+        self_paths: Vec<PathBuf>,
+        elevate_via_uac: bool,
+        broker_remains: bool,
+    ) -> Self {
         Self {
+            broker_remains,
+            winget_deferred: false,
             self_paths,
             elevate_via_uac,
         }
+    }
+
+    /// Whether `delegate_winget` scheduled a post-exit `winget uninstall`
+    /// that will delete the package dir — including the running uffs.exe —
+    /// so the plain self-delete script must NOT run (both would race over
+    /// the same files, and winget also cleans its metadata).
+    pub(crate) const fn winget_deferred(&self) -> bool {
+        self.winget_deferred
     }
 
     /// Whether `path` is one of the running self-binaries (case-insensitive,
@@ -131,7 +155,24 @@ impl Effects for SystemEffects {
         }
     }
 
-    fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()> {
+    fn delegate_winget(&mut self, package_id: &str, scope: Scope, dir: &Path) -> Result<()> {
+        // Running FROM the winget package (a pure-winget install): winget
+        // cannot delete the locked running image. If the broker service is
+        // ALSO staying (it runs from the same package), even a post-exit
+        // attempt hits the service's locked uffs-broker.exe (`remove_all:
+        // Access is denied` live) — leave the delegation with the two-step
+        // instruction. Otherwise defer the whole uninstall to right after
+        // this process exits (same detached-script mechanism as the
+        // self-delete): winget then deletes every package file (nothing is
+        // locked any more) AND cleans its metadata.
+        if self.self_paths.iter().any(|path| path.starts_with(dir)) {
+            if self.broker_remains {
+                return Err(super::remove::WingetBlockedByBroker.into());
+            }
+            schedule_deferred_winget(package_id, scope)?;
+            self.winget_deferred = true;
+            return Err(super::remove::WingetDeferred.into());
+        }
         winget_uninstall(package_id, scope)
     }
 
@@ -188,6 +229,45 @@ fn remove_path_entry_impl(dir: &Path) -> Result<()> {
         dir.display()
     )
     .context("writing PATH cleanup hint")
+}
+
+/// Schedule `winget uninstall` to run right after this process exits, for the
+/// pure-winget install where the running uffs.exe is part of the package and
+/// a synchronous uninstall would hit its own locked image. Same detached-`cmd`
+/// pattern as [`schedule_self_delete`]; winget removes the package files AND
+/// its metadata in one owner-driven pass.
+#[cfg(windows)]
+fn schedule_deferred_winget(package_id: &str, scope: Scope) -> Result<()> {
+    use std::os::windows::process::CommandExt as _;
+
+    let scope_arg = match scope {
+        Scope::Machine => " --scope machine",
+        Scope::User => " --scope user",
+        Scope::Unknown => "",
+    };
+    // `ping` is a portable ~2s sleep; by then this process has exited and the
+    // package images are unlocked.
+    let script = format!(
+        "ping 127.0.0.1 -n 3 >nul & winget uninstall --id {package_id} --silent          --accept-source-agreements{scope_arg} & rem deferred winget uninstall"
+    );
+    // `raw_arg`, NOT `args`: see `schedule_self_delete` — std's default
+    // quoting mangles the `/c` payload for cmd.exe.
+    Command::new("cmd")
+        .raw_arg("/c")
+        .raw_arg(&script)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("scheduling the deferred winget uninstall")?;
+    Ok(())
+}
+
+/// Non-Windows: winget does not exist, so a deferred winget uninstall can
+/// never be scheduled (the plan never produces a `DelegateWinget` off
+/// Windows); erroring is the honest outcome if it somehow were.
+#[cfg(not(windows))]
+fn schedule_deferred_winget(package_id: &str, _scope: Scope) -> Result<()> {
+    bail!("cannot defer winget uninstall of {package_id}: winget is Windows-only")
 }
 
 /// Delete the running self-binaries (`uffs.exe` + `uffs-update.exe`) that
@@ -411,6 +491,15 @@ fn remove_service_via_uac(service: &str) -> Result<()> {
 
 /// Delegate removal of a `WinGet`-managed root to `winget uninstall`.
 fn winget_uninstall(package_id: &str, scope: Scope) -> Result<()> {
+    // Winget refuses to uninstall a USER-scope package from an elevated
+    // session (deliberate scope-safety on their side). Detect it up front and
+    // return the typed marker so the executor records a clean LEFT with the
+    // "run it from a normal terminal" instruction — the elevated re-run we
+    // advertise for the broker service must not report this as a raw failure.
+    #[cfg(windows)]
+    if matches!(scope, Scope::User) && uffs_mft::is_elevated() {
+        return Err(super::remove::WingetNeedsNonElevated.into());
+    }
     let mut command = Command::new("winget");
     command.args([
         "uninstall",
@@ -453,7 +542,7 @@ mod tests {
         // The second stem is treated as the running self-binary — it must be
         // skipped (left for the deferred self-delete), not removed in place.
         let self_path = base.join(exe_file_name("uffsd"));
-        let mut effects = SystemEffects::new(vec![self_path.clone()], false);
+        let mut effects = SystemEffects::new(vec![self_path.clone()], false, false);
         effects.delete_binaries(&base, &stems).unwrap();
         assert!(
             !base.join(exe_file_name("uffs")).exists(),

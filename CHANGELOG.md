@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — self-update now sees a dormant WinGet install
+
+`uffs --update` finds a WinGet-managed install even when nothing is running from
+it. Root discovery used to rely only on live anchors (the invoking `uffs.exe`
+plus any running daemon / broker / MCP), so with the daemon and broker stopped
+and `--update` run from a hand-placed copy, the winget install had no anchor and
+was invisible — never seen, never reconciled. Detection now also scans WinGet's
+well-known package location, so the winget copy is found and updated regardless
+of what is running.
+
+### Fixed — the Access Broker note no longer fires when no broker is running
+
+A non-elevated update skips (and warns about) the Access Broker only when it is
+a *running* `LocalSystem` service — the case that genuinely needs elevation to
+cycle. A plain `uffs-broker.exe` file with no running service is now updated in
+place like any other binary, without the misleading "left running and NOT
+updated" note.
+
 ## [0.6.22] - 2026-07-03
 
 Consolidated notes for the 0.6.19–0.6.22 development cycle, which reworked the

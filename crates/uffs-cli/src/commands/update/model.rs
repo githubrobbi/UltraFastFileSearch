@@ -73,6 +73,9 @@ pub(crate) enum Anchor {
     Mcp,
     /// The registered broker-service `binPath` directory.
     Broker,
+    /// Found by scanning the well-known `WinGet\Packages` location — a
+    /// winget-managed install with nothing currently running from it.
+    Winget,
 }
 
 impl Anchor {
@@ -83,6 +86,7 @@ impl Anchor {
             Self::Daemon => "daemon",
             Self::Mcp => "mcp",
             Self::Broker => "broker",
+            Self::Winget => "winget",
         }
     }
 }

@@ -32,8 +32,9 @@ use anyhow::Result;
 
 use super::model::DetectionReport;
 
-/// The `WinGet` package id UFFS publishes under.
-#[cfg(windows)]
+/// The `WinGet` package id UFFS publishes under. Cross-platform: the Windows
+/// upgrade path uses it, and [`super::winget_discover`] matches the winget
+/// package folder against it on every target.
 pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
 
 /// What [`quiesce`] stopped, so [`resume`] can restore exactly that. Opaque +

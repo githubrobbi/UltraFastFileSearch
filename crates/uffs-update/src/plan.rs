@@ -124,6 +124,17 @@ impl Snapshot {
         Some(version)
     }
 
+    /// Whether a broker service is actually **running** in this snapshot (a
+    /// `broker` entry in `running`). Only then does updating `uffs-broker.exe`
+    /// require elevation (to stop/restart the `LocalSystem` service). A plain
+    /// `uffs-broker.exe` file with no running service is just another binary
+    /// and can be swapped in place like the rest.
+    pub(crate) fn broker_is_running(&self) -> bool {
+        self.running
+            .iter()
+            .any(|run| run.component == BROKER_COMPONENT)
+    }
+
     /// Whether the Access Broker binary lives under a `WinGet`-delegated root.
     /// When it does, a non-elevated apply skips the broker here, but the
     /// caller's `winget upgrade` refreshes `uffs-broker.exe` and cycles the
@@ -320,6 +331,31 @@ mod tests {
         assert!(
             snap.broker_in_winget_root(),
             "broker under a winget root is delegated"
+        );
+    }
+
+    #[test]
+    fn broker_is_running_needs_a_running_entry_not_just_a_binary() {
+        // A uffs-broker.exe file present, but no running broker service.
+        const BINARY_ONLY: &str = r#"{
+          "targets": [ { "root": "C:\\bin", "channel": "unmanaged", "binaries": [
+            { "name": "uffs-broker", "on_disk_version": "0.6.22" }
+          ] } ]
+        }"#;
+        // A running broker service (a `broker` entry in `running`).
+        const RUNNING: &str = r#"{
+          "targets": [],
+          "running": [ { "component": "broker", "pid": 7 } ]
+        }"#;
+        let snap: Snapshot = serde_json::from_str(BINARY_ONLY).expect("parse");
+        assert!(
+            !snap.broker_is_running(),
+            "a broker binary with no running service is not running"
+        );
+        let running: Snapshot = serde_json::from_str(RUNNING).expect("parse");
+        assert!(
+            running.broker_is_running(),
+            "a running broker entry means the service is running"
         );
     }
 

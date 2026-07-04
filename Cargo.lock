@@ -4441,6 +4441,7 @@ dependencies = [
  "dirs-next",
  "serde_json",
  "strsim",
+ "tempfile",
  "uffs-broker-protocol",
  "uffs-client",
  "uffs-format",

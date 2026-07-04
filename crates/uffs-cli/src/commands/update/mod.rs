@@ -31,6 +31,7 @@ mod report;
 mod self_heal;
 mod snapshot;
 mod winget;
+mod winget_discover;
 
 use std::path::{Path, PathBuf};
 
@@ -414,6 +415,10 @@ pub(crate) fn detect() -> DetectionReport {
     }
     // A.1 anchor #4 — the broker service (Windows-only).
     capture_broker(&mut roots, &mut running);
+    // A.1b — a dormant WinGet install has no live anchor (nothing running from
+    // it, not the invoking exe), so find it at its well-known package location
+    // too; otherwise `uffs --update` can neither see nor reconcile it.
+    winget_discover::discover(&mut roots);
 
     // A.2 + A.3 + A.4 — per root: enumerate binaries, classify, version.
     for root in &mut roots {

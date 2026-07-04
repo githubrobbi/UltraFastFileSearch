@@ -115,4 +115,8 @@ pub(crate) enum Commands {
     WorkflowResume,
     /// Nightly cross-compilation validation
     CrossCheck,
+    /// Write an auto-generated draft into CHANGELOG `[Unreleased]` from the
+    /// Conventional-Commit subjects since the last release tag. A placeholder
+    /// to polish before shipping; never overwrites hand-authored notes.
+    ChangelogDraft,
 }

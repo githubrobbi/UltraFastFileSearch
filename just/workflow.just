@@ -78,6 +78,13 @@ ship-fresh *ARGS:
     @echo "========================================================"
     cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- ship --fresh {{ ARGS }}
 
+# Draft CHANGELOG [Unreleased] from the Conventional-Commit subjects since the
+# last release tag — a placeholder to polish before shipping. Never overwrites
+# hand-authored notes (the ship flow also auto-drafts if [Unreleased] is empty).
+changelog-draft:
+    @printf "\033[0;34m📝 Drafting CHANGELOG [Unreleased] from commits since the last release\033[0m\n"
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- changelog-draft
+
 # Safe-by-default validation workflow (justfile fallback).
 go-justfile:
     #!/usr/bin/env bash

@@ -247,6 +247,8 @@ async fn main() -> Result<()> {
         Commands::WorkflowReset => handle_workflow_reset()?,
         Commands::WorkflowResume => handle_workflow_resume()?,
         Commands::CrossCheck => handle_cross_check(&ctx).await?,
+        Commands::ChangelogDraft => changelog::write_draft_into_unreleased()
+            .context("Failed to draft CHANGELOG [Unreleased] from commits")?,
     }
 
     Ok(())

@@ -329,10 +329,17 @@ mod windows_impl {
         }
 
         match spinner_while("Running winget upgrade", || run_winget_upgrade(root.scope)) {
-            Ok(()) => println!("\u{2713} winget package updated to {latest}."),
+            Ok(WingetUpgrade::Updated) => println!("\u{2713} winget package updated to {latest}."),
+            Ok(WingetUpgrade::NotAvailableYet) => println!(
+                "note: WinGet doesn't have {latest} yet — a new release's package manifest\n\
+                 \x20  usually publishes shortly after the GitHub release. Your install is\n\
+                 \x20  updated; the winget-managed copy catches up on the next `uffs --update`\n\
+                 \x20  once it's live (or `winget upgrade {WINGET_PACKAGE_ID}` then)."
+            ),
             Err(err) => println!(
                 "\u{26a0} winget upgrade did not complete ({err:#}).\n\
-                 \x20  Re-run `uffs --update`, or `winget upgrade {WINGET_PACKAGE_ID}` directly."
+                 \x20  Often this is just the new manifest not being on WinGet yet — re-run\n\
+                 \x20  `uffs --update` in a bit, or `winget upgrade {WINGET_PACKAGE_ID}` directly."
             ),
         }
         Ok(UpgradeOutcome::Ran)
@@ -616,8 +623,32 @@ mod windows_impl {
         Ok(())
     }
 
-    /// Run `winget upgrade` for the package, scope-aware, silent.
-    fn run_winget_upgrade(scope: Scope) -> Result<()> {
+    /// winget's "no applicable upgrade found" exit code. Returned when the
+    /// installed version already matches the catalog's newest — the common case
+    /// right after a release, before the new version's manifest has published
+    /// to `WinGet`. It is a benign "nothing newer yet", not a real failure,
+    /// so it is narrated as a note. (Value observed from a live `uffs
+    /// --update` run whose target release was not yet on `WinGet`.)
+    const WINGET_NO_APPLICABLE_UPGRADE: i32 = 0x8A15_002B_u32.cast_signed();
+
+    /// The outcome of a `winget upgrade` worth distinguishing to the user.
+    enum WingetUpgrade {
+        /// The winget package was upgraded.
+        Updated,
+        /// `WinGet` had no newer version to install (typically the new
+        /// release's manifest has not published yet).
+        NotAvailableYet,
+    }
+
+    /// Whether `code` is winget's benign "no applicable upgrade" exit code.
+    const fn is_no_applicable_upgrade(code: Option<i32>) -> bool {
+        matches!(code, Some(WINGET_NO_APPLICABLE_UPGRADE))
+    }
+
+    /// Run `winget upgrade` for the package, scope-aware, silent. Distinguishes
+    /// a real failure from "`WinGet` has nothing newer yet" (the publish-lag
+    /// case).
+    fn run_winget_upgrade(scope: Scope) -> Result<WingetUpgrade> {
         let mut command = Command::new("winget");
         command.args([
             "upgrade",
@@ -641,10 +672,12 @@ mod windows_impl {
             .status()
             .context("spawning winget upgrade")?;
         if status.success() {
-            Ok(())
-        } else {
-            bail!("winget upgrade exited with {status}")
+            return Ok(WingetUpgrade::Updated);
         }
+        if is_no_applicable_upgrade(status.code()) {
+            return Ok(WingetUpgrade::NotAvailableYet);
+        }
+        bail!("winget upgrade exited with {status}")
     }
 
     /// Defer the upgrade past process exit (the running uffs.exe is part of the
@@ -674,5 +707,18 @@ mod windows_impl {
             .spawn()
             .context("scheduling the deferred winget upgrade")?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{WINGET_NO_APPLICABLE_UPGRADE, is_no_applicable_upgrade};
+
+        #[test]
+        fn classifies_the_no_applicable_upgrade_code() {
+            assert!(is_no_applicable_upgrade(Some(WINGET_NO_APPLICABLE_UPGRADE)));
+            assert!(!is_no_applicable_upgrade(Some(0_i32)));
+            assert!(!is_no_applicable_upgrade(Some(1_i32)));
+            assert!(!is_no_applicable_upgrade(None));
+        }
     }
 }

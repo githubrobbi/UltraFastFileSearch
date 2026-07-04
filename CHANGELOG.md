@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — calmer message when WinGet doesn't have the new version yet
+
+Right after a release, the WinGet package manifest publishes a little later than
+the GitHub release, so `uffs --update`'s winget step would print a scary
+`winget upgrade did not complete (0x8a15002b)`. That exit code just means "no
+newer version available yet." It is now recognised and narrated as a plain note
+("WinGet doesn't have vX.Y.Z yet — the winget copy catches up on the next
+`uffs --update`"), and any genuine winget failure still explains the likely
+publish-lag cause rather than only showing a raw code.
+
 ### Fixed — self-update now sees a dormant WinGet install
 
 `uffs --update` finds a WinGet-managed install even when nothing is running from

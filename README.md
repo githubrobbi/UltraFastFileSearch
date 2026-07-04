@@ -122,6 +122,8 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 | **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle + `uffs-tui` demo. |
 | **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh` + `uffs-tui` demo. |
 
+> 🧭 **Which platform does what.** UFFS **indexes and searches live filesystems on Windows only** — it reads the NTFS MFT directly. The **macOS and Linux** builds are for **offline MFT analysis**: inspecting `$MFT` captures pulled from NTFS volumes (a disk image, or a drive attached read-only). They do **not** index or search the macOS/Linux host filesystem.
+
 > 📦 **Three tiers per platform** — `…-min.zip` (just `uffs` + `uffsd` + the `uffs-tui` demo, for CI/scripting), the bare `….zip` (**recommended**: adds MCP + MFT tooling + docs), and `…-full.zip` (adds the `uffs-diag` diagnostic tools). Every tier bundles the free `uffs-tui` demo.
 
 > 🖥️ **Fastest way to try it — no CLI required.** Unzip any tier and run **`uffs-tui`**: the daemon auto-starts and you're browsing your own drives in a UI within seconds. The bundled TUI is the free demo (capped result counts, exports disabled — see `DEMO-LICENSE.txt`); full TUI/GUI are commercial.
@@ -134,6 +136,14 @@ winget install SkyLLC.UFFS
 ```
 
 > ⚠️ **Open a new terminal after installing** — WinGet updates `PATH`, but an already-open shell won't see `uffs` until you start a fresh one.
+
+**Get searching in 3 steps (Windows):**
+
+1. **Install** — `winget install SkyLLC.UFFS`, then open a new terminal.
+2. **Remove UAC once** *(recommended)* — from an **elevated** shell, `uffs-broker --install`. This one-time step registers the Access Broker so every later search runs with no UAC prompt. Skip it and the first search just offers a single `--elevate` prompt instead.
+3. **Search** — `uffs "*.rs"`. The daemon auto-starts, indexes your NTFS drives, and answers subsequent queries in milliseconds.
+
+Later: `uffs --update` to upgrade, `uffs --uninstall` to remove everything.
 
 Or grab the ZIP above, extract it anywhere, add the folder to PATH, then (in a new terminal):
 ```powershell
@@ -191,6 +201,29 @@ uffs --update apply --version v0.6.5    # pin / roll back to a specific release
 > `uffs --daemon stop` + `uffs-broker --stop`.)
 
 > 📖 **[Full update guide](docs/user-manual/updating.md)** — every action, version pinning/rollback, the health check, and edge cases.
+
+---
+
+## Uninstalling
+
+One command removes UFFS completely — binaries, data, cache, config, and (on Windows) the Access Broker service:
+
+```bash
+uffs --uninstall
+```
+
+It shows you exactly what will go before removing anything, then asks for a single confirmation:
+
+- **Finds every copy** — scans `PATH` and the standard binary directories, and on Windows runs a deep MFT-driven sweep for stray copies anywhere on your drives. Each is listed with its version and location.
+- **CORE vs ALL** — **CORE** removes the standard install (the running copy, data, cache, config, broker service); **ALL** additionally removes the stray copies the sweep found elsewhere (one of which might be a build you placed yourself — so it's opt-in).
+- **Elevation only when needed** — the only elevated step is removing the `LocalSystem` broker service, so uninstall asks for **one** UAC prompt just for that, and continues cleanly if you decline (leaving the broker in place with a note).
+- **Self-removing** — the `uffs` binary deletes itself last, as the process exits.
+
+```bash
+uffs --uninstall --dry-run   # show the full plan, remove nothing
+```
+
+> **WinGet installs:** run `uffs --uninstall` rather than `winget uninstall SkyLLC.UFFS`. The bare WinGet uninstall can fail with `remove_all: Access is denied` because the running broker service holds its binary open; `uffs --uninstall` stops the service first, then removes it.
 
 ---
 

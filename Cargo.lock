@@ -4390,6 +4390,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4402,6 +4403,7 @@ dependencies = [
  "tracing-subscriber",
  "uffs-broker-protocol",
  "uffs-security",
+ "uffs-version",
  "uffs-winsvc",
  "windows 0.62.2",
  "winresource",
@@ -4428,6 +4430,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uffs-version",
  "uuid",
  "winresource",
 ]
@@ -4447,6 +4450,7 @@ dependencies = [
  "uffs-format",
  "uffs-mft",
  "uffs-time",
+ "uffs-version",
  "uffs-winsvc",
  "which",
  "winresource",
@@ -4531,6 +4535,7 @@ dependencies = [
  "uffs-format",
  "uffs-mft",
  "uffs-security",
+ "uffs-version",
  "windows 0.62.2",
  "winresource",
 ]
@@ -4546,6 +4551,7 @@ dependencies = [
  "sha2 0.11.0",
  "uffs-mft",
  "uffs-polars",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4568,6 +4574,7 @@ dependencies = [
  "clap",
  "serde",
  "toml",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4580,6 +4587,7 @@ dependencies = [
  "regex",
  "serde",
  "toml",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4591,6 +4599,7 @@ dependencies = [
  "clap",
  "serde",
  "toml",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4614,6 +4623,7 @@ dependencies = [
  "uffs-client",
  "uffs-mft",
  "uffs-security",
+ "uffs-version",
  "winresource",
 ]
 
@@ -4651,6 +4661,7 @@ dependencies = [
  "uffs-polars",
  "uffs-security",
  "uffs-text",
+ "uffs-version",
  "windows 0.62.2",
  "winresource",
  "zerocopy",
@@ -4703,10 +4714,15 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "uffs-broker-protocol",
+ "uffs-version",
  "uffs-winsvc",
  "windows 0.62.2",
  "winresource",
 ]
+
+[[package]]
+name = "uffs-version"
+version = "0.6.23"
 
 [[package]]
 name = "uffs-winsvc"

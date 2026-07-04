@@ -166,6 +166,7 @@ fn extract_ads_name(path: &str) -> Option<&str> {
 ///
 /// Returns an error if input files cannot be read or parsed.
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-analyze-diff");
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!("Usage: uffs-analyze-diff <reference.txt> <rust.txt>");

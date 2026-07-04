@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — consistent `--version` across every UFFS binary
+
+All 22 shipped and dev binaries now print the same `--version`: a short line
+`<name>[.exe] <semver> (<sha>)` (with `-dirty` on an uncommitted tree), and a
+multi-line build fingerprint with `--version --verbose` / `-v` (commit + date,
+rustc, target triple, release profile) for bug reports. On Windows the name
+carries its real `.exe` suffix (`uffsd.exe 0.6.23 (…)`). Previously only `uffs`
+showed the build sha; the others were plainer and slightly inconsistent (e.g.
+`uffsmcp` printed `uffs-mcp v…`). Backed by a new zero-dependency `uffs-version`
+leaf crate (macros + a `build.rs` metadata stamp), so it can never drift again.
+
 ## [0.6.23] - 2026-07-04
 
 ### Fixed — calmer message when WinGet doesn't have the new version yet

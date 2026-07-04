@@ -52,6 +52,11 @@
 // paths.
 extern crate alloc;
 
+// Linked for this crate's `uffs-bench` binary, which calls
+// `uffs_version::handle_version!` in `main`; the library itself does not
+// reference it (sanctioned unused-crate-dependencies marker).
+use uffs_version as _;
+
 pub mod baseline;
 pub mod bundle;
 pub mod cards;

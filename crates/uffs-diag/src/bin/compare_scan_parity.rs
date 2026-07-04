@@ -543,6 +543,7 @@ fn compare_dataframes(
 // ============================================================================
 
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-compare-scan-parity");
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {

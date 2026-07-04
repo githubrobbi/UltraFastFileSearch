@@ -47,6 +47,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [dependencies]
+uffs-version.workspace = true
 # Error handling for the crate-level error type.
 thiserror.workspace = true
 
@@ -77,6 +78,7 @@ tempfile.workspace = true
 # Embeds the UFFS icon + version info + shared app.manifest into `uffs-bench.exe`
 # (see build.rs) for branding consistency.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

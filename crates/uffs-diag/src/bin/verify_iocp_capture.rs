@@ -60,6 +60,7 @@ const HASH_CHUNK_SIZE: usize = 256 * 1024 * 1024;
 const BYTES_TO_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-verify-iocp-capture");
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
         eprintln!("Usage: {} <iocp_file.iocp> <reference.raw|.bin>", args[0]);

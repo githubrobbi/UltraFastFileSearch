@@ -62,6 +62,7 @@ name = "uffs-mft"
 path = "src/main.rs"
 
 [dependencies]
+uffs-version.workspace = true
 # Internal
 uffs-polars.workspace = true
 uffs-text.workspace = true
@@ -135,6 +136,7 @@ harness = false
 # (see build.rs). A metadata-less binary is both unbranded and a mild antivirus
 # false-positive signal. Only affects the bin target; the library is unchanged.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

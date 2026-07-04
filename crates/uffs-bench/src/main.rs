@@ -33,6 +33,7 @@ use uffs_bench::{Cli, Result, run};
 /// load/save, or a Stage 0 artifact write. An operator abort/back is a graceful
 /// stop, not an error.
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-bench");
     let cli = Cli::parse();
     let host = SystemHost::new();
     run(&host, &cli)

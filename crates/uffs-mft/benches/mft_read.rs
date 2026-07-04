@@ -16,6 +16,8 @@
 
 // Suppress unused crate warnings for dependencies used by the main crate
 // but not directly by the benchmark binary.
+// Linked via the crate's `[dependencies]` (its binaries call
+// `uffs_version::handle_version!`); this target does not reference it.
 use anyhow as _;
 use bitflags as _;
 use bytemuck as _;
@@ -54,6 +56,7 @@ use uffs_mft as _;
 use uffs_polars as _;
 use uffs_security as _;
 use uffs_text as _;
+use uffs_version as _;
 // `windows` is linked via the `[target.'cfg(windows)'.dependencies]` section
 // of `uffs-mft`'s Cargo.toml.  The benchmark's Windows body only reaches the
 // crate transitively (through `uffs_mft::AlignedBuffer` / `ParsedColumns`),

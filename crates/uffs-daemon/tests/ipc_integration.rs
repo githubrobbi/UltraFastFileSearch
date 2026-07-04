@@ -21,6 +21,8 @@
 // dependencies` quiet on Windows, where the inner `unix_tests` module
 // is compiled out entirely.
 // ─────────────────────────────────────────────────────────────────────
+// Linked via the crate's `[dependencies]` (its binaries call
+// `uffs_version::handle_version!`); this target does not reference it.
 use anyhow as _;
 use clap as _;
 use dirs_next as _;
@@ -54,6 +56,7 @@ use uffs_daemon as _;
 use uffs_format as _;
 use uffs_mft as _;
 use uffs_security as _;
+use uffs_version as _;
 #[cfg(windows)]
 use windows as _;
 

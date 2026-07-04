@@ -21,6 +21,7 @@
 //! unaffected either way).
 
 fn main() {
+    uffs_version::emit_build_env();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/brand/icons/uffs.ico");
     println!("cargo:rerun-if-changed=../../assets/brand/app.manifest");

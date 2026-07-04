@@ -124,6 +124,7 @@ path = "src/bin/verify_iocp_capture.rs"
 # Dependencies (minimal set for diagnostic tools)
 # ─────────────────────────────────────────────────────────────────────────────
 [dependencies]
+uffs-version.workspace = true
 # Error handling (used by all binaries)
 anyhow.workspace = true
 
@@ -147,6 +148,7 @@ uffs-polars.workspace = true
 # Embeds the UFFS icon + version info + shared app.manifest into the diagnostic
 # binaries (see build.rs) for branding consistency.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

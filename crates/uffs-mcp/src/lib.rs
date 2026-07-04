@@ -79,7 +79,11 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // `clap` is used by the `uffsmcp` binary, not this library crate.
+// Linked for this crate's binary target(s), which call
+// `uffs_version::handle_version!` in `main`; the library itself does not
+// reference it (sanctioned unused-crate-dependencies marker).
 use clap as _;
+use uffs_version as _;
 
 // ── MCP tracing initialisation ────────────────────────────────────────
 

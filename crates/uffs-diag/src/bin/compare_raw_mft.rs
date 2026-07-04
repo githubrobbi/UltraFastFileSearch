@@ -120,6 +120,7 @@ fn read_header<P: AsRef<Path>>(path: P) -> Result<(RawMftHeader, BufReader<File>
               compare-loop → report pipeline; splitting would scatter the linear flow"
 )]
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-compare-raw-mft");
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
         eprintln!("Usage: uffs-compare-raw-mft <file_a> <file_b>");

@@ -44,6 +44,7 @@ use anyhow::{Context as _, Result};
 use uffs_mft::{MftExtent, VolumeHandle};
 
 fn main() -> std::process::ExitCode {
+    uffs_version::handle_version!("uffs-dump-mft-extents");
     #[cfg(windows)]
     {
         if let Err(error) = real_main() {

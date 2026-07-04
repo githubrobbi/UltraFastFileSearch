@@ -110,6 +110,9 @@ dirs-next.workspace = true
 # filetime_with_tz_bias}` for timestamp formatting.
 uffs-time.workspace = true
 
+# Shared `--version` strings (short + long build fingerprint). Zero-dep leaf.
+uffs-version.workspace = true
+
 # Broker identity (`SERVICE_NAME` / `PIPE_NAME`) + native SCM status so
 # `uffs --status` can report the Access Broker. Both Layer-0 leaves:
 # broker-protocol is pure; uffs-winsvc stubs to "not installed" off Windows.
@@ -154,6 +157,8 @@ workspace = true
 # Version is pinned at workspace scope — see root Cargo.toml.
 [build-dependencies]
 winresource.workspace = true
+# Stamps UFFS_GIT_SHA + build metadata for the version macros (build side only).
+uffs-version = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
 assert_cmd.workspace = true

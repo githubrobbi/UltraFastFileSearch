@@ -215,6 +215,7 @@ fn handle_workflow_resume() -> Result<()> {
 /// match.
 #[tokio::main]
 async fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-ci-pipeline");
     let cli = Cli::parse();
     let validation_command = matches!(
         cli.command,

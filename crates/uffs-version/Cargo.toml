@@ -1,0 +1,41 @@
+# ============================================================================
+# uffs-version: shared `--version` strings for every UFFS binary
+# ============================================================================
+# Layer 0 leaf crate. Zero external dependencies.
+#
+# Gives every UFFS executable an identical `--version`: a short one-liner by
+# default (`<name>[.exe] <semver> (<sha>)`) and a multi-line build fingerprint
+# with `--version --verbose` / `-v`. The strings are produced by the
+# `version_short!` / `version_long!` macros (they expand in the calling crate,
+# so each binary reports its own version + build sha). The `build` feature
+# exposes `emit_build_env`, called from each binary's `build.rs` to stamp the
+# git sha + build metadata the macros read.
+# ============================================================================
+
+[package]
+name = "uffs-version"
+description = "Consistent short/long --version strings + build-metadata stamping for UFFS binaries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Internal foundation crate — inherits the workspace `publish = false` default.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+# Enables `emit_build_env` (git/rustc/target/profile stamping). Binaries turn
+# it on only in `[build-dependencies]`, so the shipped binary never compiles it.
+build = []
+
+[dependencies]
+
+[lints]
+workspace = true

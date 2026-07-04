@@ -151,6 +151,7 @@ fn ctrl_c_listener_error(operation: &'static str, error: &std::io::Error) -> uff
     reason = "intentional user-facing error output in main"
 )]
 async fn main() {
+    uffs_version::handle_version!("uffs-mft");
     let verbose = std::env::args().any(|arg| arg == "-v" || arg == "--verbose");
     let _guard = logging::init_logging(verbose);
 

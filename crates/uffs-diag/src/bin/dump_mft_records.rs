@@ -149,6 +149,7 @@ fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHead
 }
 
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-dump-mft-records");
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(

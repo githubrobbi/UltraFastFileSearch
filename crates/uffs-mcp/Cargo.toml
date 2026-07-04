@@ -93,6 +93,7 @@ streamable-http = [
 ]
 
 [dependencies]
+uffs-version.workspace = true
 # Internal
 uffs-client.workspace = true
 # Typed drive-letter newtype.  Direct dep so the MCP roots / schema
@@ -139,6 +140,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # (see build.rs). A metadata-less binary is both unbranded and a mild antivirus
 # false-positive signal.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

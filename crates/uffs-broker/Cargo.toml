@@ -41,6 +41,12 @@ default-target = "x86_64-pc-windows-msvc"
 name = "uffs-broker"
 path = "src/main.rs"
 
+# Cross-platform deps: `main.rs` calls `uffs_version::handle_version!` on every
+# platform (so `uffs-broker --version` works and the self-update probe parses
+# it), so this is used on Linux/macOS too — not a visible-but-unused marker.
+[dependencies]
+uffs-version.workspace = true
+
 # Windows-only deps: the elevated handle-broker logic in `broker.rs` is
 # fully `#[cfg(windows)]`, so its supporting crates compile only on the
 # Windows target.  Scoped to `[target.'cfg(windows)'.dependencies]` so
@@ -74,6 +80,7 @@ uffs-winsvc.workspace = true
 # `uffs-broker.exe` (see build.rs). A metadata-less binary is both unbranded
 # and a mild antivirus false-positive signal.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

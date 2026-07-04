@@ -31,6 +31,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [dependencies]
+uffs-version.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -62,6 +63,7 @@ libc = "0.2"
 # Embed `app.manifest` (asInvoker) into uffs-update.exe on Windows MSVC so the
 # "update" name doesn't trip Installer Detection → forced UAC (os error 740).
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

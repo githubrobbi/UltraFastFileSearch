@@ -118,6 +118,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    uffs_version::handle_version!("uffsd");
     let cli = Cli::parse();
 
     // Initialize tracing (standalone binary owns the subscriber).

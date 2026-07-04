@@ -118,6 +118,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
+    uffs_version::handle_version!("uffs-gen-workflow");
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

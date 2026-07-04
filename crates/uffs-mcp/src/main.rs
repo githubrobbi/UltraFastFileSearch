@@ -116,6 +116,7 @@ enum Action {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    uffs_version::handle_version!("uffsmcp");
     let cli = Cli::parse();
 
     match cli.action {

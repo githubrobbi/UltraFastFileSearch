@@ -518,18 +518,17 @@ pub(crate) fn print_help() {
     print!("{HELP}");
 }
 
-/// Print version and exit. Includes the build's short git commit (stamped by
-/// `build.rs` into `UFFS_GIT_SHA`, with `-dirty` for an uncommitted tree) so a
-/// running binary can be tied to the exact source it was built from — match it
-/// against `git rev-parse --short HEAD` to confirm you are not on a stale
-/// build.
+/// Print version and exit. The short line ties a running binary to the exact
+/// source (`<name>[.exe] <semver> (<sha>)`, `-dirty` for an uncommitted tree);
+/// `verbose` adds the multi-line build fingerprint (commit date, rustc, target,
+/// profile) for bug reports. Shared with every UFFS binary via `uffs-version`.
 #[expect(clippy::print_stdout, reason = "intentional version output")]
-pub(crate) fn print_version() {
-    println!(
-        "uffs {} ({})",
-        env!("CARGO_PKG_VERSION"),
-        option_env!("UFFS_GIT_SHA").unwrap_or("unknown")
-    );
+pub(crate) fn print_version(verbose: bool) {
+    if verbose {
+        println!("{}", uffs_version::version_long!("uffs"));
+    } else {
+        println!("{}", uffs_version::version_short!("uffs"));
+    }
 }
 
 // ── Subcommand help texts ─────────────────────────────────────────────

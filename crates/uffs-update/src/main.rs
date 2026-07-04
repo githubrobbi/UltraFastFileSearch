@@ -58,7 +58,11 @@ fn run() -> Result<()> {
         Some("doctor") => run_doctor(args.get(1..).unwrap_or_default()),
         Some("check") => run_check(args.get(1..).unwrap_or_default()),
         Some("--version" | "-V") => {
-            print_version();
+            let verbose = args
+                .iter()
+                .skip(1)
+                .any(|arg| arg == "--verbose" || arg == "-v");
+            print_version(verbose);
             Ok(())
         }
         Some("--help" | "-h") | None => {
@@ -274,8 +278,12 @@ fn run_check(args: &[String]) -> Result<()> {
 
 /// Print the helper version.
 #[expect(clippy::print_stdout, reason = "intentional version output")]
-fn print_version() {
-    println!("uffs-update {}", env!("CARGO_PKG_VERSION"));
+fn print_version(verbose: bool) {
+    if verbose {
+        println!("{}", uffs_version::version_long!("uffs-update"));
+    } else {
+        println!("{}", uffs_version::version_short!("uffs-update"));
+    }
 }
 
 /// Parse the `acquire` flags and download + verify the installed-subset

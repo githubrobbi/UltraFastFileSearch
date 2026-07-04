@@ -108,6 +108,7 @@ struct Args {
 /// emit failure surfaces as exit code `2` (schema error class)
 /// with the underlying error chain on stderr.
 fn main() -> ExitCode {
+    uffs_version::handle_version!("uffs-gen-hooks");
     let args = Args::parse();
     match run(&args) {
         Ok(code) => code,

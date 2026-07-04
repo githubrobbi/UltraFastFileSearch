@@ -49,16 +49,9 @@ mod broker;
 fn main() {
     // `--version` / `-V` is handled here, before the Windows service dispatch,
     // so it works on every platform and exits 0. The self-update version probe
-    // runs `<bin> --version` and parses the output; without this arm the broker
-    // fell through to its usage text and the probe reported the broker as `?`
-    // (every other UFFS binary prints a version, so it was the odd one out).
-    if std::env::args()
-        .skip(1)
-        .any(|arg| arg == "--version" || arg == "-V")
-    {
-        print_version();
-        return;
-    }
+    // runs `<bin> --version` and parses the output; without this the broker
+    // fell through to its usage text and the probe reported the broker as `?`.
+    uffs_version::handle_version!("uffs-broker");
 
     #[cfg(windows)]
     {
@@ -75,11 +68,4 @@ fn main() {
         eprintln!("uffs-broker is a Windows-only component.");
         std::process::exit(1);
     }
-}
-
-/// Print `uffs-broker <version>` to stdout, matching the `uffs <version>`
-/// shape the other binaries use so the self-update version probe parses it.
-#[expect(clippy::print_stdout, reason = "intentional version output")]
-fn print_version() {
-    println!("uffs-broker {}", env!("CARGO_PKG_VERSION"));
 }

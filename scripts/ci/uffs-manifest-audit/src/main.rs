@@ -80,6 +80,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
+    uffs_version::handle_version!("uffs-manifest-audit");
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

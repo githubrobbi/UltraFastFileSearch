@@ -155,6 +155,9 @@ extern crate alloc;
 // Binary dependencies (used by src/main.rs only, or by #[cfg(windows)]
 // modules). Listed here to prevent unused_crate_dependencies false positives on
 // non-Windows.
+// Linked for this crate's binary target(s), which call
+// `uffs_version::handle_version!` in `main`; the library itself does not
+// reference it (sanctioned unused-crate-dependencies marker).
 use anyhow as _;
 // ============================================================================
 // Suppress unused crate warnings
@@ -205,6 +208,7 @@ use tracing_subscriber as _;
 #[cfg(not(windows))]
 use uffs_polars as _;
 use uffs_text as _;
+use uffs_version as _;
 #[cfg(windows)]
 use windows as _;
 

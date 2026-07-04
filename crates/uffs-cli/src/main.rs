@@ -69,7 +69,11 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some("--version" | "-V") => {
-            args::print_version();
+            let verbose = raw_args
+                .iter()
+                .skip(2)
+                .any(|arg| arg == "--verbose" || arg == "-v");
+            args::print_version(verbose);
             return Ok(());
         }
         _ => {}

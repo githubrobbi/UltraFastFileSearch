@@ -61,6 +61,7 @@ path = "src/main.rs"
 # different major versions of the same crate.
 
 [dependencies]
+uffs-version.workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -88,6 +89,7 @@ tokio = { workspace = true, features = ["process"] }
 # Embeds the UFFS icon + version info + shared app.manifest into
 # `uffs-ci-pipeline.exe` (see build.rs) for branding consistency.
 [build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
 winresource.workspace = true
 
 [lints]

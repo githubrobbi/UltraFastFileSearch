@@ -151,6 +151,7 @@ fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHead
 }
 
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-inspect-mft-record-flow");
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!("Usage: uffs-inspect-mft-record-flow <mft.raw> <frs1> [frs2 frs3 ...]");

@@ -26,38 +26,14 @@
 //!    binary carries proper metadata instead of shipping bare — a bare binary
 //!    is both unbranded and a mild antivirus false-positive signal.
 
-use std::process::Command;
-
 fn main() {
     embed_windows_resources();
 
-    let sha = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|raw| raw.trim().to_owned())
-        .filter(|trimmed| !trimmed.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned());
-
-    // Append `-dirty` when the working tree has uncommitted changes, so a
-    // hand-tweaked local build is never mistaken for the clean commit.
-    let dirty = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .is_some_and(|out| !out.stdout.is_empty());
-
-    let stamp = if dirty { format!("{sha}-dirty") } else { sha };
-    println!("cargo:rustc-env=UFFS_GIT_SHA={stamp}");
-
-    // Re-run when HEAD moves so the stamp tracks the checked-out commit.
-    // Best-effort relative path from the crate dir to the repo `.git`; a wrong
-    // path just means the stamp can lag one commit on an exotic layout, which
-    // is acceptable for a dev-only marker.
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    // Stamp UFFS_GIT_SHA + build metadata (commit date, rustc, target, profile)
+    // for the shared `uffs-version` macros — the same stamp every UFFS binary
+    // uses. `startup.rs` still reads `option_env!("UFFS_GIT_SHA")` for its log
+    // prelude; `--version` / `--version -v` read the full set.
+    uffs_version::emit_build_env();
     println!("cargo:rerun-if-changed=build.rs");
 }
 

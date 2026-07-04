@@ -119,6 +119,21 @@ mod tests {
     }
 
     #[test]
+    fn version_short_form_carries_the_build_sha() {
+        // `uffs[.exe] <semver> (<sha>)` — the parenthesised build sha ties a
+        // running binary to its exact source (shared shape across all binaries).
+        assert_success("version_sha", &["--version"], &["uffs", "("]);
+    }
+
+    #[test]
+    fn version_verbose_prints_the_build_fingerprint() {
+        // `--version -v` → the multi-line build fingerprint for bug reports.
+        assert_success("version_verbose", &["--version", "-v"], &[
+            "commit:", "rustc:", "target:", "profile:",
+        ]);
+    }
+
+    #[test]
     fn other_single_dash_token_is_a_pattern_not_help() {
         // `-x` must NOT print help/version — it is a search pattern, so with
         // no daemon it fails trying to connect (it never exits 0 with help).

@@ -42,6 +42,7 @@ use uffs_polars::{
 };
 
 fn main() -> Result<()> {
+    uffs_version::handle_version!("uffs-cross-check-mft-reference");
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
         let program = args

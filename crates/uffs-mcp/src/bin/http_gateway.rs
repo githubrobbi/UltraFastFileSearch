@@ -117,6 +117,7 @@ impl Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    uffs_version::handle_version!("uffs-mcp-http");
     // Initialise tracing to stderr (stdout is NOT used by HTTP mode,
     // but keeping the convention consistent with the stdio binary).
     tracing_subscriber::fmt()

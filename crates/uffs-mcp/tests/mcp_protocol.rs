@@ -22,6 +22,8 @@
 )]
 
 // Acknowledge crates used by the lib/bin but not this test target.
+// Linked via the crate's `[dependencies]` (its binaries call
+// `uffs_version::handle_version!`); this target does not reference it.
 use anyhow as _;
 #[cfg(feature = "streamable-http")]
 use axum as _;
@@ -39,6 +41,7 @@ use uffs_client as _;
 use uffs_mcp::handler::UffsMcpServer;
 use uffs_mft as _;
 use uffs_security as _;
+use uffs_version as _;
 
 /// Spin up an in-process MCP server + client pair over a duplex channel.
 ///

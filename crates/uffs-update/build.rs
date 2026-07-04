@@ -25,6 +25,7 @@
 //! Inert on non-Windows / non-MSVC targets (the helper ships windows-msvc).
 
 fn main() {
+    uffs_version::emit_build_env();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=../../assets/brand/icons/uffs.ico");

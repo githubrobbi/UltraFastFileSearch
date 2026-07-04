@@ -131,6 +131,12 @@ impl IndexManager {
                 (Some(mem.rss_bytes), mem.mimalloc_committed_bytes)
             });
 
+        // Broker-adoption mode: reading via adopted broker handles (zero-UAC)
+        // vs the daemon's own elevated handles. `is_elevated()` is `false` off
+        // Windows; the handle count is `0` there, so both read as "direct".
+        let elevated = uffs_mft::is_elevated();
+        let reading_via_broker = uffs_mft::registered_broker_handle_count() > 0;
+
         StatusResponse {
             status: status_snapshot,
             uptime_secs: self.start_time.elapsed().as_secs(),
@@ -141,6 +147,11 @@ impl IndexManager {
             index_heap_bytes: Some(total_index_heap),
             mimalloc_committed_bytes,
             drive_memory,
+            git_sha: option_env!("UFFS_GIT_SHA").unwrap_or("unknown").to_owned(),
+            elevated,
+            reading_via_broker,
+            live_update: crate::live_update::snapshot(),
+            paths: Some(crate::live_update::daemon_paths()),
         }
     }
 

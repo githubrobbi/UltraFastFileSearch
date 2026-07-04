@@ -313,6 +313,7 @@ pub use platform::current_euid;
 // Unix: geteuid() == 0).  Exported unconditionally so uffs-cli and
 // uffs-daemon can gate mutating daemon commands on all targets.
 pub use platform::is_elevated;
+pub use platform::registered_broker_handle_count;
 // Re-export platform types
 // Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms
 // Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on

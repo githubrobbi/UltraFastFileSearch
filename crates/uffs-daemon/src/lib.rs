@@ -110,6 +110,8 @@ mod index;
 mod ipc;
 /// Lifecycle manager — PID file, idle timer, shutdown coordination.
 mod lifecycle;
+/// `--status` observability signals (live-update loop count, daemon paths).
+mod live_update;
 /// JSON-RPC protocol types.
 mod protocol;
 /// Phase 2b memory-tiering: runtime-tempfile orphan cleanup at boot.
@@ -589,6 +591,7 @@ async fn spawn_journal_loops_for_warm_shards(
         save_threshold_age_secs = config.save_threshold_age.as_secs(),
         "Spawning per-shard journal loops",
     );
+    let loop_count = letters.len();
     for letter in letters {
         let source: Arc<dyn JournalSource> = make_journal_source(letter);
         let handle = spawn_journal_loop(
@@ -600,6 +603,9 @@ async fn spawn_journal_loops_for_warm_shards(
         );
         idx.attach_journal_handle(letter, handle);
     }
+    // Record live-update liveness once, here — so `--status` can report "N
+    // loops running" without any per-patch bookkeeping on the apply hot path.
+    live_update::set_active_loops(loop_count);
 
     applier_handle
 }

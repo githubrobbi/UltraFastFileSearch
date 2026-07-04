@@ -12,8 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 pub use super::response_status::{
-    DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, ShardTier, StatsResponse,
-    StatusResponse,
+    DaemonPaths, DaemonStatus, DriveInfo, DriveMemoryInfo, DrivesResponse, LiveUpdateInfo,
+    ShardTier, StatsResponse, StatusResponse,
 };
 pub use super::response_tiering::{
     DEFAULT_PRELOAD_PIN_MINUTES, DriveTierStatus, ForgetParams, ForgetResponse, HibernateParams,

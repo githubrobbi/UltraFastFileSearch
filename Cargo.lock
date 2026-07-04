@@ -4691,6 +4691,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "uffs-statusfmt"
+version = "0.6.23"
+
+[[package]]
 name = "uffs-text"
 version = "0.6.23"
 dependencies = [

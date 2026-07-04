@@ -1,0 +1,33 @@
+# ============================================================================
+# uffs-statusfmt: shared operator-status styling for UFFS
+# ============================================================================
+# Layer 0 leaf crate. Zero external dependencies.
+#
+# One visual language for every `--status` / status surface (daemon, broker,
+# combined, MCP): TTY- and NO_COLOR-aware color, health glyphs, aligned
+# `key: value` fields, and section headers. Keeps the human output consistent
+# and scannable; the machine-readable `--json` form is modelled by each caller.
+# ============================================================================
+
+[package]
+name = "uffs-statusfmt"
+description = "Shared operator-status styling (color, glyphs, aligned fields) for UFFS --status surfaces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Internal foundation crate — inherits the workspace `publish = false` default.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+
+[lints]
+workspace = true

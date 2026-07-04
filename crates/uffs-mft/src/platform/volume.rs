@@ -79,6 +79,20 @@ pub fn register_broker_handle(drive: super::DriveLetter, raw_handle: u64) {
     }
 }
 
+/// Number of Access Broker volume handles currently registered.
+///
+/// The drives the daemon reads through an adopted broker handle (the zero-UAC
+/// path) rather than its own elevated handle — lets `--status` report the
+/// broker-adoption mode. Off Windows there is no broker, so this is always `0`.
+#[cfg(windows)]
+#[must_use]
+pub fn registered_broker_handle_count() -> usize {
+    BROKER_HANDLES
+        .get()
+        .and_then(|map| map.lock().ok())
+        .map_or(0, |guard| guard.len())
+}
+
 /// Read (without removing) the registered broker handle for `drive`, if any.
 ///
 /// The entry is intentionally retained for the daemon's lifetime: every

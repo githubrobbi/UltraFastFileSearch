@@ -25,6 +25,7 @@ members = [
   "crates/uffs-text",            # 📝 Unicode text processing, i18n foundation
   "crates/uffs-time",            # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
   "crates/uffs-version",         # 🏷️ Shared --version strings + build-metadata stamp (leaf)
+  "crates/uffs-statusfmt",       # 🎨 Shared operator-status styling (color, glyphs, fields) (leaf)
   "crates/uffs-broker-protocol", # 📟 Cross-platform broker wire-protocol types (F5)
   "crates/uffs-winsvc",          # 🪟 Native Windows service control + broker-pipe probe (leaf)
   "crates/uffs-mft",             # 📦 MFT reading → Polars DataFrame
@@ -132,6 +133,7 @@ uffs-security = { path = "crates/uffs-security", version = "0.6.23" }
 uffs-text = { path = "crates/uffs-text", version = "0.6.23" }
 uffs-time = { path = "crates/uffs-time", version = "0.6.23" }
 uffs-version = { path = "crates/uffs-version", version = "0.6.23" }
+uffs-statusfmt = { path = "crates/uffs-statusfmt", version = "0.6.23" }
 uffs-mft = { path = "crates/uffs-mft", version = "0.6.23" }
 uffs-format = { path = "crates/uffs-format", version = "0.6.23" }
 uffs-core = { path = "crates/uffs-core", version = "0.6.23" }

@@ -115,6 +115,60 @@ pub struct StatusResponse {
     /// Per-drive memory breakdown (drive letter → heap bytes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drive_memory: Vec<DriveMemoryInfo>,
+    /// Short git commit the running daemon was built from (`UFFS_GIT_SHA`,
+    /// `-dirty` for a modified tree). Lets an operator confirm a rebuilt binary
+    /// actually took effect — the semver alone can't distinguish two builds of
+    /// the same version. `""`/`"unknown"` on daemons that predate this field.
+    #[serde(default)]
+    pub git_sha: String,
+    /// Whether the daemon process is elevated (Administrator). When `false` the
+    /// daemon reads the live MFT through the Access Broker's duplicated handle;
+    /// see [`Self::reading_via_broker`].
+    #[serde(default)]
+    pub elevated: bool,
+    /// Whether the daemon is reading the live MFT via **adopted Access Broker
+    /// handles** (the zero-UAC path) rather than its own elevated handles.
+    /// Always `false` off Windows / for offline-MFT sources.
+    #[serde(default)]
+    pub reading_via_broker: bool,
+    /// Live-update (USN journal) state — how many per-shard journal loops are
+    /// running. Absent on daemons that predate this field or platforms without
+    /// live update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_update: Option<LiveUpdateInfo>,
+    /// Filesystem locations the daemon is using (data/cache dir, socket/pipe,
+    /// log dir), so the operator can find the index, connect, and read logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<DaemonPaths>,
+}
+
+/// Live-update (USN journal) liveness, surfaced in [`StatusResponse`].
+///
+/// Deliberately just the loop count: it is set **once when the loops spawn**,
+/// so reporting it costs nothing on the live-indexing hot path (unlike a
+/// per-patch "last applied" timestamp, which would add a store to every USN
+/// apply). "N loops running" answers the operative question — *is live update
+/// actually active?* — which is what an operator needs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct LiveUpdateInfo {
+    /// Number of per-shard journal loops currently running (0 = live update
+    /// not active, e.g. offline MFT sources or a non-Windows host).
+    pub active_loops: usize,
+}
+
+/// Filesystem locations the daemon is operating from, surfaced in
+/// [`StatusResponse`] so an operator can locate the index, socket, and logs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DaemonPaths {
+    /// Index data / cache directory.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data_dir: String,
+    /// IPC socket (Unix) or named pipe (Windows) clients connect on.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub socket: String,
+    /// Directory the daemon writes its logs to.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub log_dir: String,
 }
 
 /// Per-drive memory breakdown for status reporting.

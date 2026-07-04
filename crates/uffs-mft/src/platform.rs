@@ -87,6 +87,10 @@ pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
     volume_root_path,
 };
+// Cross-platform broker-adoption count so `--status` can report the mode on
+// any target: the real registry count on Windows, `0` (no broker) elsewhere.
+#[cfg(windows)]
+pub use volume::registered_broker_handle_count;
 // Crate-internal: the USN journal open (FU-2b) and `$MFT` extent read (FU-3)
 // adopt the same broker volume handle the MFT read uses.
 #[cfg(windows)]
@@ -101,6 +105,13 @@ pub(crate) use volume::{
 // must be at least as public as the former.
 #[cfg(windows)]
 pub use volume::{NtfsVolumeData, VolumeHandle, register_broker_handle};
+
+/// Non-Windows: there is no Access Broker, so no adopted handles.
+#[cfg(not(windows))]
+#[must_use]
+pub const fn registered_broker_handle_count() -> usize {
+    0
+}
 
 #[cfg(test)]
 #[cfg(windows)]

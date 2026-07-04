@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.23] - 2026-07-04
+
 ### Fixed — calmer message when WinGet doesn't have the new version yet
 
 Right after a release, the WinGet package manifest publishes a little later than
@@ -2654,7 +2656,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.18...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.23...HEAD
+[0.6.23]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.22...v0.6.23
 [0.6.18]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.15...v0.6.17
 [0.6.15]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.14...v0.6.15

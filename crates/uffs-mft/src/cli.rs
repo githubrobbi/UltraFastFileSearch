@@ -28,6 +28,8 @@ pub(crate) enum OutputFormat {
 pub(crate) enum MetafileKind {
     /// `$Boot` — volume boot record + BPB (geometry, volume serial).
     Boot,
+    /// `$Bitmap` — volume cluster-allocation bitmap (free space).
+    Bitmap,
 }
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.

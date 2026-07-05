@@ -45,6 +45,8 @@ const BOOT_BYTES: usize = 8192;
 pub enum MetafileKind {
     /// `$Boot` (FRS 7) — the volume boot record + BPB (geometry, serial).
     Boot,
+    /// `$Bitmap` (FRS 6) — the volume cluster-allocation bitmap (free space).
+    Bitmap,
 }
 
 impl MetafileKind {
@@ -53,6 +55,7 @@ impl MetafileKind {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Boot => "$Boot",
+            Self::Bitmap => "$Bitmap",
         }
     }
 
@@ -62,6 +65,7 @@ impl MetafileKind {
     pub const fn frs(self) -> u8 {
         match self {
             Self::Boot => 7,
+            Self::Bitmap => 6,
         }
     }
 
@@ -69,6 +73,7 @@ impl MetafileKind {
     const fn from_frs(frs: u8) -> Option<Self> {
         match frs {
             7 => Some(Self::Boot),
+            6 => Some(Self::Bitmap),
             _ => None,
         }
     }
@@ -183,8 +188,12 @@ impl MetafileHeader {
 #[cfg(windows)]
 pub fn read_metafile(drive: DriveLetter, kind: MetafileKind) -> Result<Vec<u8>> {
     let handle = crate::platform::VolumeHandle::open(drive)?;
+    let vol = handle.volume_data();
     match kind {
+        // `$Boot` is fixed at LCN 0; read it directly (no data-run parse).
         MetafileKind::Boot => read_boot(&handle),
+        // `$Bitmap` is a non-resident unnamed `$DATA` stream.
+        MetafileKind::Bitmap => read_data_stream(&handle, vol, 6, None),
     }
 }
 
@@ -203,6 +212,105 @@ pub const fn read_metafile(_drive: DriveLetter, _kind: MetafileKind) -> Result<V
 fn read_boot(handle: &crate::platform::VolumeHandle) -> Result<Vec<u8>> {
     let mut buf = vec![0_u8; BOOT_BYTES];
     super::volume::read_handle_at(handle.raw_handle(), 0, &mut buf)?;
+    Ok(buf)
+}
+
+/// Read a raw MFT file-record segment (FRS) with USA fixup applied.
+#[cfg(windows)]
+fn read_frs_record(
+    handle: &crate::platform::VolumeHandle,
+    vol: &crate::platform::NtfsVolumeData,
+    frs: u64,
+) -> Result<Vec<u8>> {
+    let record_size = vol.bytes_per_file_record_segment as usize;
+    let offset = handle.mft_byte_offset() + frs * u64::from(vol.bytes_per_file_record_segment);
+    let mut record = vec![0_u8; record_size];
+    super::volume::read_handle_at(handle.raw_handle(), offset, &mut record)?;
+    crate::parse::apply_fixup(&mut record);
+    Ok(record)
+}
+
+/// Read a metafile's non-resident `$DATA` stream — the unnamed stream when
+/// `stream_name` is `None`, or the named stream (e.g. `$SDS`) otherwise — by
+/// resolving its data runs and reading the referenced clusters.
+#[cfg(windows)]
+fn read_data_stream(
+    handle: &crate::platform::VolumeHandle,
+    vol: &crate::platform::NtfsVolumeData,
+    frs: u64,
+    stream_name: Option<&str>,
+) -> Result<Vec<u8>> {
+    use crate::ntfs::{AttributeIterator, AttributeType};
+
+    let record = read_frs_record(handle, vol, frs)?;
+    let want_name: Option<Vec<u16>> = stream_name.map(|name| name.encode_utf16().collect());
+
+    let mut attrs = AttributeIterator::new(&record)
+        .ok_or_else(|| MftError::InvalidData(format!("FRS {frs}: invalid record header")))?;
+    let data_attr = attrs
+        .find(|attr| {
+            attr.attribute_type() == Some(AttributeType::Data)
+                && attr.is_non_resident()
+                && want_name
+                    .as_deref()
+                    .map_or(attr.header.name_length == 0, |want| {
+                        attr.name() == Some(want)
+                    })
+        })
+        .ok_or_else(|| {
+            MftError::InvalidData(format!(
+                "FRS {frs}: no matching non-resident DATA stream (name={stream_name:?})"
+            ))
+        })?;
+
+    let non_resident = data_attr.non_resident_data().ok_or_else(|| {
+        MftError::InvalidData(format!("FRS {frs}: cannot decode non-resident DATA header"))
+    })?;
+    let data_size = non_resident.data_size.cast_unsigned();
+    let runs = data_attr.data_runs();
+    read_runs(handle.raw_handle(), &runs, vol.bytes_per_cluster, data_size)
+}
+
+/// Assemble a stream's data runs into a `data_size`-byte buffer.
+///
+/// Sparse runs leave their window zeroed; the buffer is truncated to the
+/// attribute's real `data_size` (runs are cluster-rounded).
+#[cfg(windows)]
+fn read_runs(
+    handle: windows::Win32::Foundation::HANDLE,
+    runs: &[crate::ntfs::DataRun],
+    bytes_per_cluster: u32,
+    data_size: u64,
+) -> Result<Vec<u8>> {
+    let bpc = u64::from(bytes_per_cluster);
+    let total = usize::try_from(data_size).map_err(|_err| {
+        MftError::InvalidData("metafile data_size exceeds usize::MAX".to_owned())
+    })?;
+    let mut buf = vec![0_u8; total];
+    let mut offset: usize = 0;
+
+    for run in runs {
+        if offset >= total {
+            break;
+        }
+        let run_bytes = usize::try_from(run.cluster_count * bpc).map_err(|_err| {
+            MftError::InvalidData("metafile run byte count exceeds usize::MAX".to_owned())
+        })?;
+        let read_len = run_bytes.min(total - offset);
+        if run.is_sparse() {
+            // Sparse run — leave the buffer window zeroed.
+            offset += read_len;
+            continue;
+        }
+        let disk_offset = crate::index::nonneg_to_u64(run.lcn.raw() * bpc.cast_signed());
+        let Some(window) = buf.get_mut(offset..offset + read_len) else {
+            return Err(MftError::InvalidData(format!(
+                "metafile run at offset {offset} len {read_len} exceeds buffer {total}"
+            )));
+        };
+        super::volume::read_handle_at(handle, disk_offset, window)?;
+        offset += read_len;
+    }
     Ok(buf)
 }
 
@@ -275,6 +383,12 @@ mod tests {
     fn kind_frs_is_stable() {
         assert_eq!(MetafileKind::Boot.frs(), 7);
         assert_eq!(MetafileKind::Boot.name(), "$Boot");
+        assert_eq!(MetafileKind::Bitmap.frs(), 6);
+        assert_eq!(MetafileKind::Bitmap.name(), "$Bitmap");
+        // FRS code round-trips through the header field.
+        assert_eq!(MetafileKind::from_frs(6), Some(MetafileKind::Bitmap));
+        assert_eq!(MetafileKind::from_frs(7), Some(MetafileKind::Boot));
+        assert_eq!(MetafileKind::from_frs(200), None);
     }
 
     #[test]

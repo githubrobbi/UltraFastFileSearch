@@ -237,8 +237,9 @@ first search — these commands give explicit control.
 
 ```bash
 uffs --daemon start --data-dir ~/uffs_data   # Start with specific data
-uffs --daemon status                          # Check status
-uffs --daemon stats                           # Performance statistics
+uffs --daemon status                          # Check status (short)
+uffs --daemon status -v                       # Long view + performance counters
+uffs --daemon status --json                   # Machine-readable (status+drives+stats)
 uffs --daemon stop                            # Graceful shutdown
 uffs --daemon kill                            # Force kill + cleanup
 uffs --daemon restart                         # Stop then restart
@@ -263,11 +264,13 @@ uffs --mcp reload                   # Reload all MCP sessions after binary updat
 
 ### `uffs --status`
 
-Show combined system status — daemon + MCP HTTP server health in one
+Show combined system status — daemon + Access Broker + MCP health in one
 view.
 
 ```bash
-uffs --status
+uffs --status                       # Short: one glyph-led line per component
+uffs --status -v                    # Long: expand every section
+uffs --status --json                # Machine-readable superset of all sections
 ```
 
 ---

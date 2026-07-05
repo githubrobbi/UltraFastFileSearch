@@ -60,8 +60,8 @@ the daemon may be restarting each time:
 # Check if daemon is running
 uffs --daemon status
 
-# Check daemon idle timeout (default: 2 hours)
-uffs --daemon stats
+# Long view — uptime, restart count, and performance counters
+uffs --daemon status -v
 ```
 
 ---
@@ -169,6 +169,6 @@ reporting an issue:
 
 ```bash
 uffs --version
-uffs --daemon status
-uffs --daemon stats
+uffs --daemon status -v
+uffs --status --json
 ```

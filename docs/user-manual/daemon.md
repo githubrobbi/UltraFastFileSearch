@@ -130,37 +130,87 @@ uffs --daemon start --data-dir ~/uffs_data --idle-timeout 1800
 |---------|-------------|
 | `uffs --daemon start` | Start the daemon (with data sources) |
 | `uffs --daemon status` | Show PID, uptime, loaded drives, record counts |
-| `uffs --daemon stats` | Show performance metrics (queries, timing, startup) |
+| `uffs --daemon status -v` | Long view: build, elevation / broker mode, live-update, memory, paths, and performance counters |
+| `uffs --daemon status --json` | Machine-readable status + drives + stats |
 | `uffs --daemon stop` | Graceful shutdown via RPC |
 | `uffs --daemon kill` | Hard kill + remove PID/socket files |
 | `uffs --daemon restart` | Stop → re-start with same data sources |
 
 ### `uffs --daemon status`
 
+The short view is a one-glance health summary:
+
 ```
 $ uffs --daemon status
-Daemon PID:    72558
-Uptime:        145s
-Status:        Ready
-Connections:   1
-  C: —  3,428,455 records (file:/Users/rnio/uffs_data/drive_c/C_mft.iocp)
-  D: —  7,065,539 records (file:/Users/rnio/uffs_data/drive_d/D_mft.iocp)
-  E: —  2,929,519 records (file:/Users/rnio/uffs_data/drive_e/E_mft.iocp)
+═══ UFFS Daemon ═══
+● running  PID 72558
+  Version:  0.6.24
+  Uptime:   2m 25s
+  Drives:   7 loaded · 25,846,853 records
+  Queries:  2 (avg 1.19ms, 0.0/s)
+```
+
+The health glyph is colour-coded on a terminal (green `●` running, yellow
+`◐` loading/refreshing); colour is dropped automatically when the output is
+piped or `NO_COLOR` is set.
+
+### `uffs --daemon status -v`  (long view)
+
+`-v` / `--verbose` expands every section, including the performance counters
+that used to live under the separate `uffs --daemon stats` command (now folded
+in here):
+
+```
+$ uffs --daemon status -v
+═══ UFFS Daemon ═══
+● running  PID 72558
+  Version:  0.6.24
+  Uptime:   9m 51s
+  Drives:   7 loaded · 25,846,853 records
+  Queries:  2 (avg 1.19ms, 0.0/s)
+── Build ──
+  Commit:   a1b2c3d
+  Elevated: no (reading via Access Broker, zero-UAC)
+── Live update ──
+  Journal:  7 journal loop(s) running
+── Memory ──
+  Index heap: 512 MB
+  RSS:        640 MB
+── Paths ──
+  Data:     C:\Users\you\AppData\Local\uffs
+  Socket:   \\.\pipe\uffs-daemon
+  Logs:     C:\Users\you\AppData\Local\uffs\logs
+── Performance ──
+  Startup duration:  10.9 s
+  Total records:     25,846,853
+  Queries served:    2
+  Avg query time:    1.19 ms
+  Total query time:  2.38 ms
+  Queries/second:    0.00
+  Agg cache:         0 hits / 0 misses (0.0% hit-rate, 0 entries)
+── Drives ──
+  ● C: 3,428,455 records (file) · 128 MB  [rec=64 names=48 tri=12 ch=3 ext=1]
   ...
 ```
 
-### `uffs --daemon stats`
+> **`uffs --daemon stats` has been folded into `uffs --daemon status -v`.**
+> The old command now prints a one-line redirect.
+
+### `uffs --daemon status --json`
+
+For scripts and dashboards, `--json` emits the machine-readable superset
+(status + drives + stats) under stable top-level keys:
 
 ```
-$ uffs --daemon stats
-═══ Daemon Performance Stats ═══
-Uptime:            591s
-Startup duration:  10871ms
-Total records:     25,846,853
-Queries served:    2
-Avg query time:    1190.5µs (1.19ms)
-Total query time:  2381µs (2.38ms)
-Queries/second:    0.00
+$ uffs --daemon status --json
+{
+  "running": true,
+  "status": { "status": {"state": "ready"}, "pid": 72558, "uptime_secs": 591,
+              "git_sha": "a1b2c3d", "elevated": false, "reading_via_broker": true,
+              "live_update": {"active_loops": 7}, "paths": { ... } },
+  "drives": [ { "letter": "C", "records": 3428455, "tier": "warm" }, ... ],
+  "stats":  { "total_queries": 2, "queries_per_second": 0.0, ... }
+}
 ```
 
 ---

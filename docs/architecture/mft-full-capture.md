@@ -3,10 +3,12 @@
 
 # NTFS Full-Volume Capture (`uffs-mft capture`)
 
-> **Status:** In progress — P0–P2 + P4 shipped (`sysinfo`, all metafile `save`
-> targets incl. `$UsnJrnl` via `$Extend` traversal, and the `capture`
-> orchestrator/manifest incl. the compressed `$MFT`). Remaining: P3 (VSS
-> `--volume-path`) and P5 (`scripts/capture.rs` VSS/zip wrapper).
+> **Status:** In progress — P0–P2, P4, and P6 (offline) shipped: `sysinfo`; all
+> metafile `save` targets incl. `$UsnJrnl` via `$Extend` traversal; the
+> `capture` orchestrator/manifest incl. the compressed `$MFT`; and offline
+> `metafile-info` with `$Boot`/`$Bitmap`/`$UsnJrnl` decoders (cross-platform,
+> Mac-verified). Remaining: P3 (VSS `--volume-path`), P5 (`scripts/capture.rs`
+> VSS/zip wrapper), and more P6 decoders (`$Secure`/`$Volume`/`$AttrDef`).
 > **Owner:** UFFS core
 > **Goal:** Capture *everything* needed to reconstitute a live Windows NTFS volume
 > offline "as accurately as possible" — not just the namespace, but ACLs, the
@@ -246,8 +248,11 @@ loaders are additive (namespace path unchanged).
    VSS snapshot device directly) — not yet.
 5. ⏳ **P5 — `scripts/capture.rs`: WMI VSS create/delete + `--zip`/split + hashes**
    — not yet.
-6. ⏳ **P6 — full `load` + `verify_parity` wiring** for the new artifacts — partial
-   (metafile header round-trips; per-metafile parsers TBD).
+6. ◑ **P6 — offline read side** — shipped: `uffs-mft metafile-info <file>` +
+   `load_metafile_from_file`, and cross-platform decoders `parse_boot`
+   (geometry), `parse_bitmap` (free space), `parse_usn` (change journal), all
+   unit-tested + Mac-verified. Remaining: `$Secure`/`$Volume`/`$AttrDef` parsers
+   and `verify_parity` wiring.
 
 ## 12. Open questions
 

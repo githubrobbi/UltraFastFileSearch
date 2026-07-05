@@ -7,12 +7,11 @@
 //! These artifacts extend a capture beyond the `$MFT` namespace toward a
 //! complete offline representation of the volume (see
 //! `docs/architecture/mft-full-capture.md`). Each is read straight off the
-//! volume via the same broker-safe primitive as `$UpCase`
-//! ([`super::volume::read_handle_at`]).
+//! volume via the same broker-safe `read_handle_at` primitive as `$UpCase`.
 //!
 //! # File format
 //!
-//! 1. [`MetafileHeader`] (64 bytes) — magic, version, kind, drive, serial,
+//! 1. `MetafileHeader` (64 bytes) — magic, version, kind, drive, serial,
 //!    timestamp, payload size.
 //! 2. Raw metafile payload.
 //!

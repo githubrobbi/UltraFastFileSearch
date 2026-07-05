@@ -176,6 +176,8 @@ use criterion as _;
 use dirs_next as _;
 #[cfg(test)]
 use hex as _;
+#[cfg(windows)]
+use hex as _;
 use hostname as _;
 use indicatif as _;
 #[cfg(test)]
@@ -194,7 +196,9 @@ use rustc_hash as _;
 // commands (src/commands/windows/info.rs); silence the library's view of it.
 #[cfg(windows)]
 use serde_json as _;
-#[cfg(test)]
+// `sha2` + `hex` power the Windows-only `capture` command's manifest / SHA256SUMS
+// (src/commands/windows/capture.rs) and the chaos tests; silence the library's view.
+#[cfg(any(test, windows))]
 use sha2 as _;
 use smallvec as _;
 #[cfg(test)]

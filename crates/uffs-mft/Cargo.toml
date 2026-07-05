@@ -115,6 +115,11 @@ windows.workspace = true
 # benchmark report) — only the Windows-gated commands use it.
 serde_json.workspace = true
 
+# SHA-256 + hex for the `capture` bundle manifest / SHA256SUMS integrity file
+# (Windows-only capture path).
+sha2.workspace = true
+hex.workspace = true
+
 # Unix privilege check (`is_elevated` → geteuid() == 0)
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

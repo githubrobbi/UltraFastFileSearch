@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! `capture` command — bundle a drive's NTFS metafiles into one hashed,
+//! manifested directory (`docs/architecture/mft-full-capture.md` §5–6).
+//!
+//! Writes each metafile (via [`uffs_mft::platform::metafile`]) into
+//! `out/drive_<x>/`, plus a `manifest.json` (volume facts + per-artifact
+//! SHA-256) and a `SHA256SUMS` file for transfer verification. Best-effort: a
+//! metafile that cannot be read is skipped and noted, not fatal.
+#![expect(
+    clippy::print_stdout,
+    reason = "intentional user-facing CLI capture progress output"
+)]
+
+use std::path::Path;
+
+use anyhow::{Context as _, Result};
+use sha2::{Digest as _, Sha256};
+use uffs_mft::platform::metafile::{self, MetafileHeader, MetafileKind};
+use uffs_mft::platform::{DriveLetter, VolumeHandle};
+use uffs_mft::usize_to_u64;
+
+/// One captured artifact, recorded in the manifest.
+#[derive(serde::Serialize)]
+struct ArtifactRecord {
+    /// File name within the capture directory.
+    file: String,
+    /// NTFS metafile name (e.g. `$Boot`).
+    kind: String,
+    /// Source MFT FRS number.
+    frs: u8,
+    /// File size in bytes (header + payload).
+    bytes: u64,
+    /// SHA-256 of the file, lowercase hex.
+    sha256: String,
+}
+
+/// Source-volume facts recorded in the manifest.
+#[derive(serde::Serialize)]
+struct VolumeInfo {
+    /// Volume serial number, hex.
+    serial: String,
+    /// NTFS version (e.g. `3.1`).
+    ntfs_version: String,
+    /// Cluster size in bytes.
+    bytes_per_cluster: u32,
+    /// MFT record size in bytes.
+    mft_record_size: u32,
+}
+
+/// The capture bundle manifest (`manifest.json`).
+#[derive(serde::Serialize)]
+struct Manifest {
+    /// Manifest schema version.
+    schema: u32,
+    /// Captured drive letter.
+    drive: String,
+    /// Capture timestamp (RFC 3339, UTC).
+    captured_at: String,
+    /// `uffs-mft` version.
+    tool_version: String,
+    /// Source-volume facts.
+    volume: VolumeInfo,
+    /// Captured artifacts.
+    artifacts: Vec<ArtifactRecord>,
+}
+
+/// SHA-256 of a byte slice, lowercase hex.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// Capture one metafile: read → save (with header) → hash. Returns its record.
+fn capture_metafile(
+    drive: DriveLetter,
+    kind: MetafileKind,
+    dir: &Path,
+    drive_lower: &str,
+    serial: u64,
+    timestamp: u64,
+) -> Result<ArtifactRecord> {
+    let stem = kind.name().trim_start_matches('$').to_lowercase();
+    let file = format!("{drive_lower}_{stem}.bin");
+    let path = dir.join(&file);
+
+    let data =
+        metafile::read_metafile(drive, kind).with_context(|| format!("reading {}", kind.name()))?;
+    let header = MetafileHeader {
+        kind,
+        drive,
+        volume_serial: serial,
+        timestamp,
+        data_size: usize_to_u64(data.len()),
+    };
+    metafile::save_metafile_to_file(&path, &header, &data)
+        .with_context(|| format!("saving {}", kind.name()))?;
+    let bytes = std::fs::read(&path).with_context(|| format!("re-reading {}", path.display()))?;
+    Ok(ArtifactRecord {
+        file,
+        kind: kind.name().to_owned(),
+        frs: kind.frs(),
+        bytes: usize_to_u64(bytes.len()),
+        sha256: sha256_hex(&bytes),
+    })
+}
+
+/// Assemble the capture manifest from volume facts and collected artifacts.
+fn build_manifest(
+    drive: DriveLetter,
+    vol: &uffs_mft::platform::NtfsVolumeData,
+    artifacts: Vec<ArtifactRecord>,
+) -> Manifest {
+    Manifest {
+        schema: 1,
+        drive: drive.to_string(),
+        captured_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+        volume: VolumeInfo {
+            serial: format!("0x{:016X}", vol.volume_serial_number),
+            ntfs_version: format!("{}.{}", vol.ntfs_major_version, vol.ntfs_minor_version),
+            bytes_per_cluster: vol.bytes_per_cluster,
+            mft_record_size: vol.bytes_per_file_record_segment,
+        },
+        artifacts,
+    }
+}
+
+/// Write `manifest.json` + `SHA256SUMS` into the capture directory.
+fn write_bundle(dir: &Path, manifest: &Manifest) -> Result<()> {
+    let manifest_json =
+        serde_json::to_string_pretty(manifest).context("serialising manifest.json")?;
+    std::fs::write(dir.join("manifest.json"), &manifest_json).context("writing manifest.json")?;
+
+    let mut sums = String::new();
+    for artifact in &manifest.artifacts {
+        sums.push_str(&artifact.sha256);
+        sums.push_str("  ");
+        sums.push_str(&artifact.file);
+        sums.push('\n');
+    }
+    std::fs::write(dir.join("SHA256SUMS"), sums).context("writing SHA256SUMS")?;
+    Ok(())
+}
+
+/// `capture` command — write all metafiles + `manifest.json` + `SHA256SUMS`
+/// for a drive into `out/drive_<x>/`.
+pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
+    let drive_lower = drive.to_string().to_lowercase();
+    let dir = out.join(format!("drive_{drive_lower}"));
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating capture dir {}", dir.display()))?;
+
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
+    let vol = handle.volume_data();
+    let serial = vol.volume_serial_number;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+
+    println!("═══════════════════════════════════════════════════════════════");
+    println!(
+        "  UFFS metafile capture — drive {drive}: → {}",
+        dir.display()
+    );
+    println!("═══════════════════════════════════════════════════════════════");
+
+    let kinds = [
+        MetafileKind::Boot,
+        MetafileKind::Bitmap,
+        MetafileKind::Secure,
+        MetafileKind::AttrDef,
+        MetafileKind::MftMirr,
+        MetafileKind::Volume,
+        MetafileKind::BadClus,
+    ];
+
+    let mut artifacts: Vec<ArtifactRecord> = Vec::new();
+    for kind in kinds {
+        match capture_metafile(drive, kind, &dir, &drive_lower, serial, timestamp) {
+            Ok(record) => {
+                println!(
+                    "  ✅ {:<9} {:>12} bytes  {}",
+                    kind.name(),
+                    record.bytes,
+                    record.file
+                );
+                artifacts.push(record);
+            }
+            Err(err) => println!("  ⚠️  {:<9} skipped — {err:#}", kind.name()),
+        }
+    }
+
+    let manifest = build_manifest(drive, vol, artifacts);
+    write_bundle(&dir, &manifest)?;
+
+    println!();
+    println!("  Manifest: {}", dir.join("manifest.json").display());
+    println!("  Hashes:   {}", dir.join("SHA256SUMS").display());
+    println!("  {} artifact(s) captured.", manifest.artifacts.len());
+    Ok(())
+}

@@ -161,6 +161,17 @@ pub(crate) enum Commands {
         output: PathBuf,
     },
 
+    /// Capture all NTFS metafiles for a drive into a hashed, manifested bundle
+    Capture {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: uffs_mft::platform::DriveLetter,
+
+        /// Output directory (bundle written to `<out>/drive_<x>/`)
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+
     /// Benchmark MFT reading with detailed phase timing
     Bench {
         /// Drive letter (e.g., C, D, E)

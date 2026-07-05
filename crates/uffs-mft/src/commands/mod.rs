@@ -15,6 +15,7 @@ mod windows;
 /// Dispatches parsed CLI commands to their handlers.
 #[expect(
     clippy::too_many_lines,
+    clippy::cognitive_complexity,
     reason = "single match arm per CLI subcommand keeps the dispatch table flat and easy to audit; splitting fragments the routing surface"
 )]
 #[cfg(windows)]
@@ -42,6 +43,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             kind,
             output,
         } => windows::cmd_metafile(drive, kind, &output).await,
+        Commands::Capture { drive, out } => windows::cmd_capture(drive, &out).await,
         Commands::Bench {
             drive,
             json,
@@ -198,6 +200,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         ),
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
         Commands::Metafile { .. }
+        | Commands::Capture { .. }
         | Commands::Read { .. }
         | Commands::Info { .. }
         | Commands::Drives { .. }

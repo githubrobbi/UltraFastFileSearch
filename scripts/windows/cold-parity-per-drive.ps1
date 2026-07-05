@@ -171,11 +171,11 @@ function Remove-DriveCache {
 }
 
 function Get-DaemonTotalRecords {
-    # `uffs --daemon stats` prints "Total records: N" with thousands
+    # `uffs --daemon status -v` prints "Total records: N" with thousands
     # separators. Returns $null if the daemon isn't running or the line
     # isn't found.
     try {
-        $statsOut = & $UffsBin daemon stats 2>&1 | Out-String
+        $statsOut = & $UffsBin daemon status -v 2>&1 | Out-String
         if ($statsOut -match 'Total records:\s+([0-9,]+)') {
             return [int64]($matches[1] -replace ',', '')
         }

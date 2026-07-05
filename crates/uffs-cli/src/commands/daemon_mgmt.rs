@@ -86,8 +86,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
     {
         let is_read_only_or_uac_start = matches!(
             action,
-            DaemonAction::Status
-                | DaemonAction::Stats
+            DaemonAction::Status { .. }
                 | DaemonAction::StatusDrives
                 | DaemonAction::Start { elevate: true, .. }
         );
@@ -146,8 +145,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
             log_file.as_deref(),
             *elevate,
         ),
-        DaemonAction::Status => daemon_status::daemon_status(),
-        DaemonAction::Stats => daemon_status::daemon_stats(),
+        DaemonAction::Status { verbose, json } => daemon_status::daemon_status(*verbose, *json),
         DaemonAction::Stop => daemon_stop(),
         DaemonAction::Kill => {
             daemon_kill();

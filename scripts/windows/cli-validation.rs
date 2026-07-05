@@ -2239,7 +2239,7 @@ fn main() {
     // processes or mutate the host in any way.  Those concerns live in
     // `scripts/dev/orphan-cleanup.rs` (callable via `just orphan`).
     print_uffs_command_block(&args.bin, &["--daemon", "status"], "═══ Daemon STATUS ═══");
-    print_uffs_command_block(&args.bin, &["--daemon", "stats"],  "═══ Daemon STATS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "status", "-v"],  "═══ Daemon STATUS -v (perf) ═══");
 
     if failed > 0 {
         // Build retest command with failed test IDs.  Same shape as

@@ -40,8 +40,8 @@ pub(crate) mod uninstall;
 /// `uffs --update` — self-update detection (Phase A of the self-update design).
 pub(crate) mod update;
 
-/// Render a one-line version summary suitable for `daemon status`,
-/// `daemon stats`, and `uffs --status` output.
+/// Render a one-line version summary suitable for `daemon status`
+/// and `uffs --status` output.
 ///
 /// `daemon_version` is the daemon-reported `env!("CARGO_PKG_VERSION")`
 /// from [`uffs_client::protocol::response::StatusResponse::version`]

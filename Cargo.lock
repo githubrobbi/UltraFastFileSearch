@@ -4449,6 +4449,7 @@ dependencies = [
  "uffs-client",
  "uffs-format",
  "uffs-mft",
+ "uffs-statusfmt",
  "uffs-time",
  "uffs-version",
  "uffs-winsvc",

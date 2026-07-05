@@ -141,10 +141,16 @@ pub(crate) enum DaemonAction {
         /// effect for every auto-spawn.
         elevate: bool,
     },
-    /// Show daemon status.
-    Status,
-    /// Show performance statistics.
-    Stats,
+    /// Show daemon status. `verbose` (`-v`) adds the build fingerprint,
+    /// elevation / broker mode, live-update loops, memory tiers, paths, the
+    /// full per-drive breakdown, and performance counters (the former
+    /// `stats`). `json` emits the machine-readable superset.
+    Status {
+        /// Long view: everything, including the folded-in performance counters.
+        verbose: bool,
+        /// Emit JSON (status + drives + stats) instead of the human view.
+        json: bool,
+    },
     /// Gracefully stop.
     Stop,
     /// Hard kill.
@@ -212,8 +218,11 @@ pub(crate) fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyho
     let rest = args.get(1..).unwrap_or_default();
     match action {
         "start" => Ok(parse_daemon_start(rest)),
-        "status" => Ok(DaemonAction::Status),
-        "stats" => Ok(DaemonAction::Stats),
+        "status" => Ok(parse_daemon_status(rest)),
+        "stats" => anyhow::bail!(
+            "`--daemon stats` has been folded into `--daemon status -v` \
+             (or `--daemon status --json` for the machine-readable form)."
+        ),
         "stop" => Ok(DaemonAction::Stop),
         "kill" => Ok(DaemonAction::Kill),
         "restart" => Ok(DaemonAction::Restart),
@@ -223,10 +232,24 @@ pub(crate) fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyho
         "forget" => parse_daemon_forget(rest),
         "status_drives" | "status-drives" => Ok(DaemonAction::StatusDrives),
         other => anyhow::bail!(
-            "Unknown daemon action: '{other}'. Use: start, status, stats, stop, kill, \
+            "Unknown daemon action: '{other}'. Use: start, status, stop, kill, \
              restart, load, hibernate, preload, forget, status_drives"
         ),
     }
+}
+
+/// Parse `uffs --daemon status [-v|--verbose] [--json]`.
+fn parse_daemon_status(rest: &[String]) -> DaemonAction {
+    let mut verbose = false;
+    let mut json = false;
+    for arg in rest {
+        match arg.as_str() {
+            "-v" | "--verbose" => verbose = true,
+            "--json" => json = true,
+            _ => {}
+        }
+    }
+    DaemonAction::Status { verbose, json }
 }
 
 /// Parse `uffs --daemon start [flags...]`.
@@ -547,7 +570,8 @@ ACTIONS:
     --elevate          Request a UAC prompt (Windows) if not elevated
                        [env: UFFS_ELEVATE=1]
   status             Show daemon status (running, drives, PID)
-  stats              Show performance statistics
+    -v, --verbose      Long view: build, broker mode, memory, paths, perf stats
+    --json             Machine-readable status + drives + stats
   stop               Gracefully stop the daemon
   kill               Hard kill + remove PID/socket files
   restart            Stop then restart (re-loads all indices)

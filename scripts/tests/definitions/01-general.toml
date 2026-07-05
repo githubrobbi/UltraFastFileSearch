@@ -598,12 +598,12 @@ result_has_key = ["results"]
 [[test]]
 id = "T169"
 group = "general"
-name = "T169 uffs --daemon stats (perf)"
-title = "T169 uffs --daemon stats (perf)"
-short_desc = "T169 uffs --daemon stats (perf)"
-cli_args = ["--daemon", "stats"]
+name = "T169 uffs --daemon status -v (perf)"
+title = "T169 uffs --daemon status -v (perf)"
+short_desc = "T169 uffs --daemon status -v (perf, stats folded in)"
+cli_args = ["--daemon", "status", "-v"]
 targets = ["cli"]
-stdout_contains = ["Daemon Performance Stats", "Uptime:", "Total records:"]
+stdout_contains = ["UFFS Daemon", "Uptime:", "Total records:"]
 
 [test.api_checks]
 result_has_key = ["results"]

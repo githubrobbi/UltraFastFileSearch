@@ -2,54 +2,54 @@
 # Auto-split from test-definitions.toml
 
 [[test]]
-id          = "RPC.1"
-group       = "rpc"
-name        = "RPC.1 status method"
-title       = "RPC.1 daemon status"
-short_desc  = "Daemon status returns pid, uptime, status, and loaded drives"
-cli_args    = ["daemon", "status"]
-targets     = ["cli", "api"]
-rpc_method  = "status"
-rpc_params  = "{}"
-validator   = "RPC.1"
+id = "RPC.1"
+group = "rpc"
+name = "RPC.1 status method"
+title = "RPC.1 daemon status"
+short_desc = "Daemon status returns pid, uptime, status, and loaded drives"
+cli_args = ["daemon", "status"]
+targets = ["cli", "api"]
+rpc_method = "status"
+rpc_params = "{}"
+validator = "RPC.1"
 stdout_contains = ["Daemon PID:", "Uptime:", "Status:", "Ready", "records"]
 
 [[test]]
-id          = "RPC.2"
-group       = "rpc"
-name        = "RPC.2 drives method"
-title       = "RPC.2 loaded drives"
-short_desc  = "Drives method returns loaded drive info with record counts"
-cli_args    = ["daemon", "status"]
-targets     = ["cli", "api"]
-rpc_method  = "drives"
-rpc_params  = "{}"
-validator   = "RPC.2"
+id = "RPC.2"
+group = "rpc"
+name = "RPC.2 drives method"
+title = "RPC.2 loaded drives"
+short_desc = "Drives method returns loaded drive info with record counts"
+cli_args = ["daemon", "status"]
+targets = ["cli", "api"]
+rpc_method = "drives"
+rpc_params = "{}"
+validator = "RPC.2"
 stdout_contains = ["records"]
 
 [[test]]
-id          = "RPC.3"
-group       = "rpc"
-name        = "RPC.3 info method"
-title       = "RPC.3 info method"
-short_desc  = "Info method looks up a file by path"
-cli_args    = []
-targets     = ["api"]
-rpc_method  = "info"
-rpc_params  = "{\"path\": \"C:\\\\Windows\\\\System32\\\\notepad.exe\"}"
-validator   = "RPC.3"
+id = "RPC.3"
+group = "rpc"
+name = "RPC.3 info method"
+title = "RPC.3 info method"
+short_desc = "Info method looks up a file by path"
+cli_args = []
+targets = ["api"]
+rpc_method = "info"
+rpc_params = "{\"path\": \"C:\\\\Windows\\\\System32\\\\notepad.exe\"}"
+validator = "RPC.3"
 
 [[test]]
-id          = "RPC.4"
-group       = "rpc"
-name        = "RPC.4 stats method"
-title       = "RPC.4 daemon stats"
-short_desc  = "Daemon performance stats: uptime, records, queries"
-cli_args    = ["daemon", "stats"]
-targets     = ["cli", "api"]
-rpc_method  = "stats"
-rpc_params  = "{}"
-validator   = "RPC.4"
+id = "RPC.4"
+group = "rpc"
+name = "RPC.4 stats method"
+title = "RPC.4 daemon status -v (stats folded in)"
+short_desc = "Daemon performance stats: uptime, records, queries"
+cli_args = ["daemon", "status", "-v"]
+targets = ["cli", "api"]
+rpc_method = "stats"
+rpc_params = "{}"
+validator = "RPC.4"
 stdout_contains = ["Uptime:", "Total records:", "Queries served:"]
 
 # RPC.5 — negative-path test for JSON-RPC unknown-method handling.
@@ -72,14 +72,13 @@ stdout_contains = ["Uptime:", "Total records:", "Queries served:"]
 # methods — only specific subcommands (daemon status, stats, etc.) —
 # so there's no surface to test "unknown method" at the CLI layer.
 [[test]]
-id          = "RPC.5"
-group       = "rpc"
-name        = "RPC.5 unknown method"
-title       = "RPC.5 unknown method returns JSON-RPC error"
-short_desc  = "Calling a nonexistent RPC method returns -32601 (MethodNotFound)"
-targets     = ["api"]
-rpc_method  = "this_method_does_not_exist"
-rpc_params  = "{}"
+id = "RPC.5"
+group = "rpc"
+name = "RPC.5 unknown method"
+title = "RPC.5 unknown method returns JSON-RPC error"
+short_desc = "Calling a nonexistent RPC method returns -32601 (MethodNotFound)"
+targets = ["api"]
+rpc_method = "this_method_does_not_exist"
+rpc_params = "{}"
 expect_error = true
-validator   = "RPC.5"
-
+validator = "RPC.5"

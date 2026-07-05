@@ -2072,7 +2072,7 @@ fn main() -> Result<()> {
     //                       exercises the MCP surface, so the gateway
     //                       telemetry belongs in the summary).
     print_uffs_command_block(&args.bin, &["--daemon", "status"], "═══ Daemon STATUS ═══");
-    print_uffs_command_block(&args.bin, &["--daemon", "stats"],  "═══ Daemon STATS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "status", "-v"],  "═══ Daemon STATUS -v (perf) ═══");
     print_uffs_command_block(&args.bin, &["status"],           "═══ MCP STATUS (system-wide) ═══");
 
     if failed > 0 {

@@ -85,6 +85,11 @@ uffs-format = { path = "../uffs-format", version = "0.6.23" }
 # unchanged — the (de)serialise impl emits a single ASCII char.
 uffs-mft.workspace = true
 
+# Shared operator-status styling (color, glyphs, aligned fields) for the
+# `--status` / `--daemon status` surfaces.  Zero-dep leaf crate; keeps the
+# one visual language in exactly one place.
+uffs-statusfmt.workspace = true
+
 # Error handling
 anyhow.workspace = true
 

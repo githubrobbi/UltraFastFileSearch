@@ -27,7 +27,7 @@
 //!    verify `source="env"` and `target=N`.
 //! 6. Run one warm-up api-validation (populates the agg cache).
 //! 7. Run one measured api-validation and parse its Timing Breakdown.
-//! 8. Capture `uffs --daemon stats` for cache hit-rate and avg query time.
+//! 8. Capture `uffs --daemon status -v` for cache hit-rate and avg query time.
 //!
 //! A summary table is printed at the end.
 //!
@@ -272,10 +272,10 @@ fn run_validation(repo_root: &PathBuf) -> Result<String> {
     Ok(text)
 }
 
-/// Capture `uffs --daemon stats` as plain text.
+/// Capture `uffs --daemon status -v` as plain text (perf stats folded in).
 fn daemon_stats_text() -> String {
     Command::new(uffs_bin())
-        .args(["--daemon", "stats"])
+        .args(["--daemon", "status", "-v"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()

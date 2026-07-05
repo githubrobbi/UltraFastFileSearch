@@ -5,14 +5,14 @@
 id = "RPC.1"
 group = "rpc"
 name = "RPC.1 status method"
-title = "RPC.1 daemon status"
+title = "RPC.1 daemon status --json"
 short_desc = "Daemon status returns pid, uptime, status, and loaded drives"
-cli_args = ["daemon", "status"]
+cli_args = ["daemon", "status", "--json"]
 targets = ["cli", "api"]
 rpc_method = "status"
 rpc_params = "{}"
 validator = "RPC.1"
-stdout_contains = ["Daemon PID:", "Uptime:", "Status:", "Ready", "records"]
+stdout_contains = ['"running"', '"pid"', '"uptime_secs"']
 
 [[test]]
 id = "RPC.2"
@@ -20,12 +20,12 @@ group = "rpc"
 name = "RPC.2 drives method"
 title = "RPC.2 loaded drives"
 short_desc = "Drives method returns loaded drive info with record counts"
-cli_args = ["daemon", "status"]
+cli_args = ["daemon", "status", "--json"]
 targets = ["cli", "api"]
 rpc_method = "drives"
 rpc_params = "{}"
 validator = "RPC.2"
-stdout_contains = ["records"]
+stdout_contains = ['"drives"', '"letter"', '"records"']
 
 [[test]]
 id = "RPC.3"
@@ -43,14 +43,14 @@ validator = "RPC.3"
 id = "RPC.4"
 group = "rpc"
 name = "RPC.4 stats method"
-title = "RPC.4 daemon status -v (stats folded in)"
+title = "RPC.4 daemon status --json (stats folded in)"
 short_desc = "Daemon performance stats: uptime, records, queries"
-cli_args = ["daemon", "status", "-v"]
+cli_args = ["daemon", "status", "--json"]
 targets = ["cli", "api"]
 rpc_method = "stats"
 rpc_params = "{}"
 validator = "RPC.4"
-stdout_contains = ["Uptime:", "Total records:", "Queries served:"]
+stdout_contains = ['"stats"', '"total_records"', '"total_queries"']
 
 # RPC.5 — negative-path test for JSON-RPC unknown-method handling.
 #

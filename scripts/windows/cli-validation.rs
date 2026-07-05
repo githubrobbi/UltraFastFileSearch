@@ -1334,36 +1334,74 @@ fn run_custom_validator(name: &str, stdout: &str, stderr: &str) -> Result<String
             Ok(format!("{} rows, none start with uppercase README", rows.len()))
         }
 
-        // ── Daemon subcommand validators ─────────────────────────────────
+        // ── Daemon subcommand validators (JSON-aware) ────────────────────
+        //
+        // These drive `uffs --daemon status --json`, whose payload is the
+        // wrapper `{running, status:{...}, drives:[...], stats:{...}}`.  We
+        // parse structured JSON instead of scraping the (colourised, restyled)
+        // human text so the checks are stable across cosmetic output changes.
         "RPC.1" => {
-            // daemon status: must show PID and Ready
-            if !stdout.contains("Daemon PID:") { bail!("Missing 'Daemon PID:' in output"); }
-            if !stdout.contains("Ready") { bail!("Daemon not Ready"); }
-            // Extract PID
-            let pid = stdout.lines()
-                .find(|l| l.contains("Daemon PID:"))
-                .and_then(|l| l.split(':').nth(1))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default();
-            Ok(format!("pid={pid}, status=Ready"))
+            // status: daemon running, with a pid, uptime, and lifecycle state.
+            let v: serde_json::Value = serde_json::from_str(stdout.trim())
+                .map_err(|e| anyhow::anyhow!("RPC.1: status output is not JSON: {e}"))?;
+            if v.get("running").and_then(serde_json::Value::as_bool) != Some(true) {
+                bail!("RPC.1: 'running' is not true in status JSON");
+            }
+            let status = v.get("status")
+                .ok_or_else(|| anyhow::anyhow!("RPC.1: missing 'status' object"))?;
+            let pid = status.get("pid").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            if pid == 0 { bail!("RPC.1: missing or zero 'pid'"); }
+            let uptime = status.get("uptime_secs").and_then(serde_json::Value::as_u64);
+            if uptime.is_none() { bail!("RPC.1: missing 'uptime_secs'"); }
+            let state = status.get("status")
+                .and_then(|s| s.get("state"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if state.is_empty() { bail!("RPC.1: missing 'status.state'"); }
+            Ok(format!("pid={pid}, uptime={}s, state={state}", uptime.unwrap_or(0)))
         }
         "RPC.2" => {
-            // daemon status shows drives with record counts
-            let drive_count = stdout.lines()
-                .filter(|l| l.contains("records"))
-                .count();
-            if drive_count == 0 { bail!("No drives shown in daemon status"); }
-            Ok(format!("{drive_count} drives loaded"))
+            // status carries the tier-aware `drives` array; Parked/Cold shards
+            // legitimately report 0 records (body released), so only resident
+            // (Warm/Hot) drives must be non-empty.
+            let v: serde_json::Value = serde_json::from_str(stdout.trim())
+                .map_err(|e| anyhow::anyhow!("RPC.2: status output is not JSON: {e}"))?;
+            let drives = v.get("drives").and_then(serde_json::Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("RPC.2: missing 'drives' array"))?;
+            if drives.is_empty() { bail!("RPC.2: no drives loaded"); }
+            let mut resident = 0_usize;
+            let mut demoted = 0_usize;
+            for (i, d) in drives.iter().enumerate() {
+                let letter = d.get("letter").and_then(serde_json::Value::as_str).unwrap_or("");
+                if letter.is_empty() { bail!("RPC.2: drive {i} missing 'letter'"); }
+                let records = d.get("records").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let tier = d.get("tier").and_then(serde_json::Value::as_str).unwrap_or("");
+                let source = d.get("source").and_then(serde_json::Value::as_str).unwrap_or("");
+                let body_released = matches!(tier, "parked" | "cold" | "evicting" | "unknown")
+                    || matches!(source, "parked" | "cold");
+                if body_released { demoted += 1; continue; }
+                if records == 0 {
+                    bail!("RPC.2: drive {i} ({letter}, tier={tier:?}) has 0 records but is not Parked/Cold");
+                }
+                resident += 1;
+            }
+            Ok(format!("{} drives loaded ({resident} resident, {demoted} demoted)", drives.len()))
         }
         "RPC.4" => {
-            // daemon stats: must show performance metrics
-            if !stdout.contains("Total records:") { bail!("Missing 'Total records:' in output"); }
-            let records = stdout.lines()
-                .find(|l| l.contains("Total records:"))
-                .and_then(|l| l.split(':').nth(1))
-                .map(|s| s.trim().replace(',', ""))
-                .unwrap_or_default();
-            Ok(format!("total_records={records}"))
+            // Performance counters are folded into `status --json` under the
+            // `stats` key (the standalone `--daemon stats` command was removed).
+            let v: serde_json::Value = serde_json::from_str(stdout.trim())
+                .map_err(|e| anyhow::anyhow!("RPC.4: status output is not JSON: {e}"))?;
+            let stats = v.get("stats")
+                .filter(|s| !s.is_null())
+                .ok_or_else(|| anyhow::anyhow!("RPC.4: missing 'stats' object"))?;
+            let records = stats.get("total_records").and_then(serde_json::Value::as_u64);
+            if records.is_none() { bail!("RPC.4: stats missing 'total_records'"); }
+            let uptime = stats.get("uptime_secs").and_then(serde_json::Value::as_u64);
+            if uptime.is_none() { bail!("RPC.4: stats missing 'uptime_secs'"); }
+            let queries = stats.get("total_queries").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            Ok(format!("total_records={}, uptime={}s, queries={queries}",
+                records.unwrap_or(0), uptime.unwrap_or(0)))
         }
 
         // ── Type validators ───────────────────────────────────────────

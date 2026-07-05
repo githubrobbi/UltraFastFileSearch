@@ -60,6 +60,10 @@ pub enum MetafileKind {
     BadClus,
     /// `$LogFile` (FRS 2) — the NTFS metadata transaction log.
     LogFile,
+    /// `$UsnJrnl:$J` — the change journal. Its FRS is resolved at runtime by
+    /// walking the `$Extend` directory index, so the header stores a reserved
+    /// sentinel kind code rather than a fixed FRS.
+    UsnJrnl,
 }
 
 impl MetafileKind {
@@ -75,11 +79,15 @@ impl MetafileKind {
             Self::Volume => "$Volume",
             Self::BadClus => "$BadClus",
             Self::LogFile => "$LogFile",
+            Self::UsnJrnl => "$UsnJrnl",
         }
     }
 
-    /// The MFT file-record-segment (FRS) number of this metafile. Stored in the
+    /// The MFT file-record-segment (FRS) number of this metafile, stored in the
     /// header as a stable, self-documenting kind code.
+    ///
+    /// `$UsnJrnl` uses the reserved sentinel `0xF5` because its real FRS is
+    /// resolved at runtime via the `$Extend` directory index.
     #[must_use]
     pub const fn frs(self) -> u8 {
         match self {
@@ -91,6 +99,7 @@ impl MetafileKind {
             Self::Volume => 3,
             Self::BadClus => 8,
             Self::LogFile => 2,
+            Self::UsnJrnl => 0xF5,
         }
     }
 
@@ -105,6 +114,7 @@ impl MetafileKind {
             3 => Some(Self::Volume),
             8 => Some(Self::BadClus),
             2 => Some(Self::LogFile),
+            0xF5 => Some(Self::UsnJrnl),
             _ => None,
         }
     }
@@ -237,6 +247,8 @@ pub fn read_metafile(drive: DriveLetter, kind: MetafileKind) -> Result<Vec<u8>> 
         // record.
         MetafileKind::Volume => read_frs_record(&handle, vol, 3),
         MetafileKind::BadClus => read_frs_record(&handle, vol, 8),
+        // `$UsnJrnl:$J` lives under `$Extend`; resolve its FRS then read `$J`.
+        MetafileKind::UsnJrnl => read_usn_journal(&handle, vol),
     }
 }
 
@@ -357,6 +369,149 @@ fn read_runs(
     Ok(buf)
 }
 
+/// FRS of the `$Extend` metadata directory.
+#[cfg(windows)]
+const EXTEND_FRS: u64 = 11;
+
+/// Read the `$UsnJrnl:$J` change journal via `$Extend` directory traversal.
+#[cfg(windows)]
+fn read_usn_journal(
+    handle: &crate::platform::VolumeHandle,
+    vol: &crate::platform::NtfsVolumeData,
+) -> Result<Vec<u8>> {
+    let usn_frs = resolve_extend_child(handle, vol, "$UsnJrnl")?;
+    read_data_stream(handle, vol, usn_frs, Some("$J"))
+}
+
+/// Resolve the FRS of a `$Extend` (FRS 11) child by name, walking its directory
+/// index — `$INDEX_ROOT` first, then `$INDEX_ALLOCATION` if the index is large.
+#[cfg(windows)]
+fn resolve_extend_child(
+    handle: &crate::platform::VolumeHandle,
+    vol: &crate::platform::NtfsVolumeData,
+    child: &str,
+) -> Result<u64> {
+    use crate::ntfs::{AttributeIterator, AttributeType, DataRun};
+
+    let record = read_frs_record(handle, vol, EXTEND_FRS)?;
+    let target: Vec<u16> = child.encode_utf16().collect();
+
+    let mut root_value: Option<Vec<u8>> = None;
+    let mut block_size: usize = 0;
+    let mut alloc: Option<(Vec<DataRun>, u64)> = None;
+
+    let attrs = AttributeIterator::new(&record)
+        .ok_or_else(|| MftError::InvalidData("$Extend: invalid record header".to_owned()))?;
+    for attr in attrs {
+        match attr.attribute_type() {
+            Some(AttributeType::IndexRoot) => {
+                if let Some(value) = attr.resident_value() {
+                    // IndexRoot.bytes_per_index_block is at offset 8.
+                    block_size = value
+                        .get(8..12)
+                        .and_then(|slice| slice.try_into().ok())
+                        .map_or(0, |bytes| u32::from_le_bytes(bytes) as usize);
+                    root_value = Some(value.to_vec());
+                }
+            }
+            Some(AttributeType::IndexAllocation) if attr.is_non_resident() => {
+                if let Some(nr) = attr.non_resident_data() {
+                    alloc = Some((attr.data_runs(), nr.data_size.cast_unsigned()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 1. Search the resident $INDEX_ROOT (its INDEX_HEADER begins at offset 16).
+    if let Some(frs) = root_value
+        .as_deref()
+        .and_then(|root| scan_index_entries(root, 16, &target))
+    {
+        return Ok(frs);
+    }
+
+    // 2. Search the $INDEX_ALLOCATION INDX blocks, if the index spilled.
+    if let Some((runs, size)) = alloc
+        && block_size > 0
+    {
+        let buf = read_runs(handle.raw_handle(), &runs, vol.bytes_per_cluster, size)?;
+        if let Some(frs) = scan_index_blocks(&buf, block_size, &target) {
+            return Ok(frs);
+        }
+    }
+
+    Err(MftError::InvalidData(format!(
+        "$Extend index: {child} not found (no active USN journal?)"
+    )))
+}
+
+/// Scan NTFS directory-index entries for the entry whose `$FILE_NAME` matches
+/// `target` (UTF-16), returning its FRS. `header_start` is the byte offset of
+/// the `INDEX_HEADER` within `buf` (whose `first_entry_offset` is relative to
+/// it).
+#[cfg(any(windows, test))]
+fn scan_index_entries(buf: &[u8], header_start: usize, target: &[u16]) -> Option<u64> {
+    let first_entry_offset =
+        u32::from_le_bytes(buf.get(header_start..header_start + 4)?.try_into().ok()?) as usize;
+    let mut pos = header_start.checked_add(first_entry_offset)?;
+    loop {
+        let entry = buf.get(pos..)?;
+        let flags = u16::from_le_bytes(entry.get(12..14)?.try_into().ok()?);
+        // Last-entry flag (0x02): end of this node.
+        if (flags & 0x02) != 0 {
+            return None;
+        }
+        let file_reference = u64::from_le_bytes(entry.get(0..8)?.try_into().ok()?);
+        // The $FILE_NAME key starts at entry offset 16: name_length @0x40,
+        // UTF-16 name @0x42.
+        let name_length = usize::from(*entry.get(16 + 0x40)?);
+        let name_bytes = entry.get(16 + 0x42..16 + 0x42 + name_length * 2)?;
+        let name: Vec<u16> = name_bytes
+            .chunks_exact(2)
+            .filter_map(|pair| pair.try_into().ok().map(u16::from_le_bytes))
+            .collect();
+        if name == target {
+            return Some(crate::ntfs::file_reference_to_frs(file_reference));
+        }
+        let entry_length = usize::from(u16::from_le_bytes(entry.get(8..10)?.try_into().ok()?));
+        if entry_length == 0 {
+            return None;
+        }
+        pos = pos.checked_add(entry_length)?;
+    }
+}
+
+/// Scan the `INDX` blocks in an `$INDEX_ALLOCATION` buffer for `target`.
+#[cfg(windows)]
+fn scan_index_blocks(buf: &[u8], block_size: usize, target: &[u16]) -> Option<u64> {
+    if block_size == 0 {
+        return None;
+    }
+    for start in (0..buf.len()).step_by(block_size) {
+        let Some(end) = start.checked_add(block_size) else {
+            break;
+        };
+        let Some(block) = buf.get(start..end) else {
+            break;
+        };
+        if !block.starts_with(b"INDX") {
+            continue; // sparse / unused block
+        }
+        let mut owned = block.to_vec();
+        let usa_offset = u16::from_le_bytes(owned.get(4..6)?.try_into().ok()?);
+        let usa_count = u16::from_le_bytes(owned.get(6..8)?.try_into().ok()?);
+        if !crate::ntfs::apply_usa_fixup(&mut owned, usa_offset, usa_count) {
+            continue;
+        }
+        // The INDEX_HEADER begins at offset 0x18 within an INDX block.
+        if let Some(frs) = scan_index_entries(&owned, 0x18, target) {
+            return Some(frs);
+        }
+    }
+    None
+}
+
 /// Write a captured metafile (header + payload) to `path` atomically.
 ///
 /// # Errors
@@ -397,7 +552,7 @@ pub fn load_metafile_from_file(path: &Path) -> Result<(MetafileHeader, Vec<u8>)>
 
 #[cfg(test)]
 mod tests {
-    use super::{HEADER_SIZE, MetafileHeader, MetafileKind};
+    use super::{HEADER_SIZE, MetafileHeader, MetafileKind, scan_index_entries};
     use crate::platform::DriveLetter;
 
     fn sample() -> MetafileHeader {
@@ -436,6 +591,8 @@ mod tests {
         assert_eq!(MetafileKind::BadClus.frs(), 8);
         assert_eq!(MetafileKind::LogFile.frs(), 2);
         assert_eq!(MetafileKind::LogFile.name(), "$LogFile");
+        assert_eq!(MetafileKind::UsnJrnl.frs(), 0xF5);
+        assert_eq!(MetafileKind::UsnJrnl.name(), "$UsnJrnl");
         // FRS code round-trips through the header field.
         assert_eq!(MetafileKind::from_frs(6), Some(MetafileKind::Bitmap));
         assert_eq!(MetafileKind::from_frs(7), Some(MetafileKind::Boot));
@@ -445,6 +602,7 @@ mod tests {
         assert_eq!(MetafileKind::from_frs(3), Some(MetafileKind::Volume));
         assert_eq!(MetafileKind::from_frs(8), Some(MetafileKind::BadClus));
         assert_eq!(MetafileKind::from_frs(2), Some(MetafileKind::LogFile));
+        assert_eq!(MetafileKind::from_frs(0xF5), Some(MetafileKind::UsnJrnl));
         assert_eq!(MetafileKind::from_frs(200), None);
     }
 
@@ -470,5 +628,34 @@ mod tests {
     #[test]
     fn payload_offset_is_header_size() {
         assert_eq!(HEADER_SIZE, 64);
+    }
+
+    #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test builds a fixed 256-byte index buffer with known in-bounds offsets"
+    )]
+    fn scan_index_entries_resolves_child_frs() {
+        // Minimal $INDEX_ROOT-style buffer: INDEX_HEADER at offset 0
+        // (first_entry_offset = 16), one entry for "$UsnJrnl" → FRS 42.
+        let mut buf = vec![0_u8; 256];
+        buf[0..4].copy_from_slice(&16_u32.to_le_bytes()); // first_entry_offset
+        let entry = 16_usize;
+        buf[entry..entry + 8].copy_from_slice(&42_u64.to_le_bytes()); // file_reference
+        // flags @ entry+12 stay 0 (not the last entry).
+        let name: Vec<u16> = "$UsnJrnl".encode_utf16().collect();
+        let key = entry + 16;
+        buf[key + 0x40] = 8; // name_length (UTF-16 code units)
+        for (i, unit) in name.iter().enumerate() {
+            let off = key + 0x42 + i * 2;
+            buf[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+
+        let target: Vec<u16> = "$UsnJrnl".encode_utf16().collect();
+        assert_eq!(scan_index_entries(&buf, 0, &target), Some(42));
+
+        // A miss: entry_length is 0 after the single entry, so the scan stops.
+        let miss: Vec<u16> = "$Nope".encode_utf16().collect();
+        assert_eq!(scan_index_entries(&buf, 0, &miss), None);
     }
 }

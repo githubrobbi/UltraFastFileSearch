@@ -42,6 +42,8 @@ pub(crate) enum MetafileKind {
     BadClus,
     /// `$LogFile` — the NTFS metadata transaction log.
     LogFile,
+    /// `$UsnJrnl:$J` — the change journal (resolved via `$Extend`).
+    UsnJrnl,
 }
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.

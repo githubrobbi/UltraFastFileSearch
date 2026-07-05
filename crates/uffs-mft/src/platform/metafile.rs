@@ -49,6 +49,15 @@ pub enum MetafileKind {
     Bitmap,
     /// `$Secure:$SDS` (FRS 9) — the security-descriptor store (ACLs / owner).
     Secure,
+    /// `$AttrDef` (FRS 4) — NTFS attribute-type definitions.
+    AttrDef,
+    /// `$MFTMirr` (FRS 1) — backup of the first four `$MFT` records.
+    MftMirr,
+    /// `$Volume` (FRS 3) — the MFT record (`$VOLUME_NAME` /
+    /// `$VOLUME_INFORMATION`).
+    Volume,
+    /// `$BadClus` (FRS 8) — the MFT record (the `$Bad` bad-cluster run list).
+    BadClus,
 }
 
 impl MetafileKind {
@@ -59,6 +68,10 @@ impl MetafileKind {
             Self::Boot => "$Boot",
             Self::Bitmap => "$Bitmap",
             Self::Secure => "$Secure",
+            Self::AttrDef => "$AttrDef",
+            Self::MftMirr => "$MFTMirr",
+            Self::Volume => "$Volume",
+            Self::BadClus => "$BadClus",
         }
     }
 
@@ -70,6 +83,10 @@ impl MetafileKind {
             Self::Boot => 7,
             Self::Bitmap => 6,
             Self::Secure => 9,
+            Self::AttrDef => 4,
+            Self::MftMirr => 1,
+            Self::Volume => 3,
+            Self::BadClus => 8,
         }
     }
 
@@ -79,6 +96,10 @@ impl MetafileKind {
             7 => Some(Self::Boot),
             6 => Some(Self::Bitmap),
             9 => Some(Self::Secure),
+            4 => Some(Self::AttrDef),
+            1 => Some(Self::MftMirr),
+            3 => Some(Self::Volume),
+            8 => Some(Self::BadClus),
             _ => None,
         }
     }
@@ -201,6 +222,14 @@ pub fn read_metafile(drive: DriveLetter, kind: MetafileKind) -> Result<Vec<u8>> 
         MetafileKind::Bitmap => read_data_stream(&handle, vol, 6, None),
         // `$Secure:$SDS` holds deduplicated security descriptors (ACLs).
         MetafileKind::Secure => read_data_stream(&handle, vol, 9, Some("$SDS")),
+        // `$AttrDef` / `$MFTMirr` are unnamed non-resident `$DATA` streams.
+        MetafileKind::AttrDef => read_data_stream(&handle, vol, 4, None),
+        MetafileKind::MftMirr => read_data_stream(&handle, vol, 1, None),
+        // `$Volume` / `$BadClus` keep their useful data in the MFT record itself
+        // (the $VOLUME_* attributes; the $Bad run list), so capture the fixed-up
+        // record.
+        MetafileKind::Volume => read_frs_record(&handle, vol, 3),
+        MetafileKind::BadClus => read_frs_record(&handle, vol, 8),
     }
 }
 
@@ -394,10 +423,18 @@ mod tests {
         assert_eq!(MetafileKind::Bitmap.name(), "$Bitmap");
         assert_eq!(MetafileKind::Secure.frs(), 9);
         assert_eq!(MetafileKind::Secure.name(), "$Secure");
+        assert_eq!(MetafileKind::AttrDef.frs(), 4);
+        assert_eq!(MetafileKind::MftMirr.frs(), 1);
+        assert_eq!(MetafileKind::Volume.frs(), 3);
+        assert_eq!(MetafileKind::BadClus.frs(), 8);
         // FRS code round-trips through the header field.
         assert_eq!(MetafileKind::from_frs(6), Some(MetafileKind::Bitmap));
         assert_eq!(MetafileKind::from_frs(7), Some(MetafileKind::Boot));
         assert_eq!(MetafileKind::from_frs(9), Some(MetafileKind::Secure));
+        assert_eq!(MetafileKind::from_frs(4), Some(MetafileKind::AttrDef));
+        assert_eq!(MetafileKind::from_frs(1), Some(MetafileKind::MftMirr));
+        assert_eq!(MetafileKind::from_frs(3), Some(MetafileKind::Volume));
+        assert_eq!(MetafileKind::from_frs(8), Some(MetafileKind::BadClus));
         assert_eq!(MetafileKind::from_frs(200), None);
     }
 

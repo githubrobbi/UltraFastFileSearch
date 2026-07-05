@@ -32,6 +32,14 @@ pub(crate) enum MetafileKind {
     Bitmap,
     /// `$Secure:$SDS` — security-descriptor store (ACLs / owner).
     Secure,
+    /// `$AttrDef` — NTFS attribute-type definitions.
+    AttrDef,
+    /// `$MFTMirr` — backup of the first four `$MFT` records.
+    MftMirr,
+    /// `$Volume` — the MFT record (volume name / version / flags).
+    Volume,
+    /// `$BadClus` — the MFT record (bad-cluster run list).
+    BadClus,
 }
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.

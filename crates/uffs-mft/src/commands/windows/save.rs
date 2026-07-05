@@ -402,6 +402,10 @@ pub(crate) async fn cmd_metafile(
         crate::cli::MetafileKind::Boot => MetafileKind::Boot,
         crate::cli::MetafileKind::Bitmap => MetafileKind::Bitmap,
         crate::cli::MetafileKind::Secure => MetafileKind::Secure,
+        crate::cli::MetafileKind::AttrDef => MetafileKind::AttrDef,
+        crate::cli::MetafileKind::MftMirr => MetafileKind::MftMirr,
+        crate::cli::MetafileKind::Volume => MetafileKind::Volume,
+        crate::cli::MetafileKind::BadClus => MetafileKind::BadClus,
     };
 
     // Volume serial for the header.

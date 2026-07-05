@@ -3,177 +3,175 @@
 
 //! `uffs --status` — combined daemon + broker + MCP status in one view.
 //!
-//! Shows four sections:
-//! - **Daemon**: PID, uptime, drives, queries
-//! - **Access Broker**: SCM state, pid, pipe-serving (native, locale-proof)
-//! - **MCP HTTP Gateway**: PID, transport, health, sessions, tool calls
+//! Four sections, each with a health glyph and (in `-v`) expanded detail:
+//! - **Daemon**: PID, uptime, drives, queries; `-v` adds build / broker mode,
+//!   live-update loops, memory, and paths.
+//! - **Access Broker**: SCM state, PID, pipe-serving (native, locale-proof);
+//!   `-v` adds the broker binary path + uptime + stale-binary check.
+//! - **MCP HTTP Gateway**: PID, transport, health, sessions, tool calls.
 //! - **MCP Stdio Sessions**: active `uffs --mcp run` processes (one per AI
-//!   host)
+//!   host).
+//!
+//! `--json` emits the machine-readable superset of all four sections.
 
 #[cfg(feature = "mcp-http-probe")]
 use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
-use uffs_client::protocol::response::{DaemonStatus, ShardTier};
+use uffs_client::protocol::response::{DriveInfo, ShardTier, StatsResponse, StatusResponse};
+use uffs_statusfmt::{Glyph, Palette, field, header, section, status_row};
 
-/// `uffs --status` — show combined system status.
-///
-/// # Errors
-///
-/// Returns an error if the operation fails.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn system_status() {
-    println!("═══ UFFS System Status ═══");
-    println!();
-    print_daemon_status();
-    println!();
-    print_broker_status();
-    println!();
-    print_mcp_http_status();
-    println!();
-    print_mcp_stdio_sessions();
-}
+use crate::commands::daemon_status::health;
 
 /// Short pipe-probe budget for the status line (ms).
 const BROKER_PIPE_PROBE_MS: u32 = 1_000;
 
-/// Print the Access Broker section: SCM state + pid + whether its pipe is
-/// serving. Native `uffs-winsvc` (locale-proof). The broker is a Windows-only
-/// component (it vends elevated NTFS volume handles); off Windows there is no
-/// broker and no UAC, so the section reports "not applicable" rather than
-/// advertising an install that does nothing — matching the doctor's
-/// "Broker check skipped (non-Windows)".
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_broker_status() {
-    use uffs_broker_protocol::{PIPE_NAME, SERVICE_NAME};
+/// One mebibyte, for the `bytes → MB` display conversions.
+const MIB: u64 = 1024 * 1024;
 
-    println!("── Access Broker ──");
-    if !cfg!(windows) {
-        println!("  Status:      not applicable (Windows-only component)");
+/// `uffs --status [-v] [--json]` — show combined system status.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn system_status(verbose: bool, json: bool) {
+    let daemon = gather_daemon();
+    if json {
+        render_json(daemon.as_ref());
         return;
     }
-    let info = uffs_winsvc::query(SERVICE_NAME);
-    if !info.state.is_installed() {
-        println!("  Status:      not installed");
-        println!("  Install:     uffs-broker --install  (one-time; removes UAC prompts)");
-        return;
-    }
-    match info.pid {
-        Some(pid) => println!("  Status:      {} (PID {pid})", info.state.label()),
-        None => println!("  Status:      {}", info.state.label()),
-    }
-    let serving =
-        info.state.is_running() && uffs_winsvc::pipe_serving(PIPE_NAME, BROKER_PIPE_PROBE_MS);
-    println!(
-        "  Pipe:        {}",
-        if serving { "serving" } else { "not serving" }
-    );
+    let palette = Palette::detect();
+    println!("{}", header(palette, "UFFS System Status"));
+    println!();
+    print_daemon_section(palette, verbose, daemon.as_ref());
+    println!();
+    print_broker_section(palette, verbose);
+    println!();
+    print_mcp_http_section(palette, verbose);
+    println!();
+    print_mcp_stdio_section(palette);
 }
 
-/// Print daemon status section.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_daemon_status() {
-    println!("── Daemon ──");
+/// Daemon state gathered once, shared by the human and JSON renderers.
+struct DaemonSnapshot {
+    /// `status` RPC payload (phase, pid, uptime, new operator fields).
+    status: StatusResponse,
+    /// Loaded drives from the `drives` RPC (empty when none / unavailable).
+    drives: Vec<DriveInfo>,
+    /// `stats` RPC payload (performance counters), when the daemon supports it.
+    perf: Option<StatsResponse>,
+}
 
-    let Ok(mut client) = UffsClientSync::connect_raw() else {
-        println!("  Status:      not running");
+/// Connect to the daemon and snapshot status + drives + stats, or `None` when
+/// the daemon is not running / not responding.
+fn gather_daemon() -> Option<DaemonSnapshot> {
+    let mut client = UffsClientSync::connect_raw().ok()?;
+    let status = client.status().ok()?;
+    let drives = client
+        .drives()
+        .ok()
+        .map_or_else(Vec::new, |resp| resp.drives);
+    let perf = client.stats().ok();
+    Some(DaemonSnapshot {
+        status,
+        drives,
+        perf,
+    })
+}
+
+// ── JSON ────────────────────────────────────────────────────────────────────
+
+/// Emit the machine-readable superset of every section under stable keys.
+#[expect(clippy::print_stdout, reason = "CLI --json output")]
+fn render_json(daemon: Option<&DaemonSnapshot>) {
+    let doc = serde_json::json!({
+        "daemon": daemon_json(daemon),
+        "broker": broker_json(),
+        "mcp_http": mcp_http_json(),
+        "mcp_stdio": mcp_stdio_json(),
+    });
+    match serde_json::to_string_pretty(&doc) {
+        Ok(text) => println!("{text}"),
+        Err(err) => println!("{{\"error\":\"{err}\"}}"),
+    }
+}
+
+/// JSON for the daemon section (status + drives + stats, or `running:false`).
+fn daemon_json(daemon: Option<&DaemonSnapshot>) -> serde_json::Value {
+    daemon.map_or_else(
+        || serde_json::json!({ "running": false }),
+        |snap| {
+            serde_json::json!({
+                "running": true,
+                "status": snap.status,
+                "drives": snap.drives,
+                "stats": snap.perf,
+            })
+        },
+    )
+}
+
+// ── Daemon (human) ───────────────────────────────────────────────────────────
+
+/// Print the daemon section: glyph headline + core fields, plus `-v` detail.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_daemon_section(palette: Palette, verbose: bool, daemon: Option<&DaemonSnapshot>) {
+    println!("{}", section(palette, "Daemon"));
+    let Some(snap) = daemon else {
+        println!("{}", status_row(palette, Glyph::Down, "not running", ""));
         let pid_path = uffs_client::daemon_ctl::pid_file_path();
         if pid_path.exists() {
-            println!("  PID file:    {} (stale)", pid_path.display());
+            println!(
+                "  {}",
+                palette.dim(&format!("(stale PID file at {})", pid_path.display()))
+            );
         }
         return;
     };
 
-    let Ok(status) = client.status() else {
-        println!("  Status:      connected but not responding");
-        return;
-    };
-
-    let uptime = core::time::Duration::from_secs(status.uptime_secs);
-    let daemon_stale = std::env::current_exe()
-        .ok()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .and_then(|meta| meta.modified().ok())
-        .is_some_and(|bin_mtime| {
-            let started = std::time::SystemTime::now() - uptime;
-            started < bin_mtime
-        });
-    let stale_tag = if daemon_stale {
-        "  ⚠ stale binary"
+    let (glyph, state) = health(&snap.status.status);
+    let stale_tag = if binary_is_newer_than(snap.status.uptime_secs) {
+        format!("  {}", palette.yellow("\u{26a0} stale binary"))
     } else {
-        ""
+        String::new()
     };
     println!(
-        "  Version:     {}",
-        crate::commands::version_summary(&status.version)
+        "{}",
+        status_row(
+            palette,
+            glyph,
+            &state,
+            &format!("PID {}{stale_tag}", snap.status.pid)
+        )
     );
-    println!("  Status:      running (PID {}){stale_tag}", status.pid);
+
+    let width = 11;
     println!(
-        "  Uptime:      {}",
-        uffs_client::format::format_duration(uptime)
+        "{}",
+        field(
+            palette,
+            "Version",
+            &crate::commands::version_summary(&snap.status.version),
+            width
+        )
     );
-
-    match &status.status {
-        DaemonStatus::Loading {
-            drives_loaded,
-            drives_total,
-        } => {
-            println!("  State:       Loading ({drives_loaded}/{drives_total} drives)");
-        }
-        DaemonStatus::Ready => {
-            println!("  State:       Ready");
-        }
-        DaemonStatus::Refreshing { drives } => {
-            let drive_list: String = drives
-                .iter()
-                .map(|letter| format!("{letter}:"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!("  State:       Refreshing ({drive_list})");
-        }
+    println!(
+        "{}",
+        field(palette, "Uptime", &fmt_secs(snap.status.uptime_secs), width)
+    );
+    print_daemon_drives(palette, &snap.drives, width);
+    if let Some(perf) = snap.perf.as_ref() {
+        print_daemon_queries(palette, perf, width);
     }
-    println!("  Connections: {}", status.connections);
-
-    if let Ok(drives) = client.drives() {
-        print_drive_summary(&drives.drives);
-    }
-
-    // Performance stats.
-    if let Ok(stats) = client.stats() {
-        let fmt = uffs_client::format::format_duration;
-        let startup = core::time::Duration::from_millis(stats.startup_duration_ms);
-        println!("  Startup:     {}", fmt(startup));
-        println!("  Queries:     {}", stats.total_queries);
-        if stats.total_queries > 0 {
-            let avg = core::time::Duration::from_micros(uffs_client::format::f64_to_u64(
-                stats.avg_query_time_us,
-            ));
-            println!("  Avg query:   {}", fmt(avg));
-            println!("  Queries/s:   {:.2}", stats.queries_per_second);
-        }
+    if verbose {
+        print_daemon_verbose(palette, &snap.status);
     }
 }
 
-/// Render the `Drives:` block of `uffs --status`.
-///
-/// Phase 5 task 5.11: enumerate every shard in the registry (Hot /
-/// Warm / Parked / Cold) and tag each row with its tier marker.
-/// `total_records` reflects only Warm/Hot bodies — Parked/Cold have
-/// no body in RAM, so their `records` field is 0 and excluded from
-/// the headline count.  Empty registry still renders `(none loaded)`
-/// so cold-boot detection in external scripts (`api-validation`,
-/// `cli-validation`, `mcp-validation`) keeps working.
+/// Compact one-line drive summary (count · records · tier split).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_drive_summary(drives: &[uffs_client::protocol::response::DriveInfo]) {
+fn print_daemon_drives(palette: Palette, drives: &[DriveInfo], width: usize) {
     if drives.is_empty() {
-        println!("  Drives:      (none loaded)");
+        println!("{}", field(palette, "Drives", "(none loaded)", width));
         return;
     }
-
-    let total_records: usize = drives.iter().map(|dr| dr.records).sum();
-    let active = drives
-        .iter()
-        .filter(|dr| matches!(dr.tier, Some(ShardTier::Warm | ShardTier::Hot) | None))
-        .count();
+    let records: usize = drives.iter().map(|dr| dr.records).sum();
     let parked = drives
         .iter()
         .filter(|dr| matches!(dr.tier, Some(ShardTier::Parked)))
@@ -182,228 +180,420 @@ fn print_drive_summary(drives: &[uffs_client::protocol::response::DriveInfo]) {
         .iter()
         .filter(|dr| matches!(dr.tier, Some(ShardTier::Cold)))
         .count();
-    println!(
-        "  Drives:      {} loaded ({} records, {active} active / {parked} parked / {cold} cold)",
+    let active = drives.len().saturating_sub(parked).saturating_sub(cold);
+    let value = format!(
+        "{} loaded \u{b7} {} records ({active} active / {parked} parked / {cold} cold)",
         drives.len(),
-        uffs_client::format::format_number_commas(total_records as u64),
+        uffs_client::format::format_number_commas(records as u64),
     );
-    for dr in drives {
-        let marker = compact_tier_marker(dr.tier);
-        match dr.tier {
-            Some(ShardTier::Parked) => {
-                println!("    {} {}: bloom + trie resident", marker, dr.letter);
-            }
-            Some(ShardTier::Cold) => {
-                println!("    {} {}: cache only (no RAM)", marker, dr.letter);
-            }
-            Some(ShardTier::Hot | ShardTier::Warm) | None => {
+    println!("{}", field(palette, "Drives", &value, width));
+}
+
+/// Compact one-line query-rate summary.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_daemon_queries(palette: Palette, stats: &StatsResponse, width: usize) {
+    if stats.total_queries == 0 {
+        println!("{}", field(palette, "Queries", "0", width));
+        return;
+    }
+    let avg =
+        core::time::Duration::from_micros(uffs_client::format::f64_to_u64(stats.avg_query_time_us));
+    let value = format!(
+        "{} (avg {}, {:.1}/s)",
+        stats.total_queries,
+        uffs_client::format::format_duration(avg),
+        stats.queries_per_second,
+    );
+    println!("{}", field(palette, "Queries", &value, width));
+}
+
+/// `-v` daemon detail: build / broker mode, live-update, memory, paths.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_daemon_verbose(palette: Palette, status: &StatusResponse) {
+    let width = 11;
+    if !status.git_sha.is_empty() {
+        println!("{}", field(palette, "Commit", &status.git_sha, width));
+    }
+    let mode = if status.elevated {
+        "yes (direct elevated reads)"
+    } else if status.reading_via_broker {
+        "no (via Access Broker, zero-UAC)"
+    } else {
+        "no"
+    };
+    println!("{}", field(palette, "Elevated", mode, width));
+    if let Some(info) = status.live_update {
+        let value = if info.active_loops > 0 {
+            format!("{} journal loop(s) running", info.active_loops)
+        } else {
+            "inactive".to_owned()
+        };
+        println!("{}", field(palette, "Live upd", &value, width));
+    }
+    if let Some(rss) = status.rss_bytes {
+        let heap = status
+            .index_heap_bytes
+            .map_or_else(String::new, |bytes| format!(" (index {} MB)", bytes / MIB));
+        println!(
+            "{}",
+            field(
+                palette,
+                "Memory",
+                &format!("{} MB RSS{heap}", rss / MIB),
+                width
+            )
+        );
+    }
+    if let Some(paths) = status.paths.as_ref()
+        && !paths.data_dir.is_empty()
+    {
+        println!("{}", field(palette, "Data dir", &paths.data_dir, width));
+    }
+}
+
+// ── Access Broker (human) ────────────────────────────────────────────────────
+
+/// Print the Access Broker section. The broker is Windows-only (it vends
+/// elevated NTFS volume handles); off Windows the section says "not applicable"
+/// rather than advertising an install that does nothing.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_broker_section(palette: Palette, verbose: bool) {
+    use uffs_broker_protocol::{PIPE_NAME, SERVICE_NAME};
+
+    println!("{}", section(palette, "Access Broker"));
+    if !cfg!(windows) {
+        println!(
+            "{}",
+            status_row(
+                palette,
+                Glyph::Off,
+                "not applicable",
+                "Windows-only component"
+            )
+        );
+        return;
+    }
+    let info = uffs_winsvc::query(SERVICE_NAME);
+    if !info.state.is_installed() {
+        println!("{}", status_row(palette, Glyph::Off, "not installed", ""));
+        println!(
+            "  {}",
+            palette.dim("Install: uffs-broker --install  (one-time; removes UAC prompts)")
+        );
+        return;
+    }
+    let (glyph, running) = if info.state.is_running() {
+        (Glyph::Up, true)
+    } else {
+        (Glyph::Down, false)
+    };
+    let detail = info
+        .pid
+        .map_or_else(String::new, |pid| format!("PID {pid}"));
+    println!(
+        "{}",
+        status_row(palette, glyph, info.state.label(), &detail)
+    );
+
+    let serving = running && uffs_winsvc::pipe_serving(PIPE_NAME, BROKER_PIPE_PROBE_MS);
+    println!(
+        "{}",
+        field(
+            palette,
+            "Pipe",
+            if serving { "serving" } else { "not serving" },
+            9
+        )
+    );
+    print_broker_detail(palette, verbose, info.pid);
+}
+
+/// `-v` broker detail (non-Windows): the broker does not exist here.
+#[cfg(not(windows))]
+const fn print_broker_detail(_palette: Palette, _verbose: bool, _pid: Option<u32>) {}
+
+/// `-v` broker detail (Windows): binary path + uptime + stale-binary check.
+#[cfg(windows)]
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_broker_detail(palette: Palette, verbose: bool, pid: Option<u32>) {
+    if !verbose {
+        return;
+    }
+    let Some(broker_pid) = pid else {
+        return;
+    };
+    let width = 9;
+    if let Some(path) = uffs_mft::platform::process::process_image_path(broker_pid) {
+        println!(
+            "{}",
+            field(palette, "Binary", &path.display().to_string(), width)
+        );
+        if let Some(created) = uffs_mft::platform::process::process_creation_time(broker_pid) {
+            if let Ok(uptime) = std::time::SystemTime::now().duration_since(created) {
                 println!(
-                    "    {} {}: {:>10} records",
-                    marker,
-                    dr.letter,
-                    uffs_client::format::format_number_commas(dr.records as u64),
+                    "{}",
+                    field(
+                        palette,
+                        "Uptime",
+                        &uffs_client::format::format_duration(uptime),
+                        width
+                    )
                 );
             }
-            Some(ShardTier::Evicting | ShardTier::Unknown) => {
-                println!("    {} {}: ({})", marker, dr.letter, dr.source);
+            let stale = std::fs::metadata(&path)
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .is_some_and(|mtime| created < mtime);
+            if stale {
+                println!(
+                    "  {}",
+                    palette.yellow("\u{26a0} broker binary is newer than the running process")
+                );
             }
         }
     }
 }
 
-/// Compact tier marker for `uffs --status`'s drive list — fixed-width
-/// bracket label per tier so the per-drive lines align in the
-/// combined system view.  Phase 5 task 5.11.
-const fn compact_tier_marker(tier: Option<ShardTier>) -> &'static str {
-    match tier {
-        Some(ShardTier::Hot) => "[H]",
-        Some(ShardTier::Warm) => "[W]",
-        Some(ShardTier::Parked) => "[P]",
-        Some(ShardTier::Cold) => "[C]",
-        Some(ShardTier::Evicting) => "[E]",
-        Some(ShardTier::Unknown) => "[?]",
-        None => "[ ]",
+/// JSON for the broker section (Windows).
+#[cfg(windows)]
+fn broker_json() -> serde_json::Value {
+    use uffs_broker_protocol::{PIPE_NAME, SERVICE_NAME};
+    let info = uffs_winsvc::query(SERVICE_NAME);
+    if !info.state.is_installed() {
+        return serde_json::json!({ "applicable": true, "installed": false });
     }
+    let running = info.state.is_running();
+    let serving = running && uffs_winsvc::pipe_serving(PIPE_NAME, BROKER_PIPE_PROBE_MS);
+    let binary = info
+        .pid
+        .and_then(uffs_mft::platform::process::process_image_path)
+        .map(|path| path.display().to_string());
+    serde_json::json!({
+        "applicable": true,
+        "installed": true,
+        "state": info.state.label(),
+        "running": running,
+        "pid": info.pid,
+        "pipe_serving": serving,
+        "binary": binary,
+    })
 }
 
-/// Print MCP HTTP gateway status section.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_mcp_http_status() {
-    println!("── MCP HTTP Gateway ──");
+/// JSON for the broker section (non-Windows: the broker does not exist).
+#[cfg(not(windows))]
+fn broker_json() -> serde_json::Value {
+    serde_json::json!({ "applicable": false })
+}
 
-    // Read the PID file.  Only show HTTP-transport entries here;
-    // stdio entries are handled by `print_mcp_stdio_sessions()`.
+// ── MCP HTTP Gateway ─────────────────────────────────────────────────────────
+
+/// Print the MCP HTTP gateway section.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_mcp_http_section(palette: Palette, verbose: bool) {
+    println!("{}", section(palette, "MCP HTTP Gateway"));
     let info = match uffs_client::mcp_pid::parse_mcp_pid_file_full() {
         Some(info) if info.http_addr().is_some() => info,
         _ => {
-            println!("  Status:      not running");
+            println!("{}", status_row(palette, Glyph::Down, "not running", ""));
             return;
         }
     };
-
-    let alive = uffs_client::mcp_pid::is_mcp_server_running().is_some();
-    if !alive {
+    if uffs_client::mcp_pid::is_mcp_server_running().is_none() {
         println!(
-            "  Status:      not running (stale PID file, PID {})",
-            info.pid
+            "{}",
+            status_row(
+                palette,
+                Glyph::Down,
+                "not running",
+                &format!("stale PID {}", info.pid)
+            )
         );
         return;
     }
-
     let uptime_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |dur| dur.as_secs().saturating_sub(info.start_ts));
-    let uptime = core::time::Duration::from_secs(uptime_secs);
-
-    // Stale binary check: was the gateway started before the current
-    // binary was last modified?
-    let gw_stale = std::env::current_exe()
-        .ok()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .and_then(|meta| meta.modified().ok())
-        .is_some_and(|bin_mtime| {
-            let gw_started = std::time::UNIX_EPOCH + core::time::Duration::from_secs(info.start_ts);
-            gw_started < bin_mtime
-        });
-    let stale_tag = if gw_stale { "  ⚠ stale binary" } else { "" };
-
-    println!("  Status:      running (PID {}){stale_tag}", info.pid);
+    let gw_stale = mcp_started_before_binary(info.start_ts);
+    let stale = if gw_stale {
+        format!("  {}", palette.yellow("\u{26a0} stale binary"))
+    } else {
+        String::new()
+    };
     println!(
-        "  Uptime:      {}",
-        uffs_client::format::format_duration(uptime)
+        "{}",
+        status_row(
+            palette,
+            Glyph::Up,
+            "running",
+            &format!("PID {}{stale}", info.pid)
+        )
     );
-
-    // Probe HTTP /status endpoint for health + stats.
-    //
-    // Gated behind the `mcp-http-probe` feature: enabling it pulls in
-    // `std::net::TcpStream`, which on Windows unconditionally links
-    // `ws2_32.dll` and adds measurable process-launch overhead.  When
-    // the feature is off we still report the configured bind address,
-    // just without actively probing it.
+    println!("{}", field(palette, "Uptime", &fmt_secs(uptime_secs), 11));
     if let Some((bind, port)) = info.http_addr() {
-        #[cfg(feature = "mcp-http-probe")]
-        match http_get_json(bind, port, "/status") {
-            Ok(json) => {
-                println!("  Health:      ✓ (http://{bind}:{port}/health)");
-                println!("  Endpoint:    http://{bind}:{port}/mcp");
+        print_mcp_http_endpoint(palette, verbose, bind, port);
+    }
+    if gw_stale {
+        println!(
+            "  {}",
+            palette.dim("Run `uffs --mcp reload` to restart with the current binary.")
+        );
+    }
+}
 
-                // Display MCP stats from the /status response.
-                if let Some(stats) = json.get("mcp_stats") {
-                    print_mcp_stats(stats);
-                }
-            }
-            Err(err) => {
-                println!("  Health:      ✗ unreachable ({err})");
-                println!("  Endpoint:    http://{bind}:{port}/mcp");
+/// Print the endpoint + (feature-gated) health/stats for the HTTP gateway.
+#[cfg(feature = "mcp-http-probe")]
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_mcp_http_endpoint(palette: Palette, _verbose: bool, bind: &str, port: u16) {
+    let width = 11;
+    println!(
+        "{}",
+        field(
+            palette,
+            "Endpoint",
+            &format!("http://{bind}:{port}/mcp"),
+            width
+        )
+    );
+    match http_get_json(bind, port, "/status") {
+        Ok(json) => {
+            println!("{}", field(palette, "Health", "\u{2713} ok", width));
+            if let Some(stats) = json.get("mcp_stats") {
+                print_mcp_stats(palette, stats);
             }
         }
-        #[cfg(not(feature = "mcp-http-probe"))]
-        {
-            println!("  Endpoint:    http://{bind}:{port}/mcp");
+        Err(err) => {
             println!(
-                "  Health:      (probe disabled — rebuild with `--features mcp-http-probe` to enable)"
+                "{}",
+                field(
+                    palette,
+                    "Health",
+                    &palette.red(&format!("unreachable ({err})")),
+                    width
+                )
             );
         }
     }
-    if gw_stale {
-        println!("  Run `uffs --mcp reload` to restart with the current binary.");
-    }
+}
+
+/// Print the endpoint for the HTTP gateway (probe feature disabled).
+#[cfg(not(feature = "mcp-http-probe"))]
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_mcp_http_endpoint(palette: Palette, _verbose: bool, bind: &str, port: u16) {
+    let width = 11;
+    println!(
+        "{}",
+        field(
+            palette,
+            "Endpoint",
+            &format!("http://{bind}:{port}/mcp"),
+            width
+        )
+    );
+    println!(
+        "  {}",
+        palette.dim("(health probe disabled — rebuild with `--features mcp-http-probe`)")
+    );
 }
 
 /// Display MCP stats from the `/status` JSON response.
-///
-/// Only compiled when [`http_get_json`] is available (i.e. the
-/// `mcp-http-probe` feature is enabled).
 #[cfg(feature = "mcp-http-probe")]
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_mcp_stats(stats: &serde_json::Value) {
-    let tool_calls = stats["tool_calls"].as_u64().unwrap_or(0);
-    let tool_errors = stats["tool_errors"].as_u64().unwrap_or(0);
-    let avg_latency = stats["avg_tool_latency_us"].as_u64().unwrap_or(0);
+fn print_mcp_stats(palette: Palette, stats: &serde_json::Value) {
+    let width = 11;
     let sessions = stats["active_sessions"].as_u64().unwrap_or(0);
     let total_sessions = stats["total_sessions"].as_u64().unwrap_or(0);
-    let resource_reads = stats["resource_reads"].as_u64().unwrap_or(0);
-    let prompt_gets = stats["prompt_gets"].as_u64().unwrap_or(0);
-
-    println!("  Sessions:    {sessions} active / {total_sessions} total");
-    println!("  Tool calls:  {tool_calls} ({tool_errors} errors)");
-    if tool_calls > 0 {
-        let avg = core::time::Duration::from_micros(avg_latency);
-        println!(
-            "  Avg latency: {}",
-            uffs_client::format::format_duration(avg)
-        );
-    }
-    if resource_reads > 0 || prompt_gets > 0 {
-        println!("  Resources:   {resource_reads} reads, {prompt_gets} prompts");
-    }
-
-    // Per-tool breakdown (only if there are calls).
-    if tool_calls > 0
-        && let Some(tools) = stats.get("tools").and_then(|val| val.as_object())
-    {
-        let mut tool_list: Vec<_> = tools
-            .iter()
-            .filter(|(_, cnt)| cnt.as_u64().unwrap_or(0) > 0)
-            .collect();
-        tool_list.sort_by(|lhs, rhs| {
-            rhs.1
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&lhs.1.as_u64().unwrap_or(0))
-        });
-        if !tool_list.is_empty() {
-            println!("  By tool:");
-            for (name, count) in &tool_list {
-                println!("    {name:.<20} {}", count.as_u64().unwrap_or(0));
-            }
-        }
-    }
+    let tool_calls = stats["tool_calls"].as_u64().unwrap_or(0);
+    let tool_errors = stats["tool_errors"].as_u64().unwrap_or(0);
+    println!(
+        "{}",
+        field(
+            palette,
+            "Sessions",
+            &format!("{sessions} active / {total_sessions} total"),
+            width
+        )
+    );
+    println!(
+        "{}",
+        field(
+            palette,
+            "Tool calls",
+            &format!("{tool_calls} ({tool_errors} errors)"),
+            width
+        )
+    );
 }
 
-/// Print MCP stdio session list.
-///
-/// Scans for running `uffs --mcp run` processes.  Each one is an AI-host
-/// (Augment, Claude Desktop, Cursor, etc.) connected via stdio transport.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_mcp_stdio_sessions() {
-    println!("── MCP Stdio Sessions ──");
+/// JSON for the MCP HTTP gateway section.
+fn mcp_http_json() -> serde_json::Value {
+    let info = match uffs_client::mcp_pid::parse_mcp_pid_file_full() {
+        Some(info) if info.http_addr().is_some() => info,
+        _ => return serde_json::json!({ "running": false }),
+    };
+    let running = uffs_client::mcp_pid::is_mcp_server_running().is_some();
+    let endpoint = info
+        .http_addr()
+        .map(|(bind, port)| format!("http://{bind}:{port}/mcp"));
+    serde_json::json!({
+        "running": running,
+        "pid": info.pid,
+        "endpoint": endpoint,
+    })
+}
 
+// ── MCP Stdio Sessions ───────────────────────────────────────────────────────
+
+/// Print the MCP stdio session list (running `uffs --mcp run` processes).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_mcp_stdio_section(palette: Palette) {
+    println!("{}", section(palette, "MCP Stdio Sessions"));
     let sessions = find_mcp_stdio_processes();
     if sessions.is_empty() {
-        println!("  (none)");
+        println!("  {}", palette.dim("(none)"));
         return;
     }
-
     let mut any_stale = false;
     for (idx, session) in sessions.iter().enumerate() {
-        let num = idx + 1;
-        let ppid_info = session
+        let parent = session
             .parent_name
             .as_deref()
             .map_or(String::new(), |name| format!("  (parent: {name})"));
-        let stale_tag = if session.is_stale {
+        let glyph = if session.is_stale {
             any_stale = true;
-            "  ⚠ stale binary"
+            Glyph::Warn
         } else {
-            ""
+            Glyph::Up
         };
-        println!(
-            "  {num}. PID {pid:<8} uptime: {uptime}{ppid_info}{stale_tag}",
-            pid = session.pid,
-            uptime = uffs_client::format::format_duration(session.uptime),
+        let name = format!("{}. PID {}", idx + 1, session.pid);
+        let detail = format!(
+            "uptime {}{parent}",
+            uffs_client::format::format_duration(session.uptime)
         );
+        println!("{}", status_row(palette, glyph, &name, &detail));
     }
     if any_stale {
-        // Deliberately NO action hint: these stdio sessions are spawned and
-        // OWNED by their AI host (Claude/Cursor/…), not by the user. A human
-        // running `uffs --mcp reload` would only sever the host's live link —
-        // false hope. The host picks up the new binary when it next relaunches
-        // the session; the agent is told this via the MCP server instructions.
         println!(
-            "  These run an older binary; the AI host that launched them refreshes on its next start."
+            "  {}",
+            palette
+                .dim("Older binary; the AI host that launched them refreshes on its next start.")
         );
     }
+}
+
+/// JSON for the MCP stdio session list.
+fn mcp_stdio_json() -> serde_json::Value {
+    let sessions: Vec<serde_json::Value> = find_mcp_stdio_processes()
+        .iter()
+        .map(|session| {
+            serde_json::json!({
+                "pid": session.pid,
+                "uptime_secs": session.uptime.as_secs(),
+                "parent": session.parent_name,
+                "stale": session.is_stale,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(sessions)
 }
 
 /// Information about a running MCP stdio process.
@@ -418,10 +608,7 @@ struct StdioSession {
     is_stale: bool,
 }
 
-/// Find running `uffs --mcp run` processes via `ps`.
-///
-/// Also detects stale binaries by comparing the on-disk mtime of each
-/// process's executable against the current running binary.
+/// Find running `uffs --mcp run` processes via `ps`, flagging stale binaries.
 fn find_mcp_stdio_processes() -> Vec<StdioSession> {
     let Ok(raw_output) = std::process::Command::new("ps")
         .args(["-eo", "pid,ppid,etime,args"])
@@ -436,8 +623,6 @@ fn find_mcp_stdio_processes() -> Vec<StdioSession> {
     // the whole list on one bad byte. (WI-4.3 follow-up)
     let text = String::from_utf8_lossy(&raw_output.stdout);
     let my_pid = std::process::id();
-
-    // Mtime of the current binary — used to detect stale sessions.
     let current_mtime = std::env::current_exe()
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
@@ -445,50 +630,46 @@ fn find_mcp_stdio_processes() -> Vec<StdioSession> {
 
     let mut sessions = Vec::new();
     for line in text.lines().skip(1) {
-        let mut fields = line.split_whitespace();
-        let Some(pid_str) = fields.next() else {
-            continue;
-        };
-        let Ok(proc_pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if proc_pid == my_pid {
-            continue;
+        if let Some(session) = parse_stdio_line(line, my_pid, current_mtime) {
+            sessions.push(session);
         }
-        let parent_pid: u32 = fields.next().and_then(|val| val.parse().ok()).unwrap_or(0);
-        let Some(elapsed_time) = fields.next() else {
-            continue;
-        };
-        let cmdline: String = fields.collect::<Vec<_>>().join(" ");
-
-        // Match `uffs --mcp run` in any path.
-        if !cmdline.contains("mcp") || !cmdline.contains("run") {
-            continue;
-        }
-        // Exclude `mcp serve` (HTTP gateway) and helper processes.
-        if cmdline.contains("serve") || cmdline.contains("start") || cmdline.contains("kill") {
-            continue;
-        }
-
-        let uptime = parse_ps_etime(elapsed_time);
-        let parent_name = resolve_parent_name(parent_pid);
-
-        // Detect stale binary: the process started before the current
-        // binary was last modified (i.e. a rebuild happened after the
-        // process was spawned).
-        let is_stale = current_mtime.is_some_and(|bin_mtime| {
-            let proc_started = std::time::SystemTime::now() - uptime;
-            proc_started < bin_mtime
-        });
-
-        sessions.push(StdioSession {
-            pid: proc_pid,
-            uptime,
-            parent_name,
-            is_stale,
-        });
     }
     sessions
+}
+
+/// Parse one `ps` line into a [`StdioSession`] if it is an MCP stdio process.
+fn parse_stdio_line(
+    line: &str,
+    my_pid: u32,
+    current_mtime: Option<std::time::SystemTime>,
+) -> Option<StdioSession> {
+    let mut fields = line.split_whitespace();
+    let proc_pid = fields.next()?.parse::<u32>().ok()?;
+    if proc_pid == my_pid {
+        return None;
+    }
+    let parent_pid: u32 = fields.next().and_then(|val| val.parse().ok()).unwrap_or(0);
+    let elapsed_time = fields.next()?;
+    let cmdline: String = fields.collect::<Vec<_>>().join(" ");
+
+    if !cmdline.contains("mcp") || !cmdline.contains("run") {
+        return None;
+    }
+    if cmdline.contains("serve") || cmdline.contains("start") || cmdline.contains("kill") {
+        return None;
+    }
+
+    let uptime = parse_ps_etime(elapsed_time);
+    let is_stale = current_mtime.is_some_and(|bin_mtime| {
+        let proc_started = std::time::SystemTime::now() - uptime;
+        proc_started < bin_mtime
+    });
+    Some(StdioSession {
+        pid: proc_pid,
+        uptime,
+        parent_name: resolve_parent_name(parent_pid),
+        is_stale,
+    })
 }
 
 /// Parse `ps` elapsed time format: `[[dd-]hh:]mm:ss`.
@@ -500,16 +681,15 @@ fn parse_ps_etime(etime: &str) -> core::time::Duration {
         (0, etime)
     };
     total_secs += days_part * 86400;
-    // Split into parts and iterate from right: ss, mm, [hh].
     let mut parts = time_part.rsplit(':');
-    if let Some(ss) = parts.next() {
-        total_secs += ss.parse::<u64>().unwrap_or(0);
+    if let Some(sec) = parts.next() {
+        total_secs += sec.parse::<u64>().unwrap_or(0);
     }
-    if let Some(mm) = parts.next() {
-        total_secs += mm.parse::<u64>().unwrap_or(0) * 60;
+    if let Some(min) = parts.next() {
+        total_secs += min.parse::<u64>().unwrap_or(0) * 60;
     }
-    if let Some(hh) = parts.next() {
-        total_secs += hh.parse::<u64>().unwrap_or(0) * 3600;
+    if let Some(hour) = parts.next() {
+        total_secs += hour.parse::<u64>().unwrap_or(0) * 3600;
     }
     core::time::Duration::from_secs(total_secs)
 }
@@ -532,16 +712,44 @@ fn resolve_parent_name(ppid: u32) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    // Extract just the binary name from the path.
     let short = name.rsplit('/').next().unwrap_or(&name).to_owned();
     Some(short)
 }
 
+// ── small shared helpers ─────────────────────────────────────────────────────
+
+/// Format a whole-second duration for display.
+fn fmt_secs(secs: u64) -> String {
+    uffs_client::format::format_duration(core::time::Duration::from_secs(secs))
+}
+
+/// Was the on-disk CLI binary modified after a process that has been up for
+/// `uptime_secs` started? A `true` means the process is running a stale binary.
+fn binary_is_newer_than(uptime_secs: u64) -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok())
+        .is_some_and(|bin_mtime| {
+            let started =
+                std::time::SystemTime::now() - core::time::Duration::from_secs(uptime_secs);
+            started < bin_mtime
+        })
+}
+
+/// Did the MCP gateway (started at unix `start_ts`) predate the current binary?
+fn mcp_started_before_binary(start_ts: u64) -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok())
+        .is_some_and(|bin_mtime| {
+            let started = std::time::UNIX_EPOCH + core::time::Duration::from_secs(start_ts);
+            started < bin_mtime
+        })
+}
+
 /// HTTP GET returning parsed JSON body (blocking).
-///
-/// Gated behind the `mcp-http-probe` feature: it is the sole user of
-/// `std::net::TcpStream` in the CLI, and keeping it out of the default
-/// build drops `ws2_32.dll` from the Windows CLI binary.
 #[cfg(feature = "mcp-http-probe")]
 fn http_get_json(bind: &str, port: u16, path: &str) -> Result<serde_json::Value> {
     use std::io::{Read as _, Write as _};

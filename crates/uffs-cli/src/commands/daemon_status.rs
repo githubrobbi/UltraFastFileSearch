@@ -137,7 +137,10 @@ fn render_human(
 }
 
 /// Map the daemon's lifecycle phase to a health [`Glyph`] and a display label.
-fn health(status: &DaemonStatus) -> (Glyph, String) {
+///
+/// Shared with the combined `uffs --status` view so both surfaces agree on the
+/// daemon's glyph and phase wording.
+pub(crate) fn health(status: &DaemonStatus) -> (Glyph, String) {
     match status {
         DaemonStatus::Ready => (Glyph::Up, "running".to_owned()),
         DaemonStatus::Loading {

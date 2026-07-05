@@ -119,13 +119,17 @@ pub(crate) fn dispatch_command(command: Command, args: &[String]) -> Result<()> 
     }
 }
 
-/// `--status` — combined daemon + broker + MCP status (never fails).
+/// `--status [-v] [--json]` — combined daemon + broker + MCP status (never
+/// fails). `-v`/`--verbose` expands every section; `--json` emits the
+/// machine-readable superset.
 fn run_status(args: &[String]) {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         crate::args::print_status_help();
-    } else {
-        commands::system_status::system_status();
+        return;
     }
+    let verbose = args.iter().any(|arg| arg == "-v" || arg == "--verbose");
+    let json = args.iter().any(|arg| arg == "--json");
+    commands::system_status::system_status(verbose, json);
 }
 
 #[cfg(test)]

@@ -18,15 +18,24 @@
 use std::os::windows::ffi::OsStringExt as _;
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::System::ProcessStatus::EnumProcesses;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 use windows::core::PWSTR;
 
 /// Buffer size (in UTF-16 code units) for an extended-length image path.
 const PATH_CAP: usize = 32_768;
+
+/// 100-nanosecond intervals between the Windows epoch (1601-01-01) and the
+/// Unix epoch (1970-01-01) — the offset that converts a `FILETIME` tick count
+/// into a `SystemTime`.
+const WINDOWS_TO_UNIX_100NS: u64 = 11_644_473_600 * 10_000_000;
+
+/// Number of 100-ns `FILETIME` ticks per second.
+const FILETIME_TICKS_PER_SEC: u64 = 10_000_000;
 
 /// Resolve a process's full image path from its pid, or `None` if the
 /// process cannot be opened (e.g. exited, or access denied).
@@ -36,6 +45,47 @@ pub fn process_image_path(pid: u32) -> Option<PathBuf> {
     let result = image_path_of(handle);
     close_handle(handle);
     result
+}
+
+/// Wall-clock time a process was created, or `None` if it cannot be queried
+/// (exited, access denied, or a `FILETIME` predating the Unix epoch).
+///
+/// Lets an operator view a service's uptime and detect a stale binary (the
+/// process started before its on-disk image was last modified) without a
+/// PowerShell shell-out.
+#[must_use]
+pub fn process_creation_time(pid: u32) -> Option<std::time::SystemTime> {
+    let handle = open_for_query(pid)?;
+    let result = creation_time_of(handle);
+    close_handle(handle);
+    result
+}
+
+/// Read the creation `FILETIME` of an open process handle and convert it to a
+/// [`std::time::SystemTime`].
+fn creation_time_of(handle: HANDLE) -> Option<std::time::SystemTime> {
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all four `FILETIME` out-params are valid writable pointers;
+    // `GetProcessTimes` fills them and returns `Err` on failure.
+    #[expect(unsafe_code, reason = "Win32 FFI — GetProcessTimes")]
+    let outcome = unsafe {
+        GetProcessTimes(
+            handle,
+            core::ptr::from_mut(&mut creation),
+            core::ptr::from_mut(&mut exit),
+            core::ptr::from_mut(&mut kernel),
+            core::ptr::from_mut(&mut user),
+        )
+    };
+    outcome.ok()?;
+    let ticks = (u64::from(creation.dwHighDateTime) << 32_u32) | u64::from(creation.dwLowDateTime);
+    let unix_100ns = ticks.checked_sub(WINDOWS_TO_UNIX_100NS)?;
+    let secs = unix_100ns / FILETIME_TICKS_PER_SEC;
+    let nanos = u32::try_from((unix_100ns % FILETIME_TICKS_PER_SEC) * 100).ok()?;
+    Some(std::time::UNIX_EPOCH + core::time::Duration::new(secs, nanos))
 }
 
 /// Enumerate the pids whose image **file name** equals `file_name`

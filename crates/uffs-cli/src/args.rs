@@ -649,7 +649,12 @@ pub(crate) fn print_aggregate_help() {
 const STATUS_HELP: &str = "\
 uffs --status — Show combined system status (daemon + broker + MCP)
 
-USAGE:  uffs --status
+USAGE:  uffs --status [OPTIONS]
+
+OPTIONS:
+  -v, --verbose   Expand every section (build, broker mode, live-update,
+                  memory, paths; broker binary + uptime on Windows)
+  --json          Machine-readable superset of all sections
 ";
 
 /// Print status help.

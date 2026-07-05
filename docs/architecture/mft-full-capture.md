@@ -3,7 +3,10 @@
 
 # NTFS Full-Volume Capture (`uffs-mft capture`)
 
-> **Status:** Draft / plan (pre-implementation)
+> **Status:** In progress — P0–P2 + P4 shipped (`sysinfo`, all metafile `save`
+> targets incl. `$UsnJrnl` via `$Extend` traversal, and the `capture`
+> orchestrator/manifest incl. the compressed `$MFT`). Remaining: P3 (VSS
+> `--volume-path`) and P5 (`scripts/capture.rs` VSS/zip wrapper).
 > **Owner:** UFFS core
 > **Goal:** Capture *everything* needed to reconstitute a live Windows NTFS volume
 > offline "as accurately as possible" — not just the namespace, but ACLs, the
@@ -225,19 +228,26 @@ loaders are additive (namespace path unchanged).
 
 ## 11. Phasing
 
-0. **P0 — `uffs-mft sysinfo`** (host probe): OS + `InstallationType` (client/server),
-   elevation, VSS availability, per-drive media type (HDD/SSD/NVMe) + geometry.
-   Emits `capture_host.txt` + the manifest `host` block; returns a capability set
-   the orchestrator uses to pick the best-effort path. Cross-platform-buildable
-   (facts are host-gathered; non-Windows returns a stub). **Ships first** — it
-   gates everything and is independently useful.
-1. **P1 — frozen metafile readers + `save` targets** (`$Secure`, `$Bitmap`,
-   `$Boot`, `$AttrDef`, `$Volume`, `$MFTMirr`, `$UpCase`, `$BadClus`).
-2. **P2 — `$UsnJrnl:$J` + `$LogFile` + `$Extend\*` dump.**
-3. **P3 — `--volume-path` (shadow device) support in `VolumeHandle`.**
-4. **P4 — `capture` orchestrator subcommand + `manifest.json`.**
-5. **P5 — `scripts/capture.rs`: WMI VSS create/delete + `--zip`/split + hashes.**
-6. **P6 — matching `load` + `verify_parity` wiring.**
+0. ✅ **P0 — `uffs-mft sysinfo`** (host probe): OS + `InstallationType`
+   (client/server), elevation, VSS availability, per-drive media type
+   (HDD/SSD/NVMe) + geometry, and every mounted volume (type/format/size/used%).
+   Emits `capture_host.txt` (+ `--json`); cross-platform (non-Windows = real host
+   facts, no capture). *(commit 56b09cec0)*
+1. ✅ **P1 — metafile `save` targets** (`$Boot`, `$Bitmap`, `$Secure:$SDS`,
+   `$AttrDef`, `$MFTMirr`, `$Volume`, `$BadClus`; `$UpCase` pre-existing) on a
+   generic data-run stream reader. `uffs-mft metafile --kind <k>`.
+2. ✅ **P2 — `$LogFile`** (FRS 2) **+ `$UsnJrnl:$J` via `$Extend` traversal**
+   (`$INDEX_ROOT` + `$INDEX_ALLOCATION` INDX-block parse to resolve the FRS).
+4. ✅ **P4 — `capture` orchestrator**: `uffs-mft capture --drive C --out <dir>`
+   writes the compressed `$MFT` + all metafiles + `manifest.json` (per-artifact
+   SHA-256) + `SHA256SUMS` into `drive_<x>/`. `MetafileHeader` +
+   `load_metafile_from_file` provide the offline read side (P6 partial).
+3. ⏳ **P3 — `--volume-path` (shadow device) support in `VolumeHandle`** (read a
+   VSS snapshot device directly) — not yet.
+5. ⏳ **P5 — `scripts/capture.rs`: WMI VSS create/delete + `--zip`/split + hashes**
+   — not yet.
+6. ⏳ **P6 — full `load` + `verify_parity` wiring** for the new artifacts — partial
+   (metafile header round-trips; per-metafile parsers TBD).
 
 ## 12. Open questions
 

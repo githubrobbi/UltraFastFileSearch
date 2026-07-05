@@ -58,6 +58,8 @@ pub enum MetafileKind {
     Volume,
     /// `$BadClus` (FRS 8) — the MFT record (the `$Bad` bad-cluster run list).
     BadClus,
+    /// `$LogFile` (FRS 2) — the NTFS metadata transaction log.
+    LogFile,
 }
 
 impl MetafileKind {
@@ -72,6 +74,7 @@ impl MetafileKind {
             Self::MftMirr => "$MFTMirr",
             Self::Volume => "$Volume",
             Self::BadClus => "$BadClus",
+            Self::LogFile => "$LogFile",
         }
     }
 
@@ -87,6 +90,7 @@ impl MetafileKind {
             Self::MftMirr => 1,
             Self::Volume => 3,
             Self::BadClus => 8,
+            Self::LogFile => 2,
         }
     }
 
@@ -100,6 +104,7 @@ impl MetafileKind {
             1 => Some(Self::MftMirr),
             3 => Some(Self::Volume),
             8 => Some(Self::BadClus),
+            2 => Some(Self::LogFile),
             _ => None,
         }
     }
@@ -222,9 +227,11 @@ pub fn read_metafile(drive: DriveLetter, kind: MetafileKind) -> Result<Vec<u8>> 
         MetafileKind::Bitmap => read_data_stream(&handle, vol, 6, None),
         // `$Secure:$SDS` holds deduplicated security descriptors (ACLs).
         MetafileKind::Secure => read_data_stream(&handle, vol, 9, Some("$SDS")),
-        // `$AttrDef` / `$MFTMirr` are unnamed non-resident `$DATA` streams.
+        // `$AttrDef` / `$MFTMirr` / `$LogFile` are unnamed non-resident `$DATA`
+        // streams.
         MetafileKind::AttrDef => read_data_stream(&handle, vol, 4, None),
         MetafileKind::MftMirr => read_data_stream(&handle, vol, 1, None),
+        MetafileKind::LogFile => read_data_stream(&handle, vol, 2, None),
         // `$Volume` / `$BadClus` keep their useful data in the MFT record itself
         // (the $VOLUME_* attributes; the $Bad run list), so capture the fixed-up
         // record.
@@ -427,6 +434,8 @@ mod tests {
         assert_eq!(MetafileKind::MftMirr.frs(), 1);
         assert_eq!(MetafileKind::Volume.frs(), 3);
         assert_eq!(MetafileKind::BadClus.frs(), 8);
+        assert_eq!(MetafileKind::LogFile.frs(), 2);
+        assert_eq!(MetafileKind::LogFile.name(), "$LogFile");
         // FRS code round-trips through the header field.
         assert_eq!(MetafileKind::from_frs(6), Some(MetafileKind::Bitmap));
         assert_eq!(MetafileKind::from_frs(7), Some(MetafileKind::Boot));
@@ -435,6 +444,7 @@ mod tests {
         assert_eq!(MetafileKind::from_frs(1), Some(MetafileKind::MftMirr));
         assert_eq!(MetafileKind::from_frs(3), Some(MetafileKind::Volume));
         assert_eq!(MetafileKind::from_frs(8), Some(MetafileKind::BadClus));
+        assert_eq!(MetafileKind::from_frs(2), Some(MetafileKind::LogFile));
         assert_eq!(MetafileKind::from_frs(200), None);
     }
 

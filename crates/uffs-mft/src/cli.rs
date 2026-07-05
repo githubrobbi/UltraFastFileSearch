@@ -40,6 +40,8 @@ pub(crate) enum MetafileKind {
     Volume,
     /// `$BadClus` — the MFT record (bad-cluster run list).
     BadClus,
+    /// `$LogFile` — the NTFS metadata transaction log.
+    LogFile,
 }
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.

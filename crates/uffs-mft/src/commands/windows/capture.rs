@@ -175,6 +175,7 @@ pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
         MetafileKind::MftMirr,
         MetafileKind::Volume,
         MetafileKind::BadClus,
+        MetafileKind::LogFile,
     ];
 
     let mut artifacts: Vec<ArtifactRecord> = Vec::new();

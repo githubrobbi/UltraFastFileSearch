@@ -89,6 +89,117 @@ pub fn parse_bitmap(payload: &[u8]) -> BitmapStats {
     }
 }
 
+/// Read a little-endian `u16` at `off`, or `None` if out of bounds.
+fn rd_u16(buf: &[u8], off: usize) -> Option<u16> {
+    buf.get(off..off + 2)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u16::from_le_bytes)
+}
+
+/// Read a little-endian `u32` at `off`, or `None` if out of bounds.
+fn rd_u32(buf: &[u8], off: usize) -> Option<u32> {
+    buf.get(off..off + 4)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u32::from_le_bytes)
+}
+
+/// Read a little-endian `i64` at `off`, or `None` if out of bounds.
+fn rd_i64(buf: &[u8], off: usize) -> Option<i64> {
+    buf.get(off..off + 8)
+        .and_then(|slice| slice.try_into().ok())
+        .map(i64::from_le_bytes)
+}
+
+/// Decode UTF-16LE bytes to a lossy UTF-8 string.
+fn decode_utf16_lossy(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .filter_map(|pair| pair.try_into().ok().map(u16::from_le_bytes))
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// One decoded USN change-journal record (the surfaced fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsnEntry {
+    /// USN of this record.
+    pub usn: i64,
+    /// Change-reason bitmask (`USN_REASON_*`).
+    pub reason: u32,
+    /// Affected file/dir name.
+    pub name: String,
+}
+
+/// Summary of a captured `$UsnJrnl:$J` change-journal payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsnSummary {
+    /// Number of USN records parsed.
+    pub record_count: u64,
+    /// First (oldest) USN seen, or 0 when empty.
+    pub first_usn: i64,
+    /// Last (newest) USN seen, or 0 when empty.
+    pub last_usn: i64,
+    /// Up to [`USN_SAMPLE_MAX`] leading records, for a quick look.
+    pub sample: Vec<UsnEntry>,
+}
+
+/// Maximum sample records surfaced from a `$UsnJrnl:$J` payload.
+pub const USN_SAMPLE_MAX: usize = 8;
+
+/// Decode a `$UsnJrnl:$J` payload into a record count + a small sample.
+///
+/// Skips the leading sparse region, then walks `USN_RECORD_V2`/`V3` records
+/// (8-byte-aligned; a zero / sub-header `RecordLength` marks a gap).
+#[must_use]
+pub fn parse_usn(payload: &[u8]) -> UsnSummary {
+    // Skip the leading sparse (all-zero) region to the first record, aligned
+    // down to an 8-byte boundary.
+    let mut pos = payload
+        .iter()
+        .position(|&byte| byte != 0)
+        .map_or(payload.len(), |idx| idx & !0b111);
+    let mut summary = UsnSummary {
+        record_count: 0,
+        first_usn: 0,
+        last_usn: 0,
+        sample: Vec::new(),
+    };
+
+    while pos + 0x3C <= payload.len() {
+        let Some(record) = payload.get(pos..) else {
+            break;
+        };
+        let rec_len = rd_u32(record, 0).unwrap_or(0) as usize;
+        let major = rd_u16(record, 4).unwrap_or(0);
+        if rec_len < 0x3C || (major != 2 && major != 3) {
+            pos += 8; // sparse gap / alignment padding
+            continue;
+        }
+        if pos + rec_len > payload.len() {
+            break;
+        }
+        let usn = rd_i64(record, 0x18).unwrap_or(0);
+        let reason = rd_u32(record, 0x28).unwrap_or(0);
+        let name_len = usize::from(rd_u16(record, 0x38).unwrap_or(0));
+        let name_off = usize::from(rd_u16(record, 0x3A).unwrap_or(0));
+
+        if summary.record_count == 0 {
+            summary.first_usn = usn;
+        }
+        summary.last_usn = usn;
+        if summary.sample.len() < USN_SAMPLE_MAX {
+            let name = record
+                .get(name_off..name_off + name_len)
+                .map(decode_utf16_lossy)
+                .unwrap_or_default();
+            summary.sample.push(UsnEntry { usn, reason, name });
+        }
+        summary.record_count += 1;
+        pos += (rec_len + 7) & !0b111; // advance to the next 8-aligned record
+    }
+    summary
+}
+
 /// A human-readable summary of a captured metafile (its header, plus
 /// kind-specific detail such as `$Boot` geometry).
 #[must_use]
@@ -121,20 +232,41 @@ pub fn summarize(header: &MetafileHeader, payload: &[u8]) -> String {
                 stats.total_clusters, stats.used_clusters, stats.free_clusters,
             )
         }
+        MetafileKind::UsnJrnl => {
+            let usn = parse_usn(payload);
+            let lines: Vec<String> = usn
+                .sample
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "    usn {} reason 0x{:08X} {}",
+                        entry.usn, entry.reason, entry.name
+                    )
+                })
+                .collect();
+            let body = if lines.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", lines.join("\n"))
+            };
+            format!(
+                "  $UsnJrnl: {} records; USN {}..{}\n{body}",
+                usn.record_count, usn.first_usn, usn.last_usn,
+            )
+        }
         MetafileKind::Secure
         | MetafileKind::AttrDef
         | MetafileKind::MftMirr
         | MetafileKind::Volume
         | MetafileKind::BadClus
-        | MetafileKind::LogFile
-        | MetafileKind::UsnJrnl => String::new(),
+        | MetafileKind::LogFile => String::new(),
     };
     format!("{base}{detail}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_bitmap, parse_boot};
+    use super::{parse_bitmap, parse_boot, parse_usn};
 
     #[test]
     #[expect(
@@ -175,5 +307,41 @@ mod tests {
         let empty = parse_bitmap(&[]);
         assert_eq!(empty.total_clusters, 0);
         assert_eq!(empty.free_clusters, 0);
+    }
+
+    #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test builds a fixed USN_RECORD_V2 buffer with known in-bounds offsets"
+    )]
+    fn parse_usn_reads_records() {
+        let name: Vec<u16> = "a.txt".encode_utf16().collect(); // 5 units → 10 bytes
+        let name_bytes = u16::try_from(name.len() * 2).unwrap_or(0);
+        let rec_len = 0x3C + name.len() * 2; // header + name = 70
+        let padded = (rec_len + 7) & !7; // 72
+        let base = 16_usize; // 16 leading sparse zero bytes
+        let mut buf = vec![0_u8; base + padded];
+
+        buf[base..base + 4].copy_from_slice(&u32::try_from(rec_len).unwrap_or(0).to_le_bytes());
+        buf[base + 4..base + 6].copy_from_slice(&2_u16.to_le_bytes()); // major version
+        buf[base + 0x18..base + 0x20].copy_from_slice(&1000_i64.to_le_bytes()); // usn
+        buf[base + 0x28..base + 0x2C].copy_from_slice(&1_u32.to_le_bytes()); // reason
+        buf[base + 0x38..base + 0x3A].copy_from_slice(&name_bytes.to_le_bytes()); // name_len
+        buf[base + 0x3A..base + 0x3C].copy_from_slice(&0x3C_u16.to_le_bytes()); // name_off
+        for (i, unit) in name.iter().enumerate() {
+            let off = base + 0x3C + i * 2;
+            buf[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+
+        let summary = parse_usn(&buf);
+        assert_eq!(summary.record_count, 1);
+        assert_eq!(summary.first_usn, 1000);
+        assert_eq!(summary.last_usn, 1000);
+        assert_eq!(summary.sample.len(), 1);
+        assert_eq!(summary.sample[0].name, "a.txt");
+        assert_eq!(summary.sample[0].reason, 1);
+
+        // Empty / all-sparse payload → no records.
+        assert_eq!(parse_usn(&[0_u8; 64]).record_count, 0);
     }
 }

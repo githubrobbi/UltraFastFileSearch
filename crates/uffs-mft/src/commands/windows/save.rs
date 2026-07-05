@@ -383,3 +383,53 @@ async fn cmd_save_upcase(drive: uffs_mft::platform::DriveLetter, output: &Path) 
 
     Ok(())
 }
+
+// ============================================================================
+// NTFS Metafile Capture ($Boot, ...)
+// ============================================================================
+
+/// Save an NTFS metafile ($Boot, ...) to a file for offline analysis.
+#[cfg(windows)]
+pub(crate) async fn cmd_metafile(
+    drive: uffs_mft::platform::DriveLetter,
+    kind: crate::cli::MetafileKind,
+    output: &Path,
+) -> Result<()> {
+    use uffs_mft::platform::VolumeHandle;
+    use uffs_mft::platform::metafile::{self, MetafileHeader, MetafileKind};
+
+    let lib_kind = match kind {
+        crate::cli::MetafileKind::Boot => MetafileKind::Boot,
+    };
+
+    // Volume serial for the header.
+    let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
+    let vol = handle.volume_data();
+
+    let data = metafile::read_metafile(drive, lib_kind)
+        .with_context(|| format!("Failed to read {} from {drive}:", lib_kind.name()))?;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let header = MetafileHeader {
+        kind: lib_kind,
+        drive,
+        volume_serial: vol.volume_serial_number,
+        timestamp,
+        data_size: usize_to_u64(data.len()),
+    };
+    metafile::save_metafile_to_file(output, &header, &data)
+        .with_context(|| format!("Failed to save {} to {}", lib_kind.name(), output.display()))?;
+
+    let abs_path = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    let abs_path = clean_path_for_display(&abs_path);
+
+    println!("💾 {} saved", lib_kind.name());
+    println!("  Drive:  {drive}:");
+    println!("  Size:   {}", format_bytes(usize_to_u64(data.len())));
+    println!("  Serial: 0x{:016X}", vol.volume_serial_number);
+    println!("  Path:   {}", abs_path.display());
+
+    Ok(())
+}

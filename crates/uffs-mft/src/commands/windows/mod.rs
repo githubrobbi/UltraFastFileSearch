@@ -29,5 +29,5 @@ pub(crate) use self::incremental::{
 };
 pub(crate) use self::info::cmd_info;
 pub(crate) use self::read::cmd_read;
-pub(crate) use self::save::cmd_save;
+pub(crate) use self::save::{cmd_metafile, cmd_save};
 pub(crate) use self::usn::{cmd_usn_info, cmd_usn_read};

@@ -37,6 +37,11 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         } => windows::cmd_info(drive, deep, no_bitmap, unique, format).await,
         Commands::Drives { format } => windows::cmd_drives(format).await,
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
+        Commands::Metafile {
+            drive,
+            kind,
+            output,
+        } => windows::cmd_metafile(drive, kind, &output).await,
         Commands::Bench {
             drive,
             json,
@@ -192,7 +197,8 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             forensic,
         ),
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
-        Commands::Read { .. }
+        Commands::Metafile { .. }
+        | Commands::Read { .. }
         | Commands::Info { .. }
         | Commands::Drives { .. }
         | Commands::Bench { .. }

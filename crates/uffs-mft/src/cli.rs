@@ -23,6 +23,13 @@ pub(crate) enum OutputFormat {
     Json,
 }
 
+/// NTFS metafile selectable via `uffs-mft metafile --kind`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum MetafileKind {
+    /// `$Boot` — volume boot record + BPB (geometry, volume serial).
+    Boot,
+}
+
 /// `uffs-mft`: Low-level NTFS MFT reading tool.
 #[derive(Parser)]
 #[command(name = "uffs-mft")]
@@ -125,6 +132,21 @@ pub(crate) enum Commands {
         /// only).
         #[arg(long)]
         json: bool,
+    },
+
+    /// Save an NTFS metafile ($Boot, ...) for offline analysis
+    Metafile {
+        /// Drive letter (e.g., C, D, E)
+        #[arg(short, long)]
+        drive: uffs_mft::platform::DriveLetter,
+
+        /// Which metafile to capture
+        #[arg(short, long, value_enum)]
+        kind: MetafileKind,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
     },
 
     /// Benchmark MFT reading with detailed phase timing

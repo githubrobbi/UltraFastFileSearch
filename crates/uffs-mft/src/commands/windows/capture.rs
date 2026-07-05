@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `capture` command — bundle a drive's NTFS metafiles into one hashed,
-//! manifested directory (`docs/architecture/mft-full-capture.md` §5–6).
+//! `capture` command — bundle a drive's `$MFT` + NTFS metafiles into one
+//! hashed, manifested directory (`docs/architecture/mft-full-capture.md` §5–6).
 //!
-//! Writes each metafile (via [`uffs_mft::platform::metafile`]) into
-//! `out/drive_<x>/`, plus a `manifest.json` (volume facts + per-artifact
-//! SHA-256) and a `SHA256SUMS` file for transfer verification. Best-effort: a
-//! metafile that cannot be read is skipped and noted, not fatal.
+//! Writes the compressed `$MFT` and each metafile (via
+//! [`uffs_mft::platform::metafile`]) into `out/drive_<x>/`, plus a
+//! `manifest.json` (volume facts + per-artifact SHA-256) and a `SHA256SUMS`
+//! file for transfer verification. Best-effort: an artifact that cannot be read
+//! is skipped and noted, not fatal.
 #![expect(
     clippy::print_stdout,
     reason = "intentional user-facing CLI capture progress output"
@@ -145,8 +146,87 @@ fn write_bundle(dir: &Path, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-/// `capture` command — write all metafiles + `manifest.json` + `SHA256SUMS`
-/// for a drive into `out/drive_<x>/`.
+/// The NTFS metafiles the `capture` command bundles alongside the `$MFT`.
+const METAFILE_KINDS: [MetafileKind; 9] = [
+    MetafileKind::Boot,
+    MetafileKind::Bitmap,
+    MetafileKind::Secure,
+    MetafileKind::AttrDef,
+    MetafileKind::MftMirr,
+    MetafileKind::Volume,
+    MetafileKind::BadClus,
+    MetafileKind::LogFile,
+    MetafileKind::UsnJrnl,
+];
+
+/// Capture the compressed `$MFT` (LZ4) into the bundle.
+fn capture_mft(drive: DriveLetter, dir: &Path, drive_lower: &str) -> Result<ArtifactRecord> {
+    use uffs_mft::{MftReader, SaveRawOptions};
+
+    let file = format!("{drive_lower}_mft.compressed.bin");
+    let path = dir.join(&file);
+    let reader = MftReader::open(drive).with_context(|| format!("opening $MFT on {drive}:"))?;
+    let options = SaveRawOptions {
+        compress: true,
+        compression_level: 3,
+        volume_letter: drive,
+        raw_compat: false,
+    };
+    reader
+        .save_raw_to_file(&path, &options)
+        .with_context(|| format!("saving $MFT to {}", path.display()))?;
+    let bytes = std::fs::read(&path).with_context(|| format!("re-reading {}", path.display()))?;
+    Ok(ArtifactRecord {
+        file,
+        kind: "$MFT".to_owned(),
+        frs: 0,
+        bytes: usize_to_u64(bytes.len()),
+        sha256: sha256_hex(&bytes),
+    })
+}
+
+/// Capture the `$MFT` + every metafile into `dir`, printing progress and
+/// returning their manifest records (best-effort: failures are skipped/noted).
+fn collect_artifacts(
+    drive: DriveLetter,
+    dir: &Path,
+    drive_lower: &str,
+    serial: u64,
+    timestamp: u64,
+) -> Vec<ArtifactRecord> {
+    let mut artifacts = Vec::new();
+
+    match capture_mft(drive, dir, drive_lower) {
+        Ok(record) => {
+            println!(
+                "  ✅ {:<9} {:>12} bytes  {}",
+                "$MFT", record.bytes, record.file
+            );
+            artifacts.push(record);
+        }
+        Err(err) => println!("  ⚠️  {:<9} skipped — {err:#}", "$MFT"),
+    }
+
+    for kind in METAFILE_KINDS {
+        match capture_metafile(drive, kind, dir, drive_lower, serial, timestamp) {
+            Ok(record) => {
+                println!(
+                    "  ✅ {:<9} {:>12} bytes  {}",
+                    kind.name(),
+                    record.bytes,
+                    record.file
+                );
+                artifacts.push(record);
+            }
+            Err(err) => println!("  ⚠️  {:<9} skipped — {err:#}", kind.name()),
+        }
+    }
+
+    artifacts
+}
+
+/// `capture` command — write the `$MFT` + all metafiles + `manifest.json` +
+/// `SHA256SUMS` for a drive into `out/drive_<x>/`.
 pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
     let drive_lower = drive.to_string().to_lowercase();
     let dir = out.join(format!("drive_{drive_lower}"));
@@ -161,40 +241,10 @@ pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
         .map_or(0, |elapsed| elapsed.as_secs());
 
     println!("═══════════════════════════════════════════════════════════════");
-    println!(
-        "  UFFS metafile capture — drive {drive}: → {}",
-        dir.display()
-    );
+    println!("  UFFS capture — drive {drive}: → {}", dir.display());
     println!("═══════════════════════════════════════════════════════════════");
 
-    let kinds = [
-        MetafileKind::Boot,
-        MetafileKind::Bitmap,
-        MetafileKind::Secure,
-        MetafileKind::AttrDef,
-        MetafileKind::MftMirr,
-        MetafileKind::Volume,
-        MetafileKind::BadClus,
-        MetafileKind::LogFile,
-        MetafileKind::UsnJrnl,
-    ];
-
-    let mut artifacts: Vec<ArtifactRecord> = Vec::new();
-    for kind in kinds {
-        match capture_metafile(drive, kind, &dir, &drive_lower, serial, timestamp) {
-            Ok(record) => {
-                println!(
-                    "  ✅ {:<9} {:>12} bytes  {}",
-                    kind.name(),
-                    record.bytes,
-                    record.file
-                );
-                artifacts.push(record);
-            }
-            Err(err) => println!("  ⚠️  {:<9} skipped — {err:#}", kind.name()),
-        }
-    }
-
+    let artifacts = collect_artifacts(drive, &dir, &drive_lower, serial, timestamp);
     let manifest = build_manifest(drive, vol, artifacts);
     write_bundle(&dir, &manifest)?;
 

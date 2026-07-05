@@ -113,6 +113,20 @@ pub(crate) enum Commands {
         format: OutputFormat,
     },
 
+    /// Probe the capture host: OS class (client/server), elevation, VSS
+    /// availability, and per-drive media/geometry. Runs before a capture and
+    /// records the machine the capture was taken on.
+    Sysinfo {
+        /// Write the report to this file (also printed to stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+
+        /// Emit machine-readable JSON instead of the text report (Windows
+        /// only).
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Benchmark MFT reading with detailed phase timing
     Bench {
         /// Drive letter (e.g., C, D, E)

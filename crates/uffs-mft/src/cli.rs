@@ -176,6 +176,13 @@ pub(crate) enum Commands {
         out: PathBuf,
     },
 
+    /// Inspect a captured NTFS metafile offline (header + $Boot geometry, ...)
+    MetafileInfo {
+        /// Path to a captured metafile (from `metafile` or `capture`)
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+
     /// Benchmark MFT reading with detailed phase timing
     Bench {
         /// Drive letter (e.g., C, D, E)

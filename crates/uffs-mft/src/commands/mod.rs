@@ -8,6 +8,7 @@ use anyhow::Result;
 use crate::cli::Commands;
 
 mod load;
+mod metafile_info;
 mod sysinfo;
 #[cfg(windows)]
 mod windows;
@@ -44,6 +45,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             output,
         } => windows::cmd_metafile(drive, kind, &output).await,
         Commands::Capture { drive, out } => windows::cmd_capture(drive, &out).await,
+        Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
         Commands::Bench {
             drive,
             json,
@@ -199,6 +201,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             forensic,
         ),
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
+        Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
         Commands::Metafile { .. }
         | Commands::Capture { .. }
         | Commands::Read { .. }

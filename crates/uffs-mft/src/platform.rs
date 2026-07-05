@@ -39,6 +39,9 @@ mod extents;
 pub mod lcn;
 /// NTFS metafile capture ($Boot, ...) from a live volume.
 pub mod metafile;
+/// Offline decoders for captured metafiles ($Boot geometry, $Bitmap free
+/// space).
+pub mod metafile_decode;
 /// Native Windows process introspection for the self-update detector.
 ///
 /// Image path + pid enumeration — keeps the `unsafe` FFI out of `uffs-cli`.

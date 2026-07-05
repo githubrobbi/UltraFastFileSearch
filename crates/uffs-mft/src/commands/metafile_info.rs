@@ -23,10 +23,10 @@ use anyhow::{Context as _, Result};
 /// Returns an error if the file cannot be read or lacks a valid metafile
 /// header.
 pub(crate) fn cmd_metafile_info(input: &Path) -> Result<()> {
-    use uffs_mft::platform::metafile;
+    use uffs_mft::platform::{metafile, metafile_decode};
 
     let (header, payload) = metafile::load_metafile_from_file(input)
         .with_context(|| format!("loading metafile {}", input.display()))?;
-    print!("{}", metafile::summarize(&header, &payload));
+    print!("{}", metafile_decode::summarize(&header, &payload));
     Ok(())
 }

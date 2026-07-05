@@ -30,6 +30,8 @@ pub(crate) enum MetafileKind {
     Boot,
     /// `$Bitmap` — volume cluster-allocation bitmap (free space).
     Bitmap,
+    /// `$Secure:$SDS` — security-descriptor store (ACLs / owner).
+    Secure,
 }
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.

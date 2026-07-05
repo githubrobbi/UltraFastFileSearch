@@ -401,6 +401,7 @@ pub(crate) async fn cmd_metafile(
     let lib_kind = match kind {
         crate::cli::MetafileKind::Boot => MetafileKind::Boot,
         crate::cli::MetafileKind::Bitmap => MetafileKind::Bitmap,
+        crate::cli::MetafileKind::Secure => MetafileKind::Secure,
     };
 
     // Volume serial for the header.

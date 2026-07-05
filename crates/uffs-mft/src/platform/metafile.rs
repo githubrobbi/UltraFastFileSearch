@@ -47,6 +47,8 @@ pub enum MetafileKind {
     Boot,
     /// `$Bitmap` (FRS 6) — the volume cluster-allocation bitmap (free space).
     Bitmap,
+    /// `$Secure:$SDS` (FRS 9) — the security-descriptor store (ACLs / owner).
+    Secure,
 }
 
 impl MetafileKind {
@@ -56,6 +58,7 @@ impl MetafileKind {
         match self {
             Self::Boot => "$Boot",
             Self::Bitmap => "$Bitmap",
+            Self::Secure => "$Secure",
         }
     }
 
@@ -66,6 +69,7 @@ impl MetafileKind {
         match self {
             Self::Boot => 7,
             Self::Bitmap => 6,
+            Self::Secure => 9,
         }
     }
 
@@ -74,6 +78,7 @@ impl MetafileKind {
         match frs {
             7 => Some(Self::Boot),
             6 => Some(Self::Bitmap),
+            9 => Some(Self::Secure),
             _ => None,
         }
     }
@@ -194,6 +199,8 @@ pub fn read_metafile(drive: DriveLetter, kind: MetafileKind) -> Result<Vec<u8>> 
         MetafileKind::Boot => read_boot(&handle),
         // `$Bitmap` is a non-resident unnamed `$DATA` stream.
         MetafileKind::Bitmap => read_data_stream(&handle, vol, 6, None),
+        // `$Secure:$SDS` holds deduplicated security descriptors (ACLs).
+        MetafileKind::Secure => read_data_stream(&handle, vol, 9, Some("$SDS")),
     }
 }
 
@@ -385,9 +392,12 @@ mod tests {
         assert_eq!(MetafileKind::Boot.name(), "$Boot");
         assert_eq!(MetafileKind::Bitmap.frs(), 6);
         assert_eq!(MetafileKind::Bitmap.name(), "$Bitmap");
+        assert_eq!(MetafileKind::Secure.frs(), 9);
+        assert_eq!(MetafileKind::Secure.name(), "$Secure");
         // FRS code round-trips through the header field.
         assert_eq!(MetafileKind::from_frs(6), Some(MetafileKind::Bitmap));
         assert_eq!(MetafileKind::from_frs(7), Some(MetafileKind::Boot));
+        assert_eq!(MetafileKind::from_frs(9), Some(MetafileKind::Secure));
         assert_eq!(MetafileKind::from_frs(200), None);
     }
 

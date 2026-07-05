@@ -7,6 +7,12 @@
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](../../LICENSE)
 [![Repository](https://img.shields.io/badge/repo-skyllc--ai%2FUltraFastFileSearch-blue)](https://github.com/skyllc-ai/UltraFastFileSearch)
 
+> **Part of [Ultra Fast File Search](https://github.com/skyllc-ai/UltraFastFileSearch).**
+> UFFS is a Windows-first, high-performance file-search engine that reads the
+> NTFS Master File Table directly. `uffs-time` provides its FILETIME conversion
+> primitives, published standalone because any tool decoding raw NTFS
+> timestamps can reuse them.
+
 Windows stores timestamps as **FILETIME**: a 64-bit signed count of
 100-nanosecond ticks since `1601-01-01 00:00:00 UTC`.  Every NTFS MFT
 record carries four of them (created / modified / MFT-modified /

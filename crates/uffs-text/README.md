@@ -7,6 +7,12 @@
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](../../LICENSE)
 [![Repository](https://img.shields.io/badge/repo-skyllc--ai%2FUltraFastFileSearch-blue)](https://github.com/skyllc-ai/UltraFastFileSearch)
 
+> **Part of [Ultra Fast File Search](https://github.com/skyllc-ai/UltraFastFileSearch).**
+> UFFS is a Windows-first, high-performance file-search engine that reads the
+> NTFS Master File Table directly. `uffs-text` is its case-folding component,
+> published standalone because bit-exact NTFS filename comparison is useful
+> well beyond UFFS.
+
 NTFS performs every case-insensitive filename operation — directory
 lookup, attribute matching, indexed binary-tree comparisons — against
 its on-disk **`$UpCase`** table.  That table is a 128 KB flat array

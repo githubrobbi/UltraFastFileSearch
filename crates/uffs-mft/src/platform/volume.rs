@@ -16,7 +16,9 @@ use windows::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     SYNCHRONIZE,
 };
-use windows::Win32::System::Ioctl::{FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER};
+use windows::Win32::System::Ioctl::{
+    FSCTL_GET_NTFS_VOLUME_DATA, NTFS_EXTENDED_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER,
+};
 use windows::core::PCWSTR;
 use zerocopy::FromBytes as _;
 
@@ -462,6 +464,22 @@ unsafe impl Send for VolumeHandle {}
 // threads.
 unsafe impl Sync for VolumeHandle {}
 
+/// Combined output buffer for `FSCTL_GET_NTFS_VOLUME_DATA`.
+///
+/// NTFS writes an [`NTFS_EXTENDED_VOLUME_DATA`] block (which carries the NTFS
+/// major/minor version) immediately after the base
+/// [`NTFS_VOLUME_DATA_BUFFER`] when the supplied buffer is large enough. The
+/// two C structs are laid out contiguously here so a single ioctl fills both;
+/// `#[repr(C)]` reproduces that on-disk adjacency.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NtfsVolumeDataCombined {
+    /// Base volume data (serial, cluster counts, `$MFT` geometry).
+    base: NTFS_VOLUME_DATA_BUFFER,
+    /// Extended data (NTFS version, physical sector size, TRIM limits).
+    extended: NTFS_EXTENDED_VOLUME_DATA,
+}
+
 /// NTFS volume data retrieved from `FSCTL_GET_NTFS_VOLUME_DATA`.
 #[derive(Debug, Clone, Copy)]
 pub struct NtfsVolumeData {
@@ -640,25 +658,27 @@ impl VolumeHandle {
     fn get_ntfs_volume_data(handle: HANDLE, volume: super::DriveLetter) -> Result<NtfsVolumeData> {
         use windows::Win32::System::IO::DeviceIoControl;
 
-        let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
+        let mut combined = NtfsVolumeDataCombined {
+            base: NTFS_VOLUME_DATA_BUFFER::default(),
+            extended: NTFS_EXTENDED_VOLUME_DATA::default(),
+        };
         let mut bytes_returned: u32 = 0;
 
-        // `size_of::<NTFS_VOLUME_DATA_BUFFER>()` is ~96 bytes — always fits u32.
-        let ntfs_volume_data_buffer_size =
-            u32::try_from(size_of::<NTFS_VOLUME_DATA_BUFFER>()).unwrap_or(u32::MAX);
+        // The combined buffer (base + extended) is ~140 bytes — always fits u32.
+        let combined_size = u32::try_from(size_of::<NtfsVolumeDataCombined>()).unwrap_or(u32::MAX);
 
-        // SAFETY: `handle` is an open volume handle, `buffer` points to valid
-        // writable storage for `NTFS_VOLUME_DATA_BUFFER`, and
-        // `bytes_returned` is a valid out-parameter for the duration of the
-        // call.
+        // SAFETY: `handle` is an open volume handle, `combined` points to valid
+        // writable storage of `combined_size` bytes (base + extended blocks
+        // laid out as NTFS expects them), and `bytes_returned` is a valid
+        // out-parameter for the duration of the call.
         let result = unsafe {
             DeviceIoControl(
                 handle,
                 FSCTL_GET_NTFS_VOLUME_DATA,
                 None,
                 0,
-                Some(core::ptr::from_mut(&mut buffer).cast()),
-                ntfs_volume_data_buffer_size,
+                Some(core::ptr::from_mut(&mut combined).cast()),
+                combined_size,
                 Some(&raw mut bytes_returned),
                 None,
             )
@@ -668,10 +688,22 @@ impl VolumeHandle {
             return Err(MftError::NotNtfs(volume));
         }
 
-        // Note: NTFS major/minor version requires NTFS_EXTENDED_VOLUME_DATA
-        // (not available in NTFS_VOLUME_DATA_BUFFER).  Default to 0; callers
-        // should use `query_ntfs_version()` if they need the actual version.
-        //
+        let buffer = combined.base;
+
+        // The NTFS version lives in the extended block, which NTFS only fills
+        // when it wrote past the base buffer. When it didn't (older systems),
+        // the default-zeroed extended fields degrade gracefully to `0.0`.
+        let extended_filled =
+            usize::try_from(bytes_returned).unwrap_or(0) > size_of::<NTFS_VOLUME_DATA_BUFFER>();
+        let (ntfs_major_version, ntfs_minor_version) = if extended_filled {
+            (
+                combined.extended.MajorVersion,
+                combined.extended.MinorVersion,
+            )
+        } else {
+            (0, 0)
+        };
+
         // Every `i64 -> u64` reinterpret below comes from an on-disk
         // NTFS count (sector / cluster / LCN / length) that the NTFS
         // on-disk format and Microsoft's `NTFS_VOLUME_DATA_BUFFER` MSDN
@@ -681,8 +713,8 @@ impl VolumeHandle {
         // `cast_sign_loss` expect.
         let volume_data = NtfsVolumeData {
             volume_serial_number: buffer.VolumeSerialNumber.cast_unsigned(),
-            ntfs_major_version: 0,
-            ntfs_minor_version: 0,
+            ntfs_major_version,
+            ntfs_minor_version,
             number_of_sectors: buffer.NumberSectors.cast_unsigned(),
             total_clusters: buffer.TotalClusters.cast_unsigned(),
             free_clusters: buffer.FreeClusters.cast_unsigned(),

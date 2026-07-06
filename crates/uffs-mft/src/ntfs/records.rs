@@ -522,9 +522,13 @@ impl<'a> AttributeRef<'a> {
         extract_data_runs_from_attribute(self.data)
     }
 
-    /// Returns the attribute name, if present.
+    /// Returns the decoded attribute name (UTF-16 code units), if present.
+    ///
+    /// The name is stored as UTF-16LE bytes at an offset that carries no
+    /// alignment guarantee, so the units are decoded into an owned `Vec`
+    /// rather than reinterpreted in place.
     #[must_use]
-    pub fn name(&self) -> Option<&'a [u16]> {
+    pub fn name(&self) -> Option<Vec<u16>> {
         if self.header.name_length == 0 {
             return None;
         }
@@ -533,18 +537,13 @@ impl<'a> AttributeRef<'a> {
         let name_length = self.header.name_length as usize;
         let name_byte_len = name_length * 2;
         let name_bytes = self.data.get(name_offset..name_offset + name_byte_len)?;
-        if name_bytes.len() % 2 != 0 {
-            return None;
-        }
 
-        for chunk in name_bytes.chunks_exact(2) {
-            let Ok(arr): Result<[u8; 2], _> = chunk.try_into() else {
-                return None;
-            };
-            let _char = u16::from_le_bytes(arr);
-        }
-
-        None
+        Some(
+            name_bytes
+                .chunks_exact(2)
+                .filter_map(|chunk| chunk.try_into().ok().map(u16::from_le_bytes))
+                .collect(),
+        )
     }
 }
 

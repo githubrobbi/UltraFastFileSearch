@@ -211,3 +211,38 @@ fn non_resident_attribute_helpers_decode_mapping_pairs() {
         lcn: crate::platform::Lcn::new(10),
     }]);
 }
+
+#[test]
+fn attribute_name_decodes_utf16() {
+    let name_offset = 24_usize;
+    let name: Vec<u16> = "$SDS".encode_utf16().collect();
+    let mut data = vec![0_u8; name_offset + name.len() * 2];
+    for (i, unit) in name.iter().enumerate() {
+        let off = name_offset + i * 2;
+        data[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+
+    let named = AttributeRef {
+        data: &data,
+        header: AttributeRecordHeader {
+            type_code: AttributeType::DATA_TYPE,
+            length: crate::len_to_u32(data.len()),
+            is_non_resident: 1,
+            name_length: 4,
+            name_offset: crate::len_to_u16(name_offset),
+            flags: 0,
+            instance: 0,
+        },
+    };
+    assert_eq!(named.name().as_deref(), Some(name.as_slice()));
+
+    // An unnamed attribute yields no name.
+    let unnamed = AttributeRef {
+        data: &data,
+        header: AttributeRecordHeader {
+            name_length: 0,
+            ..named.header
+        },
+    };
+    assert_eq!(unnamed.name(), None);
+}

@@ -299,7 +299,7 @@ fn find_data_attr(
         attr.attribute_type() == Some(AttributeType::Data)
             && attr.is_non_resident()
             && want_name.map_or(attr.header.name_length == 0, |want| {
-                attr.name() == Some(want)
+                attr.name().as_deref() == Some(want)
             })
     })?;
     let non_resident = attr.non_resident_data()?;
@@ -413,7 +413,16 @@ fn read_runs(
     let capacity = usize::try_from(allocated.max(data_size)).map_err(|_err| {
         MftError::InvalidData("metafile stream size exceeds usize::MAX".to_owned())
     })?;
-    let mut buf = vec![0_u8; capacity];
+    // Fallible allocation: a sparse stream (e.g. `$UsnJrnl:$J`) can span a huge
+    // logical size, so reserve up front and surface a clean error instead of
+    // aborting the process on an infallible `vec![0; capacity]`.
+    let mut buf: Vec<u8> = Vec::new();
+    buf.try_reserve_exact(capacity).map_err(|_err| {
+        MftError::InvalidData(format!(
+            "metafile stream too large to materialize: {capacity} bytes"
+        ))
+    })?;
+    buf.resize(capacity, 0);
     let mut offset: usize = 0;
 
     for run in runs {

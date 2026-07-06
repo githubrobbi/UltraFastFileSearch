@@ -10,6 +10,7 @@ use crate::cli::Commands;
 mod load;
 mod metafile_info;
 mod sysinfo;
+mod verify;
 #[cfg(windows)]
 mod windows;
 
@@ -52,6 +53,11 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             split_gib,
         } => windows::cmd_capture(drive, &out, all_drives, zip, split_gib).await,
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
+        Commands::Verify {
+            left,
+            right,
+            columns,
+        } => verify::cmd_verify(&left, &right, &columns),
         Commands::Bench {
             drive,
             json,
@@ -208,6 +214,11 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         ),
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
+        Commands::Verify {
+            left,
+            right,
+            columns,
+        } => verify::cmd_verify(&left, &right, &columns),
         Commands::Metafile { .. }
         | Commands::Capture { .. }
         | Commands::Read { .. }

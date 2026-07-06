@@ -198,6 +198,23 @@ pub(crate) enum Commands {
         input: PathBuf,
     },
 
+    /// Compare two MFT CSV exports (from `load`) for parity — e.g. Rust on
+    /// Windows vs macOS, or Rust vs a C++ golden. Exits non-zero on mismatch.
+    Verify {
+        /// First CSV export.
+        #[arg(short, long)]
+        left: PathBuf,
+
+        /// Second CSV export.
+        #[arg(short, long)]
+        right: PathBuf,
+
+        /// Columns to compare (matched by header name; default: all columns of
+        /// `--left`). Comma-separated, e.g. `frs,parent_frs,name,size`.
+        #[arg(long, value_delimiter = ',')]
+        columns: Vec<String>,
+    },
+
     /// Benchmark MFT reading with detailed phase timing
     Bench {
         /// Drive letter (e.g., C, D, E)

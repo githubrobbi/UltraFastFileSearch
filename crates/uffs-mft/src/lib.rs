@@ -254,6 +254,9 @@ pub mod cache;
 /// Minimal `ustar` archive writer + byte splitter for capture bundles.
 pub mod archive;
 
+/// Canonical CSV parity comparison for the capture verification flow.
+pub mod parity;
+
 mod reader;
 
 // WI-7.1 — pathological-name parity corpus (Tier 1 decoder pins + Tier 2

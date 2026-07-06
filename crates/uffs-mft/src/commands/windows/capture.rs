@@ -280,7 +280,12 @@ fn archive_dir(dir: &Path, split_gib: u64) -> Result<()> {
             .map(|os| os.to_string_lossy().into_owned())
             .unwrap_or_default();
         let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        uffs_mft::archive::push_entry(&mut tar, &name, &data)
+        let mtime = std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |elapsed| elapsed.as_secs());
+        uffs_mft::archive::push_entry(&mut tar, &name, &data, mtime)
             .with_context(|| format!("archiving {name}"))?;
     }
     uffs_mft::archive::finish(&mut tar);

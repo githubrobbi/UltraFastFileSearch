@@ -32,13 +32,18 @@ fn push_field(buf: &mut Vec<u8>, content: &[u8], width: usize) {
     buf.resize(buf.len() + (width - take), 0);
 }
 
-/// Append one regular-file entry (`name` → `data`) to a `ustar` archive `buf`.
+/// Append one regular-file entry (`name` → `data`, modified at `mtime` Unix
+/// seconds) to a `ustar` archive `buf`.
+///
+/// A real `mtime` is stored so extraction restores it: the offline parity flow
+/// derives its timezone from the baseline file's mtime, which a zeroed mtime
+/// would break.
 ///
 /// # Errors
 ///
 /// Returns [`MftError::InvalidData`] if `name` exceeds the 100-byte `ustar`
 /// name field.
-pub fn push_entry(buf: &mut Vec<u8>, name: &str, data: &[u8]) -> Result<()> {
+pub fn push_entry(buf: &mut Vec<u8>, name: &str, data: &[u8], mtime: u64) -> Result<()> {
     if name.len() > NAME_MAX {
         return Err(MftError::InvalidData(format!(
             "tar entry name too long ({} > {NAME_MAX}): {name}",
@@ -55,7 +60,7 @@ pub fn push_entry(buf: &mut Vec<u8>, name: &str, data: &[u8]) -> Result<()> {
         format!("{:011o}\0", usize_to_u64(data.len())).as_bytes(),
         12,
     ); // size
-    push_field(buf, b"00000000000\0", 12); // mtime (0)
+    push_field(buf, format!("{mtime:011o}\0").as_bytes(), 12); // mtime
     push_field(buf, b"        ", 8); // chksum placeholder (spaces)
     push_field(buf, b"0", 1); // typeflag: regular file
     push_field(buf, b"", NAME_MAX); // linkname
@@ -115,13 +120,15 @@ mod tests {
     )]
     fn push_entry_writes_valid_ustar_header() {
         let mut buf = Vec::new();
-        push_entry(&mut buf, "c_boot.bin", b"hello").expect("valid name");
+        push_entry(&mut buf, "c_boot.bin", b"hello", 0o1234).expect("valid name");
         finish(&mut buf);
 
-        // name, magic, size (octal of 5), and data land at their ustar offsets.
+        // name, magic, size (octal of 5), mtime (octal), and data land at their
+        // ustar offsets.
         assert_eq!(&buf[0..10], b"c_boot.bin");
         assert_eq!(&buf[257..263], b"ustar\0");
         assert_eq!(&buf[124..135], b"00000000005");
+        assert_eq!(&buf[136..147], b"00000001234");
         assert_eq!(&buf[512..517], b"hello");
 
         // 512 header + 512 data block + 2×512 end blocks.
@@ -147,7 +154,7 @@ mod tests {
     #[test]
     fn push_entry_rejects_overlong_name() {
         let mut buf = Vec::new();
-        push_entry(&mut buf, &"a".repeat(101), b"x").unwrap_err();
+        push_entry(&mut buf, &"a".repeat(101), b"x", 0).unwrap_err();
     }
 
     #[test]

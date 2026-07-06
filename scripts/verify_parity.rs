@@ -17,6 +17,10 @@
 //! rust-script scripts/verify_parity.rs ~/uffs_data --regenerate
 //! rust-script scripts/verify_parity.rs ~/uffs_data --drive G --regenerate
 //!
+//! # Offline from bundles: drop drive_<x>.tar.zst files in a dir; each is
+//! # temp-expanded, validated, then removed (no uncompressed copies kept).
+//! rust-script scripts/verify_parity.rs ~/bundles --regenerate
+//!
 //! # Live: run both tools on Windows (elevated), auto-detect NTFS drives
 //! rust-script scripts/verify_parity.rs --live
 //! rust-script scripts/verify_parity.rs --live --drive C --keep
@@ -293,12 +297,38 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
         std::process::exit(1);
     }
 
+    // Expand any drive_<x>.tar.zst transport bundles into temp drive dirs so a
+    // dropped-in archive can be validated without keeping the uncompressed copy
+    // around. Extracted dirs are removed again once verification finishes.
+    let mut temp_dirs: Vec<PathBuf> = Vec::new();
+    for (drive_lower, archive) in discover_archives(base_dir, specific_drive.as_deref()) {
+        let target = base_dir.join(format!("drive_{drive_lower}"));
+        if target.exists() {
+            println!(
+                "ℹ️  {} already exists — using it (not expanding {})",
+                target.display(),
+                archive.display()
+            );
+            continue;
+        }
+        print!("Expanding {} → {} ...", archive.display(), target.display());
+        io::stdout().flush().ok();
+        match extract_archive(&archive, &target) {
+            Ok(()) => {
+                println!(" ✅");
+                temp_dirs.push(target);
+            }
+            Err(e) => println!(" ❌ {e}"),
+        }
+    }
+
     // Discover all drive directories
     let drives = discover_drives(base_dir, specific_drive.as_deref());
 
     if drives.is_empty() {
         eprintln!("ERROR: No drive directories found in {}", base_dir.display());
         eprintln!("  Expected directories like: drive_d, drive_e, drive_f, ...");
+        eprintln!("  (or drive_<x>.tar.zst bundles to expand)");
         std::process::exit(1);
     }
 
@@ -385,6 +415,13 @@ fn run_multi_drive_mode(args: &[String], base_dir: &Path) {
 
     // Print summary
     print_summary(&results);
+
+    // Dump the temp dirs we expanded from .tar.zst bundles.
+    for temp in &temp_dirs {
+        if fs::remove_dir_all(temp).is_ok() {
+            println!("🧹 removed expanded {}", temp.display());
+        }
+    }
 
     // Exit with failure if any drive mismatched
     let any_mismatch = results.iter().any(|r| r.result == VerifyResult::Mismatch);
@@ -2021,6 +2058,66 @@ fn discover_drives(base_dir: &Path, filter: Option<&str>) -> Vec<String> {
 
     drives.sort();
     drives
+}
+
+/// Discover `drive_<x>.tar.zst` transport bundles in `base_dir`, honoring the
+/// optional single-drive filter. Returns `(drive_lower, archive_path)` pairs.
+fn discover_archives(base_dir: &Path, filter: Option<&str>) -> Vec<(String, PathBuf)> {
+    let mut archives = Vec::new();
+
+    let Ok(entries) = fs::read_dir(base_dir) else {
+        return archives;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(letter) = name
+            .strip_prefix("drive_")
+            .and_then(|rest| rest.strip_suffix(".tar.zst"))
+        else {
+            continue;
+        };
+        if letter.len() != 1 || !letter.chars().all(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        if let Some(f) = filter {
+            if !letter.eq_ignore_ascii_case(f) {
+                continue;
+            }
+        }
+        archives.push((letter.to_lowercase(), path));
+    }
+
+    archives.sort();
+    archives
+}
+
+/// Extract a `.tar.zst` bundle into `target` (created if absent).
+///
+/// Tries `tar --zstd -xf` first, then plain `tar -xf` (libarchive on macOS /
+/// bsdtar auto-detects zstd on extraction).
+fn extract_archive(archive: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|e| format!("mkdir {}: {e}", target.display()))?;
+    let archive_str = archive.to_string_lossy().to_string();
+    let target_str = target.to_string_lossy().to_string();
+
+    let attempts: [Vec<&str>; 2] = [
+        vec!["--zstd", "-xf", &archive_str, "-C", &target_str],
+        vec!["-xf", &archive_str, "-C", &target_str],
+    ];
+    let mut last_err = String::from("tar not found");
+    for args in &attempts {
+        match Command::new("tar").args(args).output() {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => last_err = String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    let _ = fs::remove_dir_all(target);
+    Err(format!("tar extract failed: {last_err}"))
 }
 
 /// Verify a single drive and return the result

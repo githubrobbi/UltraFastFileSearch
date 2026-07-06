@@ -42,6 +42,8 @@ pub mod metafile;
 /// Offline decoders for captured metafiles ($Boot geometry, $Bitmap free
 /// space).
 pub mod metafile_decode;
+/// Live-volume NTFS metafile readers ($Boot, $DATA streams, $UsnJrnl).
+pub mod metafile_read;
 /// Native Windows process introspection for the self-update detector.
 ///
 /// Image path + pid enumeration — keeps the `unsafe` FFI out of `uffs-cli`.

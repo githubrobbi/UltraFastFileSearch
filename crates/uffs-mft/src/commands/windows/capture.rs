@@ -159,11 +159,17 @@ const METAFILE_KINDS: [MetafileKind; 9] = [
     MetafileKind::UsnJrnl,
 ];
 
-/// Capture the compressed `$MFT` (LZ4) into the bundle.
-fn capture_mft(drive: DriveLetter, dir: &Path, drive_lower: &str) -> Result<ArtifactRecord> {
+/// Capture the compressed `$MFT` into the bundle.
+///
+/// Named `<DRIVE>_mft.bin` to match the verify flow (`test_runs.ps1` /
+/// `verify_parity.rs --regenerate`), so old and new captures are
+/// interchangeable. It is zstd-compressed on disk; `load_raw_mft` auto-detects
+/// the compression flag and decompresses on read, so the `.bin` name is correct
+/// regardless.
+fn capture_mft(drive: DriveLetter, dir: &Path) -> Result<ArtifactRecord> {
     use uffs_mft::{MftReader, SaveRawOptions};
 
-    let file = format!("{drive_lower}_mft.compressed.bin");
+    let file = format!("{drive}_mft.bin");
     let path = dir.join(&file);
     let reader = MftReader::open(drive).with_context(|| format!("opening $MFT on {drive}:"))?;
     let options = SaveRawOptions {
@@ -196,7 +202,7 @@ fn collect_artifacts(
 ) -> Vec<ArtifactRecord> {
     let mut artifacts = Vec::new();
 
-    match capture_mft(drive, dir, drive_lower) {
+    match capture_mft(drive, dir) {
         Ok(record) => {
             println!(
                 "  ✅ {:<9} {:>12} bytes  {}",

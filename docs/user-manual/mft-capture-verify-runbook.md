@@ -59,7 +59,7 @@ Each `cap\drive_<x>\` contains:
 
 | File | Contents |
 |------|----------|
-| `c_mft.compressed.bin` | full `$MFT` (zstd) |
+| `C_mft.bin` | full `$MFT` (zstd) |
 | `c_boot.bin` … `c_usnjrnl.bin` | the 10 NTFS metafiles |
 | `manifest.json` | volume facts + per-artifact SHA-256 |
 | `SHA256SUMS` | transfer-verification hashes |
@@ -95,12 +95,12 @@ both platforms, so a full-column compare is exact.
 
 ```powershell
 # Windows: parse the captured $MFT → CSV  (Rust / Windows)
-uffs-mft load cap\drive_c\c_mft.compressed.bin -o rust_win_c.csv
+uffs-mft load cap\drive_c\C_mft.bin -o rust_win_c.csv
 ```
 
 ```bash
 # Mac: parse the SAME captured file → CSV  (Rust / Mac)
-uffs-mft load c_mft.compressed.bin -o rust_mac_c.csv
+uffs-mft load C_mft.bin -o rust_mac_c.csv
 
 # Rust-Windows vs Rust-Mac — expect ✅ MATCH (exit 0)
 uffs-mft verify --left rust_win_c.csv --right rust_mac_c.csv

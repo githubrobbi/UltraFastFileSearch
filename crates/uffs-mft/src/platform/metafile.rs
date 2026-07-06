@@ -284,6 +284,86 @@ fn read_frs_record(
     Ok(record)
 }
 
+/// Locate a non-resident `$DATA` attribute in one MFT record — the unnamed
+/// stream when `want_name` is `None`, or the named stream otherwise — returning
+/// its data runs and logical size.
+#[cfg(windows)]
+fn find_data_attr(
+    record: &[u8],
+    want_name: Option<&[u16]>,
+) -> Option<(Vec<crate::ntfs::DataRun>, u64)> {
+    use crate::ntfs::{AttributeIterator, AttributeType};
+
+    let mut attrs = AttributeIterator::new(record)?;
+    let attr = attrs.find(|attr| {
+        attr.attribute_type() == Some(AttributeType::Data)
+            && attr.is_non_resident()
+            && want_name.map_or(attr.header.name_length == 0, |want| {
+                attr.name() == Some(want)
+            })
+    })?;
+    let non_resident = attr.non_resident_data()?;
+    Some((attr.data_runs(), non_resident.data_size.cast_unsigned()))
+}
+
+/// Follow `$ATTRIBUTE_LIST` from a base record to the extension record(s) that
+/// hold the named `$DATA` stream, returning its merged runs + logical size.
+///
+/// NTFS relocates attributes to extension records when a base record overflows,
+/// which is how `$Secure:$SDS` and `$UsnJrnl:$J` are stored. Runs are
+/// concatenated in `$ATTRIBUTE_LIST` (VCN) order; the real `data_size` lives in
+/// the first (VCN-0) instance and later instances report `0`.
+#[cfg(windows)]
+fn find_data_in_extensions(
+    handle: &crate::platform::VolumeHandle,
+    vol: &crate::platform::NtfsVolumeData,
+    base_record: &[u8],
+    stream_name: &str,
+) -> Result<Option<(Vec<crate::ntfs::DataRun>, u64)>> {
+    use crate::ntfs::{AttributeIterator, AttributeType};
+
+    // Materialize the $ATTRIBUTE_LIST payload (resident or non-resident).
+    let list = {
+        let mut attrs = AttributeIterator::new(base_record)
+            .ok_or_else(|| MftError::InvalidData("record: invalid header".to_owned()))?;
+        let Some(list_attr) =
+            attrs.find(|attr| attr.attribute_type() == Some(AttributeType::AttributeList))
+        else {
+            return Ok(None);
+        };
+        if let Some(resident) = list_attr.resident_value() {
+            resident.to_vec()
+        } else if let Some(non_resident) = list_attr.non_resident_data() {
+            read_runs(
+                handle.raw_handle(),
+                &list_attr.data_runs(),
+                vol.bytes_per_cluster,
+                non_resident.data_size.cast_unsigned(),
+            )?
+        } else {
+            return Ok(None);
+        }
+    };
+
+    let want: Vec<u16> = stream_name.encode_utf16().collect();
+    let mut runs: Vec<crate::ntfs::DataRun> = Vec::new();
+    let mut data_size = 0_u64;
+    for ext_frs in crate::platform::metafile_decode::attribute_list_data_frs(&list, stream_name) {
+        let ext = read_frs_record(handle, vol, ext_frs)?;
+        if let Some((ext_runs, ext_size)) = find_data_attr(&ext, Some(&want)) {
+            if data_size == 0 {
+                data_size = ext_size; // VCN-0 instance carries the real size
+            }
+            runs.extend(ext_runs);
+        }
+    }
+    if runs.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((runs, data_size)))
+    }
+}
+
 /// Read a metafile's non-resident `$DATA` stream — the unnamed stream when
 /// `stream_name` is `None`, or the named stream (e.g. `$SDS`) otherwise — by
 /// resolving its data runs and reading the referenced clusters.
@@ -294,35 +374,24 @@ fn read_data_stream(
     frs: u64,
     stream_name: Option<&str>,
 ) -> Result<Vec<u8>> {
-    use crate::ntfs::{AttributeIterator, AttributeType};
-
     let record = read_frs_record(handle, vol, frs)?;
     let want_name: Option<Vec<u16>> = stream_name.map(|name| name.encode_utf16().collect());
 
-    let mut attrs = AttributeIterator::new(&record)
-        .ok_or_else(|| MftError::InvalidData(format!("FRS {frs}: invalid record header")))?;
-    let data_attr = attrs
-        .find(|attr| {
-            attr.attribute_type() == Some(AttributeType::Data)
-                && attr.is_non_resident()
-                && want_name
-                    .as_deref()
-                    .map_or(attr.header.name_length == 0, |want| {
-                        attr.name() == Some(want)
-                    })
-        })
-        .ok_or_else(|| {
-            MftError::InvalidData(format!(
-                "FRS {frs}: no matching non-resident DATA stream (name={stream_name:?})"
-            ))
-        })?;
+    // The attribute usually lives in the base record.
+    if let Some((runs, size)) = find_data_attr(&record, want_name.as_deref()) {
+        return read_runs(handle.raw_handle(), &runs, vol.bytes_per_cluster, size);
+    }
 
-    let non_resident = data_attr.non_resident_data().ok_or_else(|| {
-        MftError::InvalidData(format!("FRS {frs}: cannot decode non-resident DATA header"))
-    })?;
-    let data_size = non_resident.data_size.cast_unsigned();
-    let runs = data_attr.data_runs();
-    read_runs(handle.raw_handle(), &runs, vol.bytes_per_cluster, data_size)
+    // Named streams ($SDS, $J) can overflow into an extension record.
+    if let Some(name) = stream_name
+        && let Some((runs, size)) = find_data_in_extensions(handle, vol, &record, name)?
+    {
+        return read_runs(handle.raw_handle(), &runs, vol.bytes_per_cluster, size);
+    }
+
+    Err(MftError::InvalidData(format!(
+        "FRS {frs}: no matching non-resident DATA stream (name={stream_name:?})"
+    )))
 }
 
 /// Assemble a stream's data runs into a `data_size`-byte buffer.

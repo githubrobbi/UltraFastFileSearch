@@ -110,6 +110,54 @@ fn rd_i64(buf: &[u8], off: usize) -> Option<i64> {
         .map(i64::from_le_bytes)
 }
 
+/// Read a little-endian `u64` at `off`, or `None` if out of bounds.
+fn rd_u64(buf: &[u8], off: usize) -> Option<u64> {
+    buf.get(off..off + 8)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u64::from_le_bytes)
+}
+
+/// Parse an `$ATTRIBUTE_LIST` payload and return the distinct MFT FRS numbers
+/// of the records holding the `$DATA` attribute named `stream_name`.
+///
+/// NTFS moves attributes into extension records (referenced by
+/// `$ATTRIBUTE_LIST`) when a file's base record overflows — as happens for the
+/// named `$DATA` streams `$Secure:$SDS` and `$UsnJrnl:$J`. Pure/testable.
+#[must_use]
+pub fn attribute_list_data_frs(list: &[u8], stream_name: &str) -> Vec<u64> {
+    /// NTFS `$DATA` attribute type code.
+    const DATA_TYPE: u32 = 0x80;
+    /// Minimum `$ATTRIBUTE_LIST` entry size (fixed header before the name).
+    const MIN_ENTRY: usize = 0x1A;
+
+    let mut out: Vec<u64> = Vec::new();
+    let mut pos = 0_usize;
+    while pos + MIN_ENTRY <= list.len() {
+        let entry_len = usize::from(rd_u16(list, pos + 4).unwrap_or(0));
+        if entry_len < MIN_ENTRY {
+            break;
+        }
+        if rd_u32(list, pos).unwrap_or(0) == DATA_TYPE {
+            let name_len = usize::from(*list.get(pos + 6).unwrap_or(&0)); // UTF-16 units
+            let name_off = usize::from(*list.get(pos + 7).unwrap_or(&0));
+            let name = list
+                .get(pos + name_off..pos + name_off + name_len * 2)
+                .map(decode_utf16_lossy)
+                .unwrap_or_default();
+            if name == stream_name
+                && let Some(base_ref) = rd_u64(list, pos + 0x10)
+            {
+                let frs = crate::ntfs::file_reference_to_frs(base_ref);
+                if !out.contains(&frs) {
+                    out.push(frs);
+                }
+            }
+        }
+        pos = pos.saturating_add(entry_len);
+    }
+    out
+}
+
 /// Decode UTF-16LE bytes to a lossy UTF-8 string.
 fn decode_utf16_lossy(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
@@ -266,7 +314,7 @@ pub fn summarize(header: &MetafileHeader, payload: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_bitmap, parse_boot, parse_usn};
+    use super::{attribute_list_data_frs, parse_bitmap, parse_boot, parse_usn};
 
     #[test]
     #[expect(
@@ -343,5 +391,30 @@ mod tests {
 
         // Empty / all-sparse payload → no records.
         assert_eq!(parse_usn(&[0_u8; 64]).record_count, 0);
+    }
+
+    #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test builds a fixed $ATTRIBUTE_LIST entry with known in-bounds offsets"
+    )]
+    fn attribute_list_finds_data_extension_frs() {
+        // One entry: $DATA (0x80), name "$SDS", base ref → FRS 100.
+        let name: Vec<u16> = "$SDS".encode_utf16().collect(); // 4 units → 8 bytes
+        let name_off = 0x1A_usize;
+        let entry_len = (name_off + name.len() * 2 + 7) & !7; // 8-aligned
+        let mut list = vec![0_u8; entry_len];
+        list[0..4].copy_from_slice(&0x80_u32.to_le_bytes()); // type = $DATA
+        list[4..6].copy_from_slice(&u16::try_from(entry_len).unwrap_or(0).to_le_bytes());
+        list[6] = 4; // name length (units)
+        list[7] = u8::try_from(name_off).unwrap_or(0); // name offset
+        list[0x10..0x18].copy_from_slice(&100_u64.to_le_bytes()); // base file reference → FRS 100
+        for (i, unit) in name.iter().enumerate() {
+            let off = name_off + i * 2;
+            list[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+
+        assert_eq!(attribute_list_data_frs(&list, "$SDS"), vec![100]);
+        assert_eq!(attribute_list_data_frs(&list, "$J"), Vec::<u64>::new());
     }
 }

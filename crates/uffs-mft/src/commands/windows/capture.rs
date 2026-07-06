@@ -225,9 +225,9 @@ fn collect_artifacts(
     artifacts
 }
 
-/// `capture` command — write the `$MFT` + all metafiles + `manifest.json` +
-/// `SHA256SUMS` for a drive into `out/drive_<x>/`.
-pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
+/// Capture one drive's `$MFT` + all metafiles + `manifest.json` + `SHA256SUMS`
+/// into `out/drive_<x>/`.
+fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<()> {
     let drive_lower = drive.to_string().to_lowercase();
     let dir = out.join(format!("drive_{drive_lower}"));
     std::fs::create_dir_all(&dir)
@@ -252,5 +252,45 @@ pub(crate) async fn cmd_capture(drive: DriveLetter, out: &Path) -> Result<()> {
     println!("  Manifest: {}", dir.join("manifest.json").display());
     println!("  Hashes:   {}", dir.join("SHA256SUMS").display());
     println!("  {} artifact(s) captured.", manifest.artifacts.len());
+    Ok(())
+}
+
+/// `capture` command — bundle one drive (`--drive C`) or every eligible NTFS
+/// volume (`--all-drives`) into `out/drive_<x>/`.
+///
+/// With `--all-drives`, a per-drive failure is reported and skipped so the run
+/// continues; the command still errors at the end if any drive failed.
+pub(crate) async fn cmd_capture(
+    drive: Option<DriveLetter>,
+    out: &Path,
+    all_drives: bool,
+) -> Result<()> {
+    if !all_drives {
+        let only =
+            drive.context("`--drive <LETTER>` is required unless `--all-drives` is given")?;
+        return capture_one_drive(only, out);
+    }
+
+    let drives = uffs_mft::platform::detect_ntfs_drives();
+    if drives.is_empty() {
+        anyhow::bail!("no NTFS drives detected to capture");
+    }
+    println!("Capturing {} NTFS drive(s)…", drives.len());
+
+    let mut failures: Vec<DriveLetter> = Vec::new();
+    for letter in drives {
+        if let Err(err) = capture_one_drive(letter, out) {
+            println!("  ⚠️  drive {letter}: capture failed — {err:#}");
+            failures.push(letter);
+        }
+    }
+    if !failures.is_empty() {
+        let list = failures
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("{} drive(s) failed to capture: {list}", failures.len());
+    }
     Ok(())
 }

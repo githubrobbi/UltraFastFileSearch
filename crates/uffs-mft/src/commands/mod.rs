@@ -44,7 +44,11 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             kind,
             output,
         } => windows::cmd_metafile(drive, kind, &output).await,
-        Commands::Capture { drive, out } => windows::cmd_capture(drive, &out).await,
+        Commands::Capture {
+            drive,
+            out,
+            all_drives,
+        } => windows::cmd_capture(drive, &out, all_drives).await,
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
         Commands::Bench {
             drive,

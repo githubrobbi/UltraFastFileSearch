@@ -167,13 +167,18 @@ pub(crate) enum Commands {
 
     /// Capture all NTFS metafiles for a drive into a hashed, manifested bundle
     Capture {
-        /// Drive letter (e.g., C, D, E)
+        /// Drive letter (e.g., C, D, E). Required unless `--all-drives` is set.
         #[arg(short, long)]
-        drive: uffs_mft::platform::DriveLetter,
+        drive: Option<uffs_mft::platform::DriveLetter>,
 
         /// Output directory (bundle written to `<out>/drive_<x>/`)
         #[arg(short, long)]
         out: PathBuf,
+
+        /// Capture every eligible NTFS volume, each into its own
+        /// `<out>/drive_<x>/` subfolder.
+        #[arg(long)]
+        all_drives: bool,
     },
 
     /// Inspect a captured NTFS metafile offline (header + $Boot geometry, ...)

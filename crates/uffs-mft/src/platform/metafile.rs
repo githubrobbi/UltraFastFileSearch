@@ -327,8 +327,11 @@ fn read_data_stream(
 
 /// Assemble a stream's data runs into a `data_size`-byte buffer.
 ///
-/// Sparse runs leave their window zeroed; the buffer is truncated to the
-/// attribute's real `data_size` (runs are cluster-rounded).
+/// Raw volume reads must be sector-aligned in length, so we allocate the whole
+/// cluster-aligned span the runs cover (≥ `data_size`), read each run in full,
+/// then truncate to the attribute's real `data_size`. Sparse runs leave their
+/// window zeroed. (A naïve last-read clamped to a non-cluster-aligned
+/// `data_size` fails raw I/O with `ERROR_INVALID_PARAMETER`.)
 #[cfg(windows)]
 fn read_runs(
     handle: windows::Win32::Foundation::HANDLE,
@@ -337,34 +340,32 @@ fn read_runs(
     data_size: u64,
 ) -> Result<Vec<u8>> {
     let bpc = u64::from(bytes_per_cluster);
-    let total = usize::try_from(data_size).map_err(|_err| {
-        MftError::InvalidData("metafile data_size exceeds usize::MAX".to_owned())
+    let allocated: u64 = runs.iter().map(|run| run.cluster_count * bpc).sum();
+    let capacity = usize::try_from(allocated.max(data_size)).map_err(|_err| {
+        MftError::InvalidData("metafile stream size exceeds usize::MAX".to_owned())
     })?;
-    let mut buf = vec![0_u8; total];
+    let mut buf = vec![0_u8; capacity];
     let mut offset: usize = 0;
 
     for run in runs {
-        if offset >= total {
-            break;
-        }
         let run_bytes = usize::try_from(run.cluster_count * bpc).map_err(|_err| {
             MftError::InvalidData("metafile run byte count exceeds usize::MAX".to_owned())
         })?;
-        let read_len = run_bytes.min(total - offset);
-        if run.is_sparse() {
-            // Sparse run — leave the buffer window zeroed.
-            offset += read_len;
-            continue;
+        if !run.is_sparse() {
+            // Cluster-aligned offset + length → sector-aligned raw read.
+            let disk_offset = crate::index::nonneg_to_u64(run.lcn.raw() * bpc.cast_signed());
+            let Some(window) = buf.get_mut(offset..offset + run_bytes) else {
+                return Err(MftError::InvalidData(format!(
+                    "metafile run at offset {offset} len {run_bytes} exceeds buffer {capacity}"
+                )));
+            };
+            super::volume::read_handle_at(handle, disk_offset, window)?;
         }
-        let disk_offset = crate::index::nonneg_to_u64(run.lcn.raw() * bpc.cast_signed());
-        let Some(window) = buf.get_mut(offset..offset + read_len) else {
-            return Err(MftError::InvalidData(format!(
-                "metafile run at offset {offset} len {read_len} exceeds buffer {total}"
-            )));
-        };
-        super::volume::read_handle_at(handle, disk_offset, window)?;
-        offset += read_len;
+        offset = offset.saturating_add(run_bytes);
     }
+
+    let final_len = usize::try_from(data_size).unwrap_or(capacity).min(capacity);
+    buf.truncate(final_len);
     Ok(buf)
 }
 

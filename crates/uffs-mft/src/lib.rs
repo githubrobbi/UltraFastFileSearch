@@ -251,6 +251,9 @@ pub mod frs;
 
 pub mod cache;
 
+/// Minimal `ustar` archive writer + byte splitter for capture bundles.
+pub mod archive;
+
 mod reader;
 
 // WI-7.1 — pathological-name parity corpus (Tier 1 decoder pins + Tier 2

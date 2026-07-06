@@ -48,7 +48,9 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             drive,
             out,
             all_drives,
-        } => windows::cmd_capture(drive, &out, all_drives).await,
+            zip,
+            split_gib,
+        } => windows::cmd_capture(drive, &out, all_drives, zip, split_gib).await,
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
         Commands::Bench {
             drive,

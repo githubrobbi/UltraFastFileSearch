@@ -179,6 +179,16 @@ pub(crate) enum Commands {
         /// `<out>/drive_<x>/` subfolder.
         #[arg(long)]
         all_drives: bool,
+
+        /// Also pack each drive bundle into a `<dir>.tar.zst`
+        /// (extract with `tar --zstd -xf`).
+        #[arg(long)]
+        zip: bool,
+
+        /// With `--zip`, split the archive into parts of this many GiB
+        /// (`<dir>.tar.zst.NNN`). 0 = no split.
+        #[arg(long, default_value_t = 0, value_name = "GIB")]
+        split_gib: u64,
     },
 
     /// Inspect a captured NTFS metafile offline (header + $Boot geometry, ...)

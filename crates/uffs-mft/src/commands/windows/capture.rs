@@ -226,8 +226,8 @@ fn collect_artifacts(
 }
 
 /// Capture one drive's `$MFT` + all metafiles + `manifest.json` + `SHA256SUMS`
-/// into `out/drive_<x>/`.
-fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<()> {
+/// into `out/drive_<x>/`, returning that directory.
+fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<std::path::PathBuf> {
     let drive_lower = drive.to_string().to_lowercase();
     let dir = out.join(format!("drive_{drive_lower}"));
     std::fs::create_dir_all(&dir)
@@ -252,11 +252,57 @@ fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<()> {
     println!("  Manifest: {}", dir.join("manifest.json").display());
     println!("  Hashes:   {}", dir.join("SHA256SUMS").display());
     println!("  {} artifact(s) captured.", manifest.artifacts.len());
+    Ok(dir)
+}
+
+/// Pack a captured drive directory into a single `<dir>.tar.zst` (extractable
+/// with `tar --zstd -xf`), optionally split into `split_gib`-GiB parts named
+/// `<dir>.tar.zst.NNN` for transfer.
+fn archive_dir(dir: &Path, split_gib: u64) -> Result<()> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("listing {}", dir.display()))?
+        .filter_map(core::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    files.sort();
+
+    let mut tar = Vec::new();
+    for path in &files {
+        let name = path
+            .file_name()
+            .map(|os| os.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        uffs_mft::archive::push_entry(&mut tar, &name, &data)
+            .with_context(|| format!("archiving {name}"))?;
+    }
+    uffs_mft::archive::finish(&mut tar);
+
+    let compressed =
+        zstd::encode_all(tar.as_slice(), 3).context("zstd-compressing capture archive")?;
+    let base = format!("{}.tar.zst", dir.display());
+
+    if split_gib == 0 {
+        std::fs::write(&base, &compressed).with_context(|| format!("writing {base}"))?;
+        println!("  📦 archive: {base} ({} bytes)", compressed.len());
+    } else {
+        let part_size = usize::try_from(split_gib.saturating_mul(1 << 30)).unwrap_or(usize::MAX);
+        for (idx, part) in uffs_mft::archive::split(&compressed, part_size)
+            .iter()
+            .enumerate()
+        {
+            let name = format!("{base}.{idx:03}");
+            std::fs::write(&name, part).with_context(|| format!("writing {name}"))?;
+            println!("  📦 part {idx:03}: {name} ({} bytes)", part.len());
+        }
+    }
     Ok(())
 }
 
 /// `capture` command — bundle one drive (`--drive C`) or every eligible NTFS
-/// volume (`--all-drives`) into `out/drive_<x>/`.
+/// volume (`--all-drives`) into `out/drive_<x>/`, optionally packing each into
+/// a `.tar.zst` (`--zip`, split with `--split-gib`).
 ///
 /// With `--all-drives`, a per-drive failure is reported and skipped so the run
 /// continues; the command still errors at the end if any drive failed.
@@ -264,11 +310,17 @@ pub(crate) async fn cmd_capture(
     drive: Option<DriveLetter>,
     out: &Path,
     all_drives: bool,
+    zip: bool,
+    split_gib: u64,
 ) -> Result<()> {
     if !all_drives {
         let only =
             drive.context("`--drive <LETTER>` is required unless `--all-drives` is given")?;
-        return capture_one_drive(only, out);
+        let dir = capture_one_drive(only, out)?;
+        if zip {
+            archive_dir(&dir, split_gib)?;
+        }
+        return Ok(());
     }
 
     let drives = uffs_mft::platform::detect_ntfs_drives();
@@ -279,9 +331,17 @@ pub(crate) async fn cmd_capture(
 
     let mut failures: Vec<DriveLetter> = Vec::new();
     for letter in drives {
-        if let Err(err) = capture_one_drive(letter, out) {
-            println!("  ⚠️  drive {letter}: capture failed — {err:#}");
-            failures.push(letter);
+        match capture_one_drive(letter, out) {
+            Ok(dir) => {
+                if zip && let Err(err) = archive_dir(&dir, split_gib) {
+                    println!("  ⚠️  drive {letter}: archive failed — {err:#}");
+                    failures.push(letter);
+                }
+            }
+            Err(err) => {
+                println!("  ⚠️  drive {letter}: capture failed — {err:#}");
+                failures.push(letter);
+            }
         }
     }
     if !failures.is_empty() {
@@ -290,7 +350,7 @@ pub(crate) async fn cmd_capture(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        anyhow::bail!("{} drive(s) failed to capture: {list}", failures.len());
+        anyhow::bail!("{} drive(s) failed: {list}", failures.len());
     }
     Ok(())
 }

@@ -22,9 +22,10 @@
 //! rust-script scripts/verify_parity.rs --live --drive C --keep
 //! rust-script scripts/verify_parity.rs --live --drive C,D,F --out-dir D:\parity
 //!
-//! # Live + transport bundle: also capture the MFT + metafiles and zip each
-//! # drive dir (MFT + metafiles + manifest + cpp/rust outputs) → drive_<x>.zip,
+//! # Live + transport bundle: also capture the MFT + metafiles and pack each
+//! # drive dir (MFT + metafiles + manifest + cpp/rust outputs) → drive_<x>.tar.zst
 //! # for offline `--regenerate` on the Mac. Needs uffs-mft (--mft-bin or auto).
+//! # (ustar+zstd, no PowerShell 2 GB Compress-Archive limit.)
 //! rust-script scripts/verify_parity.rs --live --drive C --bundle
 //! ```
 //!
@@ -910,7 +911,7 @@ fn run_live_drive_parity(
     // Build the offline transport bundle (capture MFT + metafiles into the same
     // drive dir, then zip it with the cpp/rust outputs). Bundling implies keep.
     if bundle {
-        create_transport_bundle(&drive_upper, &drive_lower, out_dir, &drive_dir, mft_bin);
+        create_transport_bundle(&drive_upper, &drive_lower, out_dir, mft_bin);
     }
 
     cleanup_live_files(keep_files || bundle, &[&cpp_raw, &rust_raw, &es_raw_path]);
@@ -944,17 +945,19 @@ fn find_uffs_mft_bin() -> Option<PathBuf> {
     workspace.exists().then_some(workspace)
 }
 
-/// Capture the MFT + metafiles into the drive dir and zip it for transport.
+/// Capture the MFT + metafiles into the drive dir and pack it for transport.
 ///
-/// `uffs-mft capture --out <out_dir>` writes into `<out_dir>/drive_<x>/` — the
-/// same dir the live cpp/rust outputs already live in — so the resulting
-/// `drive_<x>.zip` carries the MFT, all metafiles, the manifest, and both
-/// tools' outputs. On the Mac: unzip, then `verify_parity.rs <dir> --regenerate`.
+/// A single `uffs-mft capture --out <out_dir> --zip` writes into
+/// `<out_dir>/drive_<x>/` — the same dir the live cpp/rust outputs already live
+/// in — then packs the whole dir into `<out_dir>/drive_<x>.tar.zst`. That
+/// bundler is ustar + zstd, so unlike PowerShell `Compress-Archive` (which
+/// silently fails past ~2 GB — e.g. a large drive's `<DRIVE>_mft.bin`) it has no
+/// size limit. On the Mac: `tar --zstd -xf drive_<x>.tar.zst`, then
+/// `verify_parity.rs <dir> --regenerate`.
 fn create_transport_bundle(
     drive_upper: &str,
     drive_lower: &str,
     out_dir: &Path,
-    drive_dir: &Path,
     mft_bin: Option<&Path>,
 ) {
     println!();
@@ -965,8 +968,9 @@ fn create_transport_bundle(
         return;
     };
 
-    // 1. Capture MFT + metafiles alongside the cpp/rust outputs.
-    print!("  [bundle] uffs-mft capture --drive {drive_upper}...");
+    // Capture MFT + metafiles alongside the cpp/rust outputs, then --zip packs
+    // the whole drive dir into drive_<x>.tar.zst.
+    print!("  [bundle] uffs-mft capture --drive {drive_upper} --zip...");
     io::stdout().flush().ok();
     let capture = Command::new(mft_bin)
         .args([
@@ -975,43 +979,36 @@ fn create_transport_bundle(
             drive_upper,
             "--out",
             &out_dir.to_string_lossy(),
+            "--zip",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output();
     match capture {
         Ok(out) if out.status.success() => println!(" ✅"),
-        Ok(out) => {
-            println!(
-                " ⚠️  exited {} — bundle may be incomplete: {}",
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        Ok(out) => println!(
+            " ⚠️  exited {}: {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
         Err(e) => {
             println!(" ❌ failed to run: {e}");
             return;
         }
     }
 
-    // 2. Zip the drive dir with PowerShell's built-in Compress-Archive.
-    let zip_path = out_dir.join(format!("drive_{drive_lower}.zip"));
-    print!("  [bundle] Compress-Archive → {}...", zip_path.display());
-    io::stdout().flush().ok();
-    let ps_command = format!(
-        "Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force",
-        drive_dir.display(),
-        zip_path.display()
-    );
-    let zip = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .status();
-    match zip {
-        Ok(status) if status.success() => println!(" ✅"),
-        Ok(status) => println!(" ⚠️  Compress-Archive exited {:?}", status.code()),
-        Err(e) => println!(" ❌ failed to run: {e}"),
+    // Verify the archive actually landed (never trust exit code alone).
+    let archive = out_dir.join(format!("drive_{drive_lower}.tar.zst"));
+    match fs::metadata(&archive) {
+        Ok(meta) if meta.len() > 0 => {
+            #[allow(clippy::cast_precision_loss)] // display only
+            let mb = meta.len() as f64 / (1024.0 * 1024.0);
+            println!("  [bundle] ✅ {} ({mb:.1} MB)", archive.display());
+        }
+        _ => println!(
+            "  [bundle] ❌ archive not produced: {}",
+            archive.display()
+        ),
     }
 }
 

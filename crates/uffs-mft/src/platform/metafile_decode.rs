@@ -219,7 +219,8 @@ pub fn parse_usn(payload: &[u8]) -> UsnSummary {
         };
         let rec_len = rd_u32(record, 0).unwrap_or(0) as usize;
         let major = rd_u16(record, 4).unwrap_or(0);
-        if rec_len < 0x3C || (major != 2 && major != 3) {
+        let minor = rd_u16(record, 6).unwrap_or(0xFFFF);
+        if !(0x3C..=0x400).contains(&rec_len) || minor != 0 || (major != 2 && major != 3) {
             pos += 8; // sparse gap / alignment padding
             continue;
         }
@@ -227,6 +228,13 @@ pub fn parse_usn(payload: &[u8]) -> UsnSummary {
             break;
         }
         let usn = rd_i64(record, 0x18).unwrap_or(0);
+        // A USN is the record's byte offset in the journal, so it is always
+        // positive and 8-byte aligned. A misaligned/negative value means we
+        // walked into stale or padding bytes rather than a real record.
+        if usn <= 0 || (usn & 0b111) != 0 {
+            pos += 8;
+            continue;
+        }
         let reason = rd_u32(record, 0x28).unwrap_or(0);
         let name_len = usize::from(rd_u16(record, 0x38).unwrap_or(0));
         let name_off = usize::from(rd_u16(record, 0x3A).unwrap_or(0));
@@ -391,6 +399,35 @@ mod tests {
 
         // Empty / all-sparse payload → no records.
         assert_eq!(parse_usn(&[0_u8; 64]).record_count, 0);
+    }
+
+    #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "test builds fixed USN records with known in-bounds offsets"
+    )]
+    fn parse_usn_rejects_misaligned_usn() {
+        // One valid V2 record (usn 800, 8-aligned) followed by a well-formed
+        // header whose USN is misaligned (804) — stale bytes, not a real record.
+        let rec_len = 0x3C_usize; // header-only record
+        let mut buf = vec![0_u8; rec_len * 2];
+
+        // Valid record at offset 0.
+        buf[0..4].copy_from_slice(&u32::try_from(rec_len).unwrap_or(0).to_le_bytes());
+        buf[4..6].copy_from_slice(&2_u16.to_le_bytes()); // major
+        buf[0x18..0x20].copy_from_slice(&800_i64.to_le_bytes()); // usn (8-aligned)
+
+        // Garbage "record" at offset rec_len: plausible header, misaligned usn.
+        let garbage = rec_len;
+        buf[garbage..garbage + 4]
+            .copy_from_slice(&u32::try_from(rec_len).unwrap_or(0).to_le_bytes());
+        buf[garbage + 4..garbage + 6].copy_from_slice(&2_u16.to_le_bytes());
+        buf[garbage + 0x18..garbage + 0x20].copy_from_slice(&804_i64.to_le_bytes()); // usn & 7 == 4
+
+        let summary = parse_usn(&buf);
+        assert_eq!(summary.record_count, 1);
+        assert_eq!(summary.first_usn, 800);
+        assert_eq!(summary.last_usn, 800);
     }
 
     #[test]

@@ -3023,6 +3023,44 @@ fn parse_bin_path(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+/// Kill any running daemon and purge on-disk caches so the next `uffs` run
+/// starts from a clean slate, loading only the drive we ask for.
+///
+/// Offline `--regenerate` uses `uffs --mft-file` via autospawn; if a daemon
+/// from a previous drive/session is still resident it serves that stale
+/// in-memory index instead (`--no-cache` only skips the cache *file*, not the
+/// hot daemon). We don't know which drive/version a running daemon holds, so we
+/// reset it.
+fn purge_daemon_and_cache(uffs_bin: &Path) {
+    let _ = Command::new(uffs_bin)
+        .args(["--daemon", "kill"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    std::thread::sleep(Duration::from_secs(1));
+
+    // Best-effort cache removal across platforms.
+    let mut cache_dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(local) = env::var("LOCALAPPDATA") {
+        cache_dirs.push(PathBuf::from(local).join("uffs").join("cache")); // Windows
+    }
+    if let Ok(tmp) = env::var("TEMP") {
+        cache_dirs.push(PathBuf::from(tmp).join("uffs_index_cache")); // Windows legacy
+    }
+    if let Ok(home) = env::var("HOME") {
+        cache_dirs.push(PathBuf::from(&home).join("Library/Caches/uffs")); // macOS
+        cache_dirs.push(PathBuf::from(&home).join(".cache/uffs")); // Linux
+    }
+    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
+        cache_dirs.push(PathBuf::from(xdg).join("uffs"));
+    }
+    for dir in cache_dirs {
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}
+
 fn regenerate_rust_output(
     data_dir: &Path,
     drive_letter: &str,
@@ -3158,6 +3196,14 @@ fn regenerate_rust_output(
     // NOTE: --pipeline flag removed from uffs binary (Step 4).
     let _ = pipeline;
     println!("Pipeline: unified (only pipeline)");
+
+    // Clean slate: reset any daemon (it may hold a different drive/version from
+    // an earlier run) so uffs loads only this drive's MFT via autospawn.
+    print!("Resetting daemon + cache for a clean single-drive load...");
+    io::stdout().flush().ok();
+    purge_daemon_and_cache(&binary_path);
+    println!(" ✅");
+
     let status = Command::new(&binary_path)
         .args(&args)
         .status();

@@ -21,6 +21,11 @@
 //! rust-script scripts/verify_parity.rs --live
 //! rust-script scripts/verify_parity.rs --live --drive C --keep
 //! rust-script scripts/verify_parity.rs --live --drive C,D,F --out-dir D:\parity
+//!
+//! # Live + transport bundle: also capture the MFT + metafiles and zip each
+//! # drive dir (MFT + metafiles + manifest + cpp/rust outputs) → drive_<x>.zip,
+//! # for offline `--regenerate` on the Mac. Needs uffs-mft (--mft-bin or auto).
+//! rust-script scripts/verify_parity.rs --live --drive C --bundle
 //! ```
 //!
 //! # Parity contract
@@ -467,6 +472,20 @@ fn run_live_mode(args: &[String]) {
     let keep_files = args.iter().any(|a| a == "--keep");
     let name_only = args.iter().any(|a| a == "--name-only");
 
+    // --bundle: after each live compare, capture the MFT + metafiles and zip
+    // the drive dir (MFT + metafiles + manifest + cpp/rust outputs) for offline
+    // transport. Needs the uffs-mft binary (--mft-bin or auto-detected).
+    let bundle = args.iter().any(|a| a == "--bundle");
+    let mft_bin: Option<PathBuf> = parse_live_arg(args, "--mft-bin")
+        .map(PathBuf::from)
+        .or_else(find_uffs_mft_bin);
+    if bundle {
+        match mft_bin {
+            Some(ref p) => println!("  Bundle:      ON — uffs-mft: {}", p.display()),
+            None => println!("  Bundle:      ON — ⚠️  uffs-mft not found (use --mft-bin <path>)"),
+        }
+    }
+
     // Determine drives
     let drives: Vec<String> = if let Some(d) = parse_drive_filter(args) {
         vec![d.to_uppercase()]
@@ -516,6 +535,8 @@ fn run_live_mode(args: &[String]) {
             es_bin.as_deref(),
             &out_dir,
             keep_files,
+            bundle,
+            mft_bin.as_deref(),
             pipeline.as_deref(),
             i + 1,
             drives.len(),
@@ -592,6 +613,8 @@ fn run_live_drive_parity(
     es_bin: Option<&Path>,
     out_dir: &Path,
     keep_files: bool,
+    bundle: bool,
+    mft_bin: Option<&Path>,
     pipeline: Option<&str>,
     drive_index: usize,
     total_drives: usize,
@@ -884,7 +907,13 @@ fn run_live_drive_parity(
     //     compare_with_everything(&es_raw_path, &rust_raw, &drive_upper);
     // }
 
-    cleanup_live_files(keep_files, &[&cpp_raw, &rust_raw, &es_raw_path]);
+    // Build the offline transport bundle (capture MFT + metafiles into the same
+    // drive dir, then zip it with the cpp/rust outputs). Bundling implies keep.
+    if bundle {
+        create_transport_bundle(&drive_upper, &drive_lower, out_dir, &drive_dir, mft_bin);
+    }
+
+    cleanup_live_files(keep_files || bundle, &[&cpp_raw, &rust_raw, &es_raw_path]);
 
     LiveDriveResult {
         drive_letter: drive_upper,
@@ -894,6 +923,95 @@ fn run_live_drive_parity(
         extra_rust_lines: parity_result.1,
         cpp_time: cpp_elapsed,
         rust_time: rust_elapsed,
+    }
+}
+
+/// Auto-detect the `uffs-mft` binary (MFT capture tool).
+///
+/// Looks in `$USERPROFILE\bin` / `$HOME/bin` first (the standard deploy
+/// location), then the workspace `target/release`.
+fn find_uffs_mft_bin() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "uffs-mft.exe" } else { "uffs-mft" };
+    for var in ["USERPROFILE", "HOME"] {
+        if let Ok(home) = env::var(var) {
+            let candidate = PathBuf::from(home).join("bin").join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    let workspace = find_workspace_root().join("target").join("release").join(name);
+    workspace.exists().then_some(workspace)
+}
+
+/// Capture the MFT + metafiles into the drive dir and zip it for transport.
+///
+/// `uffs-mft capture --out <out_dir>` writes into `<out_dir>/drive_<x>/` — the
+/// same dir the live cpp/rust outputs already live in — so the resulting
+/// `drive_<x>.zip` carries the MFT, all metafiles, the manifest, and both
+/// tools' outputs. On the Mac: unzip, then `verify_parity.rs <dir> --regenerate`.
+fn create_transport_bundle(
+    drive_upper: &str,
+    drive_lower: &str,
+    out_dir: &Path,
+    drive_dir: &Path,
+    mft_bin: Option<&Path>,
+) {
+    println!();
+    println!("  [bundle] Building transport bundle for drive {drive_upper}...");
+
+    let Some(mft_bin) = mft_bin else {
+        println!("  [bundle] ⚠️  skipped: uffs-mft binary not found (pass --mft-bin <path>)");
+        return;
+    };
+
+    // 1. Capture MFT + metafiles alongside the cpp/rust outputs.
+    print!("  [bundle] uffs-mft capture --drive {drive_upper}...");
+    io::stdout().flush().ok();
+    let capture = Command::new(mft_bin)
+        .args([
+            "capture",
+            "--drive",
+            drive_upper,
+            "--out",
+            &out_dir.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    match capture {
+        Ok(out) if out.status.success() => println!(" ✅"),
+        Ok(out) => {
+            println!(
+                " ⚠️  exited {} — bundle may be incomplete: {}",
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(e) => {
+            println!(" ❌ failed to run: {e}");
+            return;
+        }
+    }
+
+    // 2. Zip the drive dir with PowerShell's built-in Compress-Archive.
+    let zip_path = out_dir.join(format!("drive_{drive_lower}.zip"));
+    print!("  [bundle] Compress-Archive → {}...", zip_path.display());
+    io::stdout().flush().ok();
+    let ps_command = format!(
+        "Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force",
+        drive_dir.display(),
+        zip_path.display()
+    );
+    let zip = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_command])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status();
+    match zip {
+        Ok(status) if status.success() => println!(" ✅"),
+        Ok(status) => println!(" ⚠️  Compress-Archive exited {:?}", status.code()),
+        Err(e) => println!(" ❌ failed to run: {e}"),
     }
 }
 

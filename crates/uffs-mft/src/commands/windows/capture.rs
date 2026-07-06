@@ -254,9 +254,19 @@ fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<std::path::PathBu
     let manifest = build_manifest(drive, vol, artifacts);
     write_bundle(&dir, &manifest)?;
 
+    // Root `tree_allocated` adjustment for offline parity: the reserved-cluster
+    // bytes the MFT records alone don't encode (from volume data). Offline
+    // `verify_parity.rs --regenerate` reads this sidecar and passes
+    // `--reserved-allocated` so the root's size-on-disk matches the live/C++
+    // baseline.
+    let reserved = vol.reserved_allocated_bytes();
+    std::fs::write(dir.join("reserved_allocated.txt"), reserved.to_string())
+        .with_context(|| format!("writing reserved_allocated.txt to {}", dir.display()))?;
+
     println!();
     println!("  Manifest: {}", dir.join("manifest.json").display());
     println!("  Hashes:   {}", dir.join("SHA256SUMS").display());
+    println!("  reserved_allocated: {reserved} bytes (root tree-size adjustment)");
     println!("  {} artifact(s) captured.", manifest.artifacts.len());
     Ok(dir)
 }

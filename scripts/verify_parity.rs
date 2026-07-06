@@ -3896,6 +3896,7 @@ fn verify_hardlinks_inline(golden_baseline_file: &Path, only_in_rust_data: &[Str
 /// 0=path 1=name 2=parent 3=size 4=allocated 5=created 6=modified
 /// 7=accessed 8=descendant-count …
 const COL_SIZE: usize = 3;
+const COL_ALLOCATED: usize = 4;
 const COL_ACCESSED: usize = 7;
 const COL_COUNT: usize = 8;
 
@@ -3967,8 +3968,10 @@ fn classify_live_skew(baseline: &str, rust: &str) -> Option<&'static str> {
         if i == COL_ACCESSED {
             continue;
         }
-        if is_dir && (i == COL_SIZE || i == COL_COUNT) {
-            accessed_only = false; // a subtree aggregate also moved
+        if is_dir && (i == COL_SIZE || i == COL_ALLOCATED || i == COL_COUNT) {
+            // Size, size-on-disk, and descendant count are all subtree
+            // aggregates that move when a child changes between the two reads.
+            accessed_only = false;
             continue;
         }
         return None; // a structural field differs — real diff

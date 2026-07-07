@@ -198,6 +198,19 @@ pub(crate) enum Commands {
         input: PathBuf,
     },
 
+    /// Extract the raw `$MFT` from a captured `.bin` (decompress + strip
+    /// header) into a byte-exact `$MFT` other tools (analyzeMFT, MFT2CSV,
+    /// ntfstool) can read. Cross-platform.
+    ExtractMft {
+        /// Captured `.bin` (e.g. `C_mft.bin` from `capture`).
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output path for the raw `$MFT`.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Compare two MFT CSV exports (from `load`) for parity — e.g. Rust on
     /// Windows vs macOS, or Rust vs a C++ golden. Exits non-zero on mismatch.
     Verify {

@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use crate::cli::Commands;
 
+mod extract_mft;
 mod load;
 mod metafile_info;
 mod sysinfo;
@@ -53,6 +54,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             split_gib,
         } => windows::cmd_capture(drive, &out, all_drives, zip, split_gib).await,
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
+        Commands::ExtractMft { input, output } => extract_mft::cmd_extract_mft(&input, &output),
         Commands::Verify {
             left,
             right,
@@ -214,6 +216,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         ),
         Commands::Sysinfo { out, json } => sysinfo::run(out.as_deref(), json),
         Commands::MetafileInfo { input } => metafile_info::cmd_metafile_info(&input),
+        Commands::ExtractMft { input, output } => extract_mft::cmd_extract_mft(&input, &output),
         Commands::Verify {
             left,
             right,

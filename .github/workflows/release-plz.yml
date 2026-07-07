@@ -270,8 +270,18 @@ on:
   #     `docs/architecture/release-automation-plan.md` §8 (Path B row) and
   #     `just/build.just` `release-pr` / `release-tag`.
   #
-  # push:                # ← Path B: disabled by design (manual releases)
-  #   branches: [main]
+  # push.branches:[main] stays disabled by design (Path B — manual
+  # releases; see the trigger-history comment above).  Instead a narrow
+  # tag trigger drives the OIDC `crates-io-publish` job below: it fires
+  # exactly when a release tag is cut (the same `v*` tags `release.yml`
+  # builds binaries for), carrying the crates.io publish along with
+  # every `just ship` release — no long-lived token, no manual step.
+  # The release-pr / release jobs stay workflow_dispatch-only (they are
+  # gated to `github.event_name == 'workflow_dispatch'`), so a tag push
+  # only runs the publish job.
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
@@ -303,8 +313,10 @@ jobs:
 
     # Skip on forks (fork PRs can't access the repo's secrets and would
     # produce noisy "permission denied" runs).  Matches the convention
-    # release-plz docs recommend.
-    if: github.repository_owner == 'skyllc-ai'
+    # release-plz docs recommend.  Restricted to workflow_dispatch: the
+    # `v*` tag trigger is reserved for the crates-io-publish job, so the
+    # release-pr job must not run on a tag push.
+    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch'
 
     # Push branch + open/update PR.  Granted at job level so the
     # release job below can run with a tighter (no pull-requests)
@@ -375,7 +387,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    if: github.repository_owner == 'skyllc-ai'
+    # workflow_dispatch only — the `v*` tag trigger is reserved for the
+    # crates-io-publish job; this release job must not fire on a tag push
+    # (release.yml already builds binaries from the tag).
+    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch'
 
     # Tag push only — no PR operations from this job.
     permissions:
@@ -436,13 +451,14 @@ jobs:
           done
 
   # ─────────────────────────────────────────────────────────────────
-  # R7: OIDC Trusted Publishing scaffolding (crates.io)
+  # OIDC Trusted Publishing to crates.io (ACTIVE)
   # ─────────────────────────────────────────────────────────────────
   #
-  # Phase R7 — OIDC trusted publisher scaffolding.  This job is gated
-  # by the repo variable `ENABLE_CRATES_IO_PUBLISH` (unset → dormant)
-  # until Phase R8 (first dress rehearsal).  It sets up the OIDC token
-  # exchange with crates.io for passwordless, short-lived credentials.
+  # Fires on every `v*` release tag (gated by the repo variable
+  # `ENABLE_CRATES_IO_PUBLISH`), minting a short-lived crates.io token
+  # via OIDC — no long-lived registry token is ever stored.  This is
+  # what carries the crates.io publish along with each `just ship`
+  # release tag.
   #
   # A repo-variable gate is used instead of a literal `if: false` for
   # two reasons: (1) actionlint rejects constant `if:` conditions, and
@@ -468,20 +484,20 @@ jobs:
   # See: docs/architecture/release-automation-plan.md §Phase R7/R8
   #
   crates-io-publish:
-    name: crates.io / OIDC publish (R7 scaffolding)
+    name: crates.io / OIDC publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: release-plz-release
 
     # Two gates, both required:
-    #   1. Repo variable ENABLE_CRATES_IO_PUBLISH=true — the R9 master
+    #   1. Repo variable ENABLE_CRATES_IO_PUBLISH=true — the master
     #      switch (unset / any-other-value keeps the job dormant).
-    #   2. releases_created — `release-plz-release` runs on EVERY push
-    #      to main and no-ops internally when HEAD isn't a release-PR
-    #      merge; without this gate the publish job would fire (and
-    #      page the environment reviewer) on every push, then fail
-    #      republishing the already-live version.
-    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && needs.release-plz-release.outputs.releases_created == 'true' }}
+    #   2. A `v*` release-tag push — the ship pipeline (and release.yml)
+    #      cut exactly one such tag per release, so publish fires once
+    #      per released version and never on ordinary pushes.  The
+    #      checkout below resolves to the tag ref, so cargo publishes the
+    #      freshly-released version.  Re-running against an already-live
+    #      version is a harmless no-op-error from crates.io.
+    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && startsWith(github.ref, 'refs/tags/v') }}
 
     environment: crates.io-publish
     permissions:

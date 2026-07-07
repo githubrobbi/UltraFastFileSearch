@@ -271,18 +271,26 @@ on:
   #     `just/build.just` `release-pr` / `release-tag`.
   #
   # push.branches:[main] stays disabled by design (Path B — manual
-  # releases; see the trigger-history comment above).  Instead a narrow
-  # tag trigger drives the OIDC `crates-io-publish` job below: it fires
-  # exactly when a release tag is cut (the same `v*` tags `release.yml`
-  # builds binaries for), carrying the crates.io publish along with
-  # every `just ship` release — no long-lived token, no manual step.
-  # The release-pr / release jobs stay workflow_dispatch-only (they are
-  # gated to `github.event_name == 'workflow_dispatch'`), so a tag push
-  # only runs the publish job.
+  # releases; see the trigger-history comment above).  The OIDC
+  # `crates-io-publish` job below runs in two ways:
+  #   * a real `v*` tag push (e.g. `just release-tag`), and
+  #   * a `workflow_dispatch` with `publish_tag` set — how `release.yml`'s
+  #     `submit-crates` job fires it after a release.  The release tag is
+  #     created by GITHUB_TOKEN, which by GitHub anti-loop policy does NOT
+  #     trigger the `push: tags` event, so the automated path must dispatch —
+  #     exactly like `submit-winget` dispatches winget-publish.yml.
+  # The release-pr / release jobs stay workflow_dispatch-only AND only run
+  # when `publish_tag` is empty (manual release-pr mode), so a crates-publish
+  # dispatch runs only the publish job.
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: 'Release tag to publish to crates.io (set by release.yml submit-crates; empty = manual release-pr mode).'
+        required: false
+        default: ''
 
 # Default to ZERO permissions; each job grants only what it needs.
 # Matches the release-plz repo's own workflow shape.
@@ -316,7 +324,7 @@ jobs:
     # release-plz docs recommend.  Restricted to workflow_dispatch: the
     # `v*` tag trigger is reserved for the crates-io-publish job, so the
     # release-pr job must not run on a tag push.
-    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch'
+    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch' && inputs.publish_tag == ''
 
     # Push branch + open/update PR.  Granted at job level so the
     # release job below can run with a tighter (no pull-requests)
@@ -390,7 +398,7 @@ jobs:
     # workflow_dispatch only — the `v*` tag trigger is reserved for the
     # crates-io-publish job; this release job must not fire on a tag push
     # (release.yml already builds binaries from the tag).
-    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch'
+    if: github.repository_owner == 'skyllc-ai' && github.event_name == 'workflow_dispatch' && inputs.publish_tag == ''
 
     # Tag push only — no PR operations from this job.
     permissions:
@@ -497,7 +505,7 @@ jobs:
     #      checkout below resolves to the tag ref, so cargo publishes the
     #      freshly-released version.  Re-running against an already-live
     #      version is a harmless no-op-error from crates.io.
-    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) }}
 
     environment: crates.io-publish
     permissions:
@@ -509,6 +517,10 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          # On a submit-crates dispatch, resolve to the release tag so we
+          # publish exactly that version; on a real `v*` tag push github.ref
+          # is already the tag.
+          ref: ${{ inputs.publish_tag || github.ref }}
 
       - name: Install Rust (nightly toolchain)
         uses: dtolnay/rust-toolchain@nightly

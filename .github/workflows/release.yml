@@ -1254,6 +1254,42 @@ jobs:
           echo "✅ winget-publish.yml dispatched for ${RELEASE_TAG} on ${default_branch} (runs independently; check the Actions tab)."
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # Publish crates.io — dispatch release-plz.yml's OIDC crates-io-publish job
+  # ═══════════════════════════════════════════════════════════════════════════
+  #
+  # The release tag is created by GITHUB_TOKEN, which (GitHub anti-loop policy)
+  # does NOT trigger release-plz.yml's `push: tags: v*` event — so the crates
+  # publish must be dispatched explicitly, exactly like submit-winget above.
+  # Dispatching against the default branch keeps the dispatch ref stable; the
+  # tag is passed as `publish_tag`, and release-plz.yml checks out that tag and
+  # publishes it via OIDC trusted publishing (registration: workflow
+  # release-plz.yml + environment crates.io-publish — unchanged by this job).
+  submit-crates:
+    name: 📦 Publish crates.io (OIDC)
+    runs-on: ubuntu-latest
+    needs: [release-preparation, create-github-release]
+    if: github.repository_owner == 'skyllc-ai'
+    continue-on-error: true
+    permissions:
+      actions: write # required to dispatch release-plz.yml via the API
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch release-plz crates-io-publish for the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-preparation.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          default_branch="$(gh repo view "${GH_REPO}" --json defaultBranchRef -q .defaultBranchRef.name)"
+          echo "Dispatching release-plz.yml crates-io-publish for ${RELEASE_TAG}"
+          gh workflow run release-plz.yml \
+            --ref "${default_branch}" \
+            -f "publish_tag=${RELEASE_TAG}"
+          echo "✅ release-plz.yml dispatched for ${RELEASE_TAG} (crates publish runs independently; check the Actions tab)."
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Failure Notification — opens a GitHub Issue on release failure
   # ═══════════════════════════════════════════════════════════════════════════
 

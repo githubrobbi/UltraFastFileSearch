@@ -65,3 +65,15 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    # Group ALL github-actions bumps into a single PR. Multi-step actions
+    # (notably github/codeql-action's `init` + `analyze`, which MUST share
+    # the same version or CodeQL fails "Not all steps use the same version"
+    # and the SARIF upload errors out) were previously split into separate
+    # per-step PRs that each carried a version mismatch and could never go
+    # green. Grouping everything keeps such steps in lockstep. Actions are
+    # SHA-pinned and gated by the Dependabot Actions Review check, so a
+    # single combined PR is safe to review as one unit.
+    groups:
+      github-actions:
+        patterns:
+          - "*"

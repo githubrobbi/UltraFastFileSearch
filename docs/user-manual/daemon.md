@@ -193,6 +193,16 @@ $ uffs --daemon status -v
   ...
 ```
 
+Each drive is labelled by its **letter** — live Windows volumes by their real
+letter, and offline `.bin`/`.mft` captures by the letter derived from the file,
+tagged **`(file)`** so a capture is distinguishable from a live volume. (The
+source filename itself is not shown.) The trailing
+`[rec=… names=… tri=… ch=… ext=…]` is the per-drive memory-tier breakdown — the
+record, name-arena, trigram, child-map, and extension shard sizes. Note the
+**short** view collapses this to a single count/records line; use `-v` for the
+per-drive list or `--json` for the structured `{"letter","records","tier"}`
+array.
+
 > **`uffs --daemon stats` has been folded into `uffs --daemon status -v`.**
 > The old command now prints a one-line redirect.
 

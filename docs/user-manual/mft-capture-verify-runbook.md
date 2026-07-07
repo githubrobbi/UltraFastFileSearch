@@ -10,7 +10,7 @@ on the Mac.
 
 > Design/internals: `docs/architecture/mft-full-capture.md`.
 > All `uffs-mft` MFT reads require **Windows, elevated (Administrator)**. The
-> offline steps (`metafile-info`, `load`, `verify`) run anywhere.
+> offline steps (`metafile-info`, `extract-mft`, `load`, `verify`) run anywhere.
 
 ---
 
@@ -32,6 +32,26 @@ The `verify` command performs each comparison and exits non-zero on any
 divergence.
 
 ---
+
+## Step 0 — Discover volumes & probe the host
+
+List the NTFS volumes on the box, then record the machine and let UFFS pick the
+best-effort capture strategy:
+
+```powershell
+uffs-mft drives                           # list every NTFS volume (letter, format, size)
+uffs-mft info --drive C                   # optional: live $MFT stats for one drive
+uffs-mft sysinfo                          # host report to stdout
+uffs-mft sysinfo --out capture_host.txt   # also write it beside the capture
+uffs-mft sysinfo --json                   # machine-readable (Windows only)
+```
+
+`sysinfo` records the **OS class** (client vs server — the VSS/shadow
+discriminator), elevation, VSS availability, host resources, and every mounted
+volume's media / format / size / used%. Drop `capture_host.txt` into the bundle
+so the offline analyst knows exactly what host the capture came from. It is
+read-only, and distinct from `uffs --daemon status` (which reports the running
+daemon's health, not the capture host).
 
 ## Step 1 — Capture (Windows, elevated)
 
@@ -88,6 +108,19 @@ uffs-mft metafile-info --input c_secure.bin    # $Secure:$SDS payload present
 uffs-mft metafile-info --input c_usnjrnl.bin   # USN record count + sample entries
 ```
 
+### Extract a raw `$MFT` for third-party tools
+
+The captured `C_mft.bin` is a compressed UFFS artifact. To hand a **raw,
+uncompressed `$MFT`** to tools like **analyzeMFT** or **MFT2CSV**, extract it:
+
+```bash
+uffs-mft extract-mft --input C_mft.bin --output C.mft
+```
+
+`C.mft` is a byte-for-byte raw `$MFT` those tools ingest directly — no UFFS
+header, no compression. (UFFS's own `load`/`verify` read the `.bin` directly,
+so this step is only needed for external tooling.)
+
 ## Step 4 — Three-way parity
 
 Export each source to CSV, then `verify`. The Rust CSV schema is identical on
@@ -125,10 +158,14 @@ script on it.
 
 | Command | Purpose | Platform |
 |---------|---------|----------|
+| `drives` | list NTFS volumes (letter, format, size) | Windows |
+| `info --drive C` | live `$MFT` stats for a drive | Windows (elevated) |
+| `sysinfo [--out FILE] [--json]` | probe the capture host (OS class / VSS / volumes) | any (JSON: Windows) |
 | `capture --drive C --out DIR` | bundle one drive | Windows (elevated) |
 | `capture --all-drives --out DIR` | bundle every NTFS volume | Windows (elevated) |
 | `capture … --zip [--split-gib N]` | pack `.tar.zst` (+split) | Windows (elevated) |
 | `metafile-info --input FILE` | decode one metafile | any |
+| `extract-mft --input C_mft.bin --output C.mft` | raw `$MFT` for analyzeMFT / MFT2CSV | any |
 | `load FILE -o out.csv` | parse `$MFT` → CSV | any |
 | `verify --left A --right B [--columns …]` | CSV parity, exits non-zero on mismatch | any |
 

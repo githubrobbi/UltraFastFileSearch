@@ -42,6 +42,8 @@ pub struct StreamingRawMftWriter {
     compress: bool,
     /// Volume letter (e.g., 'C', 'D').
     volume_letter: crate::platform::DriveLetter,
+    /// NTFS reserved-cluster bytes for the header's root-allocated adjustment.
+    reserved_allocated_bytes: u64,
     /// Whether raw compatibility mode is enabled (no header).
     raw_compat: bool,
     /// Zstd encoder (if compressing).
@@ -78,6 +80,7 @@ impl StreamingRawMftWriter {
                 bytes_written: 0,
                 compress: false, // Raw compat mode doesn't support compression
                 volume_letter: options.volume_letter,
+                reserved_allocated_bytes: options.reserved_allocated_bytes,
                 raw_compat: true,
                 encoder: None,
             });
@@ -92,6 +95,7 @@ impl StreamingRawMftWriter {
             original_size: 0,
             compressed_size: 0,
             volume_letter: options.volume_letter,
+            reserved_allocated_bytes: options.reserved_allocated_bytes,
         };
         writer.write_all(&placeholder_header.to_bytes())?;
 
@@ -120,6 +124,7 @@ impl StreamingRawMftWriter {
                 bytes_written: 0,
                 compress: true,
                 volume_letter: options.volume_letter,
+                reserved_allocated_bytes: options.reserved_allocated_bytes,
                 raw_compat: false,
                 encoder: Some(encoder),
             });
@@ -132,6 +137,7 @@ impl StreamingRawMftWriter {
             bytes_written: 0,
             compress: options.compress,
             volume_letter: options.volume_letter,
+            reserved_allocated_bytes: options.reserved_allocated_bytes,
             raw_compat: false,
             encoder: None,
         })
@@ -186,6 +192,7 @@ impl StreamingRawMftWriter {
                 original_size,
                 compressed_size: 0,
                 volume_letter: self.volume_letter,
+                reserved_allocated_bytes: self.reserved_allocated_bytes,
             });
         }
 
@@ -213,6 +220,7 @@ impl StreamingRawMftWriter {
             original_size,
             compressed_size,
             volume_letter: self.volume_letter,
+            reserved_allocated_bytes: self.reserved_allocated_bytes,
         };
 
         // For uncompressed, update the header at the beginning of the file

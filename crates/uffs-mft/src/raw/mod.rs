@@ -54,7 +54,8 @@ const NTFS_FILE_MAGIC: &[u8; 4] = b"FILE";
 /// Current file format version.
 /// - v1: Initial format
 /// - v2: Added `volume_letter` field
-const VERSION: u32 = 2;
+/// - v3: Added `reserved_allocated_bytes` (root `tree_allocated` adjustment)
+const VERSION: u32 = 3;
 
 /// Flag: data is zstd compressed.
 const FLAG_COMPRESSED: u32 = 0x0001;
@@ -87,6 +88,11 @@ pub struct RawMftHeader {
     /// historical sentinel meaning "unknown source volume; let the
     /// loader override via `LoadRawOptions::volume_letter`".
     pub volume_letter: crate::platform::DriveLetter,
+    /// NTFS reserved-cluster bytes added to the root's `tree_allocated`
+    /// (`total_reserved × bytes_per_cluster`). Added in v3; `0` for older
+    /// files and raw-NTFS dumps. Lets an offline `.bin` load reproduce the
+    /// live root size-on-disk without volume data.
+    pub reserved_allocated_bytes: u64,
 }
 
 impl RawMftHeader {
@@ -109,7 +115,9 @@ impl RawMftHeader {
         buf[36..44].copy_from_slice(&self.compressed_size.to_le_bytes());
         // Volume letter at byte 44 (v2+) — single ASCII byte.
         buf[44] = self.volume_letter.as_byte();
-        // Reserved bytes 45-63 are already zero
+        // Reserved-allocated bytes at 45-52 (v3+).
+        buf[45..53].copy_from_slice(&self.reserved_allocated_bytes.to_le_bytes());
+        // Reserved bytes 53-63 are already zero
         buf
     }
 
@@ -154,6 +162,15 @@ impl RawMftHeader {
             crate::platform::DriveLetter::X
         };
 
+        // Reserved-allocated bytes at 45-52 (v3+); 0 for older files.
+        let reserved_allocated_bytes = if version >= 3 {
+            u64::from_le_bytes([
+                buf[45], buf[46], buf[47], buf[48], buf[49], buf[50], buf[51], buf[52],
+            ])
+        } else {
+            0
+        };
+
         Ok(Self {
             version,
             flags,
@@ -162,6 +179,7 @@ impl RawMftHeader {
             original_size,
             compressed_size,
             volume_letter,
+            reserved_allocated_bytes,
         })
     }
 }
@@ -180,6 +198,10 @@ pub struct SaveRawOptions {
     /// If true, save in raw compatibility mode (no header, just raw MFT bytes).
     /// This format is compatible with other MFT tools like analyzeMFT, MFT2CSV.
     pub raw_compat: bool,
+    /// NTFS reserved-cluster bytes (`total_reserved × bytes_per_cluster`) to
+    /// record in the header for the root `tree_allocated` adjustment. `0` when
+    /// unknown (e.g. re-saving a raw dump with no volume data).
+    pub reserved_allocated_bytes: u64,
 }
 
 impl Default for SaveRawOptions {
@@ -189,6 +211,7 @@ impl Default for SaveRawOptions {
             compression_level: 3,
             volume_letter: crate::platform::DriveLetter::X,
             raw_compat: false,
+            reserved_allocated_bytes: 0,
         }
     }
 }
@@ -318,6 +341,7 @@ pub fn save_raw_mft<P: AsRef<Path>>(
         original_size,
         compressed_size,
         volume_letter: options.volume_letter,
+        reserved_allocated_bytes: options.reserved_allocated_bytes,
     };
 
     // Write file
@@ -463,6 +487,7 @@ pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result
             volume_letter: options
                 .volume_letter
                 .unwrap_or(crate::platform::DriveLetter::X),
+            reserved_allocated_bytes: 0, // raw NTFS dump has no volume data
         };
 
         // If header-only mode, return empty data
@@ -510,6 +535,7 @@ fn load_iocp_as_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Re
         original_size: total_records * u64::from(record_size),
         compressed_size: 0,
         volume_letter,
+        reserved_allocated_bytes: 0, // IOCP reassembly path (carries via IOCP header elsewhere)
     };
 
     // If header-only mode, return early

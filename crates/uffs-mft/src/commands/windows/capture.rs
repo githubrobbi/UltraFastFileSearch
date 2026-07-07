@@ -166,7 +166,7 @@ const METAFILE_KINDS: [MetafileKind; 9] = [
 /// interchangeable. It is zstd-compressed on disk; `load_raw_mft` auto-detects
 /// the compression flag and decompresses on read, so the `.bin` name is correct
 /// regardless.
-fn capture_mft(drive: DriveLetter, dir: &Path) -> Result<ArtifactRecord> {
+fn capture_mft(drive: DriveLetter, dir: &Path, reserved_allocated: u64) -> Result<ArtifactRecord> {
     use uffs_mft::{MftReader, SaveRawOptions};
 
     let file = format!("{drive}_mft.bin");
@@ -177,6 +177,9 @@ fn capture_mft(drive: DriveLetter, dir: &Path) -> Result<ArtifactRecord> {
         compression_level: 3,
         volume_letter: drive,
         raw_compat: false,
+        // v3 header carries this so an offline `.bin` load reproduces the live
+        // root size-on-disk (tree_allocated root adjustment).
+        reserved_allocated_bytes: reserved_allocated,
     };
     reader
         .save_raw_to_file(&path, &options)
@@ -199,10 +202,11 @@ fn collect_artifacts(
     drive_lower: &str,
     serial: u64,
     timestamp: u64,
+    reserved_allocated: u64,
 ) -> Vec<ArtifactRecord> {
     let mut artifacts = Vec::new();
 
-    match capture_mft(drive, dir) {
+    match capture_mft(drive, dir, reserved_allocated) {
         Ok(record) => {
             println!(
                 "  ✅ {:<9} {:>12} bytes  {}",
@@ -242,6 +246,10 @@ fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<std::path::PathBu
     let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
     let vol = handle.volume_data();
     let serial = vol.volume_serial_number;
+    // Reserved-cluster bytes for the root `tree_allocated` adjustment — the MFT
+    // records alone don't encode it, so it's baked into the .bin v3 header (and
+    // a reserved_allocated.txt sidecar) for offline parity.
+    let reserved = vol.reserved_allocated_bytes();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -250,16 +258,10 @@ fn capture_one_drive(drive: DriveLetter, out: &Path) -> Result<std::path::PathBu
     println!("  UFFS capture — drive {drive}: → {}", dir.display());
     println!("═══════════════════════════════════════════════════════════════");
 
-    let artifacts = collect_artifacts(drive, &dir, &drive_lower, serial, timestamp);
+    let artifacts = collect_artifacts(drive, &dir, &drive_lower, serial, timestamp, reserved);
     let manifest = build_manifest(drive, vol, artifacts);
     write_bundle(&dir, &manifest)?;
 
-    // Root `tree_allocated` adjustment for offline parity: the reserved-cluster
-    // bytes the MFT records alone don't encode (from volume data). Offline
-    // `verify_parity.rs --regenerate` reads this sidecar and passes
-    // `--reserved-allocated` so the root's size-on-disk matches the live/C++
-    // baseline.
-    let reserved = vol.reserved_allocated_bytes();
     std::fs::write(dir.join("reserved_allocated.txt"), reserved.to_string())
         .with_context(|| format!("writing reserved_allocated.txt to {}", dir.display()))?;
 

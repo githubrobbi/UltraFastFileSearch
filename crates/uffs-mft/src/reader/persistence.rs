@@ -336,7 +336,11 @@ impl MftReader {
 
             let record_count = parsed_records.len();
             let t_build = Instant::now();
-            let index = MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+            let mut index = MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+            // v3+ .bin files carry the reserved-cluster bytes for the root
+            // `tree_allocated` adjustment; restore it so an offline load
+            // reproduces the live root size-on-disk (0 for older files).
+            index.reserved_allocated_bytes = raw.header.reserved_allocated_bytes;
             if profile {
                 let build_ms = t_build.elapsed().as_millis();
                 tracing::debug!(
@@ -394,7 +398,9 @@ impl MftReader {
                 let parse_ms = parse_start.elapsed().as_millis();
                 let record_count = parsed_records.len();
                 let t_build = Instant::now();
-                let index = MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+                let mut index =
+                    MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+                index.reserved_allocated_bytes = raw.header.reserved_allocated_bytes;
                 if profile {
                     let build_ms = t_build.elapsed().as_millis();
                     tracing::debug!(
@@ -492,7 +498,9 @@ impl MftReader {
                 let parse_ms = parse_start.elapsed().as_millis();
                 let record_count = parsed_records.len();
                 let t_build = Instant::now();
-                let index = MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+                let mut index =
+                    MftIndex::from_parsed_records(raw.header.volume_letter, parsed_records);
+                index.reserved_allocated_bytes = raw.header.reserved_allocated_bytes;
                 if profile {
                     let build_ms = t_build.elapsed().as_millis();
                     tracing::debug!(
@@ -700,6 +708,10 @@ impl MftReader {
 
         // Create index with pre-allocated capacity
         let mut index = MftIndex::with_capacity(raw.header.volume_letter, capacity);
+        // v3+ .bin files carry the reserved-cluster bytes for the root
+        // `tree_allocated` adjustment; restore it so an offline load (this is
+        // the loader the daemon uses) reproduces the live root size-on-disk.
+        index.reserved_allocated_bytes = raw.header.reserved_allocated_bytes;
 
         // Parse records directly into index
         let mut fixup_success: u64 = 0;

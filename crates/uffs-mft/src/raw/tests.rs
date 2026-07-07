@@ -17,6 +17,7 @@ fn header_roundtrip() -> TestResult {
         original_size: 1024 * 1000,
         compressed_size: 500_000,
         volume_letter: crate::platform::DriveLetter::G,
+        reserved_allocated_bytes: 54_587_392,
     };
 
     let bytes = header.to_bytes();
@@ -29,6 +30,10 @@ fn header_roundtrip() -> TestResult {
     assert_eq!(parsed.original_size, header.original_size);
     assert_eq!(parsed.compressed_size, header.compressed_size);
     assert_eq!(parsed.volume_letter, header.volume_letter);
+    assert_eq!(
+        parsed.reserved_allocated_bytes,
+        header.reserved_allocated_bytes
+    );
     assert!(parsed.is_compressed());
 
     Ok(())
@@ -63,6 +68,7 @@ fn save_load_uncompressed() -> TestResult {
         compression_level: 3,
         volume_letter: crate::platform::DriveLetter::C,
         raw_compat: false,
+        reserved_allocated_bytes: 0,
     };
     let header = save_raw_mft(&path, &data, record_size, &options)?;
 
@@ -129,6 +135,7 @@ fn load_header_only() -> TestResult {
         compression_level: 3,
         volume_letter: crate::platform::DriveLetter::D,
         raw_compat: false,
+        reserved_allocated_bytes: 0,
     };
     save_raw_mft(&path, &data, record_size, &options)?;
 
@@ -155,6 +162,7 @@ fn iter_records() {
         original_size: 12,
         compressed_size: 0,
         volume_letter: crate::platform::DriveLetter::X,
+        reserved_allocated_bytes: 0,
     };
 
     let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -180,6 +188,7 @@ fn volume_letter_preserved() -> TestResult {
         compression_level: 3,
         volume_letter: crate::platform::DriveLetter::G,
         raw_compat: false,
+        reserved_allocated_bytes: 0,
     };
     let header = save_raw_mft(&path, &data, record_size, &options)?;
     assert_eq!(header.volume_letter, crate::platform::DriveLetter::G);
@@ -212,6 +221,7 @@ fn raw_compat_mode() -> TestResult {
         compression_level: 3,
         volume_letter: crate::platform::DriveLetter::G,
         raw_compat: true,
+        reserved_allocated_bytes: 0,
     };
 
     let mut writer = StreamingRawMftWriter::new(&path, record_size, &options)?;

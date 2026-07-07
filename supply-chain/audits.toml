@@ -73,6 +73,12 @@ criteria = "safe-to-deploy"
 delta = "0.16.3 -> 0.16.4"
 notes = "Delta audit (cargo vet diff 0.16.3 -> 0.16.4, 435-line diff). (1) term.rs: TermInner construction deduplicated into new()/new_buffered()/with_buffer() helpers - pure refactor; new pub fn is_dumb() reads TERM env var (read-only env access, same capability class the crate already had via is_a_color_terminal). (2) utils.rs: Style::from_dotted_str gains is_ascii() guards on '#RRGGBB'/'on_#RRGGBB' parsing - fixes a panic on non-ASCII input that slices mid-UTF-8 char (robustness improvement for untrusted style strings), plus regression tests. (3) windows_term: as_handle() helper removed in favor of out.as_raw_handle() at existing call sites - unchanged unsafe surface (same SetConsoleCursorPosition/SetConsoleCursorInfo calls as before); read_secure backspace arm converted to a match guard, logic identical. No new unsafe blocks, no new fs/net/process capability. Publisher djc (Dirkjan Ochtman, console-rs maintainer, same publisher as 0.16.3)."
 
+[[audits.crossbeam-channel]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.15 -> 0.5.16"
+notes = "Delta audit (cargo vet diff 0.5.15 -> 0.5.16). Files: CHANGELOG/Cargo.toml(.orig) (version bump only, no dependency changes), src/channel.rs, src/flavors/{never,zero}.rs, src/select_macro.rs, src/utils.rs, src/waker.rs, tests/mpsc.rs. Net unsafe: 0 added, 0 removed. Two upstream changes: (1) #1250 constify never() and the zero/never Channel::new() (pub fn -> pub const fn, Channel {..} -> Self {..}) — no runtime behavior change; (2) #1240 change the select!/select_biased! body matcher from => $body:block to => { $($body:tt)* } so rust-analyzer can auto-complete inside the block — semantically equivalent token capture. channel.rs/waker.rs additionally switch from std::sync::Mutex to the crate internal crate::utils::Mutex wrapper, dropping the .lock().unwrap() poison-handling at each call site; the wrapper is a thin non-poisoning shim over the same std Mutex (no new unsafe). No build script, no new dependencies, no new ambient-capability surface. Publisher taiki-e (crossbeam maintainer, same publisher already trusted for the crossbeam-epoch 0.9.18 -> 0.9.20 delta). Strictly a constification + tooling + internal-mutex refactor; trust extends from the audited 0.5.15 base."
+
 [[audits.crossbeam-epoch]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -384,6 +390,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.0 -> 2.1.0"
 notes = "Delta audit (cargo vet diff 1.8.0 -> 2.1.0, 147-line diff). Proc-macro crate; changes are purely to the token streams it emits: prompt_handler.rs fully qualifies previously-bare type paths (rmcp::model::GetPromptRequestParams, rmcp::service::RequestContext, etc.); task_handler.rs renames model types for the MCP 2025-11-25 spec (GetTaskInfoParams->GetTaskParams, GetTaskResultParams->GetTaskPayloadParams) and swaps struct-literal construction for ::new() constructors. No new unsafe, no fs/net/process/env access, no build script, generated code only references rmcp's own types. Publisher alexhancock (modelcontextprotocol/rust-sdk release chain, same as 1.8.0->2.x series)."
+
+[[audits.rustc-hash]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.1.2 -> 2.1.3"
+notes = "Delta audit (cargo vet diff 2.1.2 -> 2.1.3). Files: CHANGELOG/Cargo.toml(.orig) (version + optional `rand` dep 0.8 -> 0.9), src/lib.rs, src/random_state.rs. Zero unsafe added or removed. src/lib.rs replaces the hand-written `default_impl!` macro with `#[cfg_attr(not(nightly), derive(Default))]` / `#[cfg_attr(nightly, derive_const(Default))]` — a pure-safe refactor of the Default impl (fixes the nightly-feature build, upstream PR #77). The only functional change is the rand 0.8 -> 0.9 API migration in src/random_state.rs (rand::thread_rng().gen() -> rand::rng().random_range(..=usize::MAX)), which lives entirely behind the optional rand/random_state feature that this workspace does not enable (no rustc-hash feature activation anywhere in the tree), so neither random_state.rs nor rand 0.9 enters our build. No build script, no new ambient capability, no I/O / FFI / process. Publisher Noratrieb (rustc-hash maintainer, rust-lang). Safe extension from the audited 2.1.2 base."
 
 [[audits.rustls]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"

@@ -161,8 +161,10 @@ pub fn attribute_list_data_frs(list: &[u8], stream_name: &str) -> Vec<u64> {
 /// Decode UTF-16LE bytes to a lossy UTF-8 string.
 fn decode_utf16_lossy(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .filter_map(|pair| pair.try_into().ok().map(u16::from_le_bytes))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     String::from_utf16_lossy(&units)
 }

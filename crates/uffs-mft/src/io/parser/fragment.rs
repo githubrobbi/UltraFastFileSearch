@@ -50,7 +50,6 @@ use crate::ntfs::{
 )]
 #[expect(
     clippy::indexing_slicing,
-    clippy::missing_asserts_for_indexing,
     reason = "the only `[]` indexing that remains is into internal arena vectors \
               (fragment.links / fragment.streams / fragment.records / fragment.frs_to_idx) \
               whose indices are produced by this code, not by untrusted on-disk bytes. \
@@ -175,8 +174,10 @@ pub fn parse_record_to_fragment(
                         .and_then(|end| data.get(name_bytes_offset..end))
                     {
                         let name_u16: Vec<u16> = name_bytes
-                            .chunks_exact(2)
-                            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| u16::from_le_bytes(*pair))
                             .collect();
                         let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
@@ -272,8 +273,10 @@ pub fn parse_record_to_fragment(
                         .and_then(|end| data.get(name_offset..end))
                     {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| u16::from_le_bytes(*pair))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular

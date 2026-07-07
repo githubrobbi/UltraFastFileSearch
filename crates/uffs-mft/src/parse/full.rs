@@ -226,10 +226,10 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                             String::new()
                         } else {
                             let name_u16: smallvec::SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .filter_map(|chunk| {
-                                    <[u8; 2]>::try_from(chunk).ok().map(u16::from_le_bytes)
-                                })
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|chunk| u16::from_le_bytes(*chunk))
                                 .collect();
                             String::from_utf16(&name_u16).unwrap_or_default()
                         };
@@ -380,10 +380,10 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
                         let name_u16: smallvec::SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .filter_map(|chunk| {
-                                <[u8; 2]>::try_from(chunk).ok().map(u16::from_le_bytes)
-                            })
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|chunk| u16::from_le_bytes(*chunk))
                             .collect();
                         String::from_utf16(&name_u16).unwrap_or_default()
                     } else {
@@ -501,10 +501,10 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
                         let name_u16: smallvec::SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .filter_map(|chunk| {
-                                <[u8; 2]>::try_from(chunk).ok().map(u16::from_le_bytes)
-                            })
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|chunk| u16::from_le_bytes(*chunk))
                             .collect();
                         String::from_utf16(&name_u16).unwrap_or_default()
                     } else {

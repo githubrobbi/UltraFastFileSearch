@@ -21,10 +21,6 @@
     reason = "explicit match is clearer in NTFS attribute dispatch"
 )]
 #![expect(
-    clippy::missing_asserts_for_indexing,
-    reason = "bounds are verified by size checks before all index access"
-)]
-#![expect(
     clippy::single_match_else,
     reason = "explicit match arms are clearer for attribute type dispatch"
 )]
@@ -193,8 +189,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 &data[name_bytes_offset..name_bytes_offset + name_len * 2];
                             // SmallVec avoids heap allocation for typical filenames (<= 64 chars)
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                             let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
@@ -301,8 +299,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|c| u16::from_le_bytes(*c))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular stream entries.
@@ -373,8 +373,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             String::new()
                         } else {
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };
@@ -497,8 +499,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         if name_offset + name_len * 2 <= data.len() {
                             let name_bytes = &data[name_offset..name_offset + name_len * 2];
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         } else {
@@ -582,8 +586,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         if name_offset + name_len * 2 <= data.len() {
                             let name_bytes = &data[name_offset..name_offset + name_len * 2];
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         } else {

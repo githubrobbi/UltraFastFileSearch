@@ -16,10 +16,6 @@
     reason = "explicit match is clearer in NTFS attribute dispatch"
 )]
 #![expect(
-    clippy::missing_asserts_for_indexing,
-    reason = "bounds are verified by size checks before all index access"
-)]
-#![expect(
     clippy::shadow_unrelated,
     reason = "reusing common names like 'record' in nested scopes is idiomatic here"
 )]
@@ -151,8 +147,10 @@ pub(super) fn parse_extension_to_index(
                             if name_start + name_len * 2 <= data.len() {
                                 let name_bytes = &data[name_start..name_start + name_len * 2];
                                 let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                    .chunks_exact(2)
-                                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .map(|c| u16::from_le_bytes(*c))
                                     .collect();
                                 let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                                 let parent_frs = fn_attr.parent_directory & 0x0000_FFFF_FFFF_FFFF;
@@ -230,8 +228,10 @@ pub(super) fn parse_extension_to_index(
                     if name_offset + name_len * 2 <= data.len() {
                         let name_bytes = &data[name_offset..name_offset + name_len * 2];
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|c| u16::from_le_bytes(*c))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular
@@ -279,8 +279,10 @@ pub(super) fn parse_extension_to_index(
                             String::new()
                         } else {
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };
@@ -400,8 +402,10 @@ pub(super) fn parse_extension_to_index(
                         if name_offset + name_len * 2 <= data.len() {
                             let name_bytes = &data[name_offset..name_offset + name_len * 2];
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         } else {
@@ -485,8 +489,10 @@ pub(super) fn parse_extension_to_index(
                         if name_offset + name_len * 2 <= data.len() {
                             let name_bytes = &data[name_offset..name_offset + name_len * 2];
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|c| u16::from_le_bytes(*c))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         } else {

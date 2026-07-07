@@ -118,8 +118,10 @@ pub(super) fn parse_extension_to_fragment(
                             .and_then(|end| data.get(name_start..end))
                         {
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|pair| <[u8; 2]>::try_from(pair).map_or(0, u16::from_le_bytes))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|pair| u16::from_le_bytes(*pair))
                                 .collect();
                             let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                             let parent_frs = fn_attr.parent_directory & 0x0000_FFFF_FFFF_FFFF;
@@ -188,8 +190,10 @@ pub(super) fn parse_extension_to_fragment(
                         .and_then(|end| data.get(name_offset..end))
                     {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|pair| <[u8; 2]>::try_from(pair).map_or(0, u16::from_le_bytes))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| u16::from_le_bytes(*pair))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular

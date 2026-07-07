@@ -77,7 +77,6 @@ use crate::parse::index_helpers::{
 )]
 #[expect(
     clippy::indexing_slicing,
-    clippy::missing_asserts_for_indexing,
     reason = "remaining [] are internal arena indices (index.records[..]/stream_indices[..]/\
               link_indices[..]) keyed by indices minted by this fn; not attacker-controlled. \
               All untrusted-`data` reads go through .get()/rd_u* (WI-5.2)."
@@ -235,8 +234,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         {
                             // SmallVec avoids heap allocation for typical filenames (<= 64 chars)
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|pair| u16::from_le_bytes(*pair))
                                 .collect();
                             let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                             let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
@@ -358,8 +359,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         .and_then(|name_end| data.get(name_offset..name_end))
                     {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| u16::from_le_bytes(*pair))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
 
@@ -452,8 +455,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             String::new()
                         } else {
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                .chunks_exact(2)
-                                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|pair| u16::from_le_bytes(*pair))
                                 .collect();
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };

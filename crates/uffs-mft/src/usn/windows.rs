@@ -328,13 +328,10 @@ pub fn read_usn_journal(
                 .filter(|_| name_end <= bytes_returned_usize)
                 .map_or_else(String::new, |name_bytes| {
                     let name_u16: Vec<u16> = name_bytes
-                        .chunks_exact(2)
-                        .map(|pair| {
-                            u16::from_le_bytes([
-                                *pair.first().unwrap_or(&0),
-                                *pair.get(1).unwrap_or(&0),
-                            ])
-                        })
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| u16::from_le_bytes(*pair))
                         .collect();
                     crate::io::parser::unified::decode_name_u16(&name_u16).0
                 });

@@ -407,8 +407,10 @@ fn scan_index_entries(buf: &[u8], header_start: usize, target: &[u16]) -> Option
         let name_length = usize::from(*entry.get(16 + 0x40)?);
         let name_bytes = entry.get(16 + 0x42..16 + 0x42 + name_length * 2)?;
         let name: Vec<u16> = name_bytes
-            .chunks_exact(2)
-            .filter_map(|pair| pair.try_into().ok().map(u16::from_le_bytes))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         if name == target {
             return Some(crate::ntfs::file_reference_to_frs(file_reference));

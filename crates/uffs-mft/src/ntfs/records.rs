@@ -540,8 +540,10 @@ impl<'a> AttributeRef<'a> {
 
         Some(
             name_bytes
-                .chunks_exact(2)
-                .filter_map(|chunk| chunk.try_into().ok().map(u16::from_le_bytes))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_le_bytes(*chunk))
                 .collect(),
         )
     }

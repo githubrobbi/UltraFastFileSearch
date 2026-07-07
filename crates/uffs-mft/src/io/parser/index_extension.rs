@@ -62,7 +62,6 @@ use crate::index::{frs_to_usize, len_to_u16, len_to_u32, u32_as_usize};
 )]
 #[expect(
     clippy::indexing_slicing,
-    clippy::missing_asserts_for_indexing,
     reason = "the only `[]` indexing that remains is into internal arena vectors \
               (index.records / index.links / index.streams / index.internal_streams / \
               index.frs_to_idx) whose indices are produced by this code, not by untrusted \
@@ -158,8 +157,10 @@ pub(super) fn parse_extension_to_index(
                                 .and_then(|end| data.get(name_start..end))
                             {
                                 let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                    .chunks_exact(2)
-                                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .map(|pair| u16::from_le_bytes(*pair))
                                     .collect();
                                 let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                                 let parent_frs = fn_attr.parent_directory & 0x0000_FFFF_FFFF_FFFF;
@@ -245,8 +246,10 @@ pub(super) fn parse_extension_to_index(
                     let name_offset = offset.saturating_add(usize::from(attr_header.name_offset));
                     if let Some(name_bytes) = read_name_bytes(data, name_offset, name_len) {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
-                            .chunks_exact(2)
-                            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| u16::from_le_bytes(*pair))
                             .collect();
                         let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular
@@ -278,8 +281,10 @@ pub(super) fn parse_extension_to_index(
                                 String::new()
                             } else {
                                 let name_u16: SmallVec<[u16; 64]> = name_bytes
-                                    .chunks_exact(2)
-                                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .map(|pair| u16::from_le_bytes(*pair))
                                     .collect();
                                 crate::io::parser::unified::decode_name_u16(&name_u16).0
                             };

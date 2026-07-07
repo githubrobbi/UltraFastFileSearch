@@ -101,13 +101,11 @@ pub(super) fn parse_file_name_full(
     }
 
     let name_bytes = &data[name_offset..name_offset + name_len * 2];
-    #[expect(
-        clippy::missing_asserts_for_indexing,
-        reason = "chunks_exact(2) guarantees chunk.len() == 2"
-    )]
     let name_u16: SmallVec<[u16; 128]> = name_bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| u16::from_le_bytes(*chunk))
         .collect();
 
     let name = String::from_utf16(&name_u16).ok()?;
@@ -149,13 +147,11 @@ pub(super) fn parse_data_attribute_full(
             return None;
         }
         let name_bytes = &data[name_offset..name_offset + name_len * 2];
-        #[expect(
-            clippy::missing_asserts_for_indexing,
-            reason = "chunks_exact(2) guarantees chunk.len() == 2"
-        )]
         let name_u16: SmallVec<[u16; 64]> = name_bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect();
         String::from_utf16(&name_u16).unwrap_or_default()
     } else {

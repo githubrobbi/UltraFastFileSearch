@@ -139,6 +139,13 @@ use-local:
     printf "\033[1;34m📦 Build + install ALL UFFS binaries to ~/bin\033[0m\n"
     echo "========================================================"
 
+    # 0. Stop the running daemon + MCP so the old binaries release their locks
+    #    and no stale in-memory index shadows the freshly installed build.
+    printf "\n\033[1;33m🔪 Stopping daemon + MCP...\033[0m\n"
+    timeout 10 uffs --daemon kill >/dev/null 2>&1 || true
+    pkill -x uffsd   2>/dev/null || true
+    pkill -x uffsmcp 2>/dev/null || true
+
     # 1. Single workspace-wide release build
     printf "\n\033[0;34m🔨 Building release workspace...\033[0m\n"
     START=$(date +%s)

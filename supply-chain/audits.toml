@@ -73,6 +73,12 @@ criteria = "safe-to-deploy"
 delta = "0.16.3 -> 0.16.4"
 notes = "Delta audit (cargo vet diff 0.16.3 -> 0.16.4, 435-line diff). (1) term.rs: TermInner construction deduplicated into new()/new_buffered()/with_buffer() helpers - pure refactor; new pub fn is_dumb() reads TERM env var (read-only env access, same capability class the crate already had via is_a_color_terminal). (2) utils.rs: Style::from_dotted_str gains is_ascii() guards on '#RRGGBB'/'on_#RRGGBB' parsing - fixes a panic on non-ASCII input that slices mid-UTF-8 char (robustness improvement for untrusted style strings), plus regression tests. (3) windows_term: as_handle() helper removed in favor of out.as_raw_handle() at existing call sites - unchanged unsafe surface (same SetConsoleCursorPosition/SetConsoleCursorInfo calls as before); read_secure backspace arm converted to a match guard, logic identical. No new unsafe blocks, no new fs/net/process capability. Publisher djc (Dirkjan Ochtman, console-rs maintainer, same publisher as 0.16.3)."
 
+[[audits.crossbeam-epoch]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.18 -> 0.9.20"
+notes = "Delta audit (cargo vet diff 0.9.18 -> 0.9.20), anchored on the existing 0.9.18 exemption. Fixes RUSTSEC-2026-0204: the fmt::Pointer impl for Atomic/Shared no longer dereferences the underlying raw pointer (UB when the pointer is invalid or null) — it prints the address directly (raw as *const ()), covering the invalid-ptr (#1276) and null-ptr (#1273) cases. Net -2 unsafe over the delta (3 removed, 1 added); the one added unsafe is Guard::defer_destroy re-emitted with a broadened bound (<T> -> <T: ?Sized + Pointable>) with an unchanged body (self.defer_unchecked(move || ptr.into_owned())), so no new unsafe operation. The new build.rs is benign: it emits rustc-check-cfg plus a crossbeam_sanitize_thread cfg derived from CARGO_CFG_SANITIZE (ThreadSanitizer detection migrated out of lib-level cfg); it reads one env var and does no fs/net/process/exec. No new runtime dependencies (crossbeam-utils pre-existing; rand is dev-only). No new ambient-capability surface. Publisher taiki-e (crossbeam maintainer, same publisher as 0.9.18). The change is strictly a soundness fix plus a benign cfg migration, so trust extends from the audited 0.9.18 base."
+
 [[audits.crypto-common]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"

@@ -44,7 +44,7 @@ keep using `chrono` / `time` / `jiff` and convert at the boundary via
 
 ```toml
 [dependencies]
-uffs-time = "0.5"
+uffs-time = "0.6"
 ```
 
 ## Usage

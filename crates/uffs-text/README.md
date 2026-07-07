@@ -53,7 +53,7 @@ crates above.**
 
 ```toml
 [dependencies]
-uffs-text = "0.5"
+uffs-text = "0.6"
 ```
 
 ## Usage

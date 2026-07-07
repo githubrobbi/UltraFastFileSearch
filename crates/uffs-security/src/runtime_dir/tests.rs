@@ -43,12 +43,6 @@ fn create_owner_only_writes_and_reads_round_trip() {
 }
 
 #[test]
-#[expect(
-    clippy::std_instead_of_core,
-    reason = "core::io::ErrorKind is feature-gated (rust-lang/rust#154046); \
-              std path is the only stable spelling.  Remove this expect \
-              once the re-export stabilises."
-)]
 fn create_owner_only_rejects_existing_file() {
     let tmp = TempDir::new().expect("tempdir");
     let path = tmp.path().join("dupe.live");

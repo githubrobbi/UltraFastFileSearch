@@ -117,11 +117,6 @@ impl MftIndex {
     /// # Errors
     ///
     /// Returns an error if file reading, decryption, or deserialization fails.
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     pub fn load_from_file(
         path: &std::path::Path,
     ) -> Result<(Self, IndexHeader), Box<dyn core::error::Error>> {

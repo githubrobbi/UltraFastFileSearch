@@ -131,7 +131,8 @@ pub trait RuntimeDir: Send + Sync {
     ///   name, e.g. via volume GUID).
     /// * `PermissionDenied` — parent dir is unwriteable, or the process lacks
     ///   permission to set the requested mode/DACL.
-    /// * Any other [`io::Error`] forwarded from the underlying filesystem call.
+    /// * Any other [`std::io::Error`] forwarded from the underlying filesystem
+    ///   call.
     fn create_owner_only(&self, path: &Path) -> io::Result<RuntimeFile>;
 
     /// Sweep `<parent_dir>/<pid>/` subdirectories whose pid is no
@@ -180,7 +181,7 @@ pub trait RuntimeDir: Send + Sync {
 ///
 /// # Errors
 ///
-/// Forwards any [`io::Error`] from the underlying mmap syscall
+/// Forwards any [`std::io::Error`] from the underlying mmap syscall
 /// (`mmap` on Unix, `MapViewOfFile` on Windows).
 pub fn mmap_read_only(file: &RuntimeFile) -> io::Result<Mmap> {
     #[expect(

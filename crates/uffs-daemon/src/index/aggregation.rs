@@ -57,11 +57,6 @@ impl DaemonFileReader<'_> {
 }
 
 impl FileReader for DaemonFileReader<'_> {
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     fn read_first_bytes(
         &self,
         record_idx: usize,
@@ -81,11 +76,6 @@ impl FileReader for DaemonFileReader<'_> {
         Ok(buf)
     }
 
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     fn read_all(&self, record_idx: usize, drive_ordinal: u8) -> std::io::Result<Vec<u8>> {
         let path = self
             .resolve_path(record_idx, drive_ordinal)

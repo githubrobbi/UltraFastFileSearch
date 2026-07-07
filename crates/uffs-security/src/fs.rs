@@ -34,8 +34,8 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
-/// error from the underlying open.
+/// Returns [`std::io::ErrorKind::AlreadyExists`] if the path exists, or any
+/// other error from the underlying open.
 pub fn create_new_secure_file(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(unix)]
     {
@@ -80,8 +80,8 @@ pub fn create_new_secure_file(path: &Path) -> io::Result<std::fs::File> {
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
-/// error from the underlying open.
+/// Returns [`std::io::ErrorKind::AlreadyExists`] if the path exists, or any
+/// other error from the underlying open.
 pub fn create_new_file_exclusive(path: &Path) -> io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .write(true)

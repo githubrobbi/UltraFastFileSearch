@@ -146,7 +146,7 @@ impl RuntimeLayout {
 ///
 /// # Errors
 ///
-/// Forwards any [`io::Error`] from `set_len`, `seek`, `write_all`,
+/// Forwards any [`std::io::Error`] from `set_len`, `seek`, `write_all`,
 /// `flush`, or `sync_all`.
 ///
 /// # Examples

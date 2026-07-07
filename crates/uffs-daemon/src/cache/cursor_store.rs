@@ -69,13 +69,6 @@ impl super::journal_loop::CursorStore for DiskCursorStore {
     /// as "start from journal head" which is the correct fallback
     /// for a never-saved or corrupted cursor — better to re-replay
     /// than to silently start from a stale or invalid USN.
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "`core::io::ErrorKind` is not yet stable — see \
-                  rust-lang/rust#103765.  Mirrors the same pattern \
-                  used in `crate::config::Config::load_from_path`.  \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     fn load(&self, letter: uffs_mft::platform::DriveLetter) -> u64 {
         let path = self.cursor_path(letter);
         match std::fs::read(&path) {

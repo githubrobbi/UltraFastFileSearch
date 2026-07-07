@@ -155,7 +155,7 @@ static SHMEM_COUNTER: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if the directory cannot be created.
+/// Returns [`std::io::Error`] if the directory cannot be created.
 fn shmem_dir() -> io::Result<PathBuf> {
     let base = dirs_next::data_local_dir()
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { r"C:\temp" } else { "/tmp" }));
@@ -168,7 +168,7 @@ fn shmem_dir() -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if the shmem directory cannot be created.
+/// Returns [`std::io::Error`] if the shmem directory cannot be created.
 fn unique_shmem_path() -> io::Result<PathBuf> {
     let dir = shmem_dir()?;
     let pid = std::process::id();
@@ -567,7 +567,7 @@ pub(crate) const STREAM_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 ///
 /// ## Error pinpointing
 ///
-/// Every failure path attaches a step-specific [`io::Error`] kind +
+/// Every failure path attaches a step-specific [`std::io::Error`] kind +
 /// message identifying which stage broke (`open`, `metadata`,
 /// `mmap`, `write_all`) together with the blob byte size and, for
 /// write failures, the byte offset reached.  This converts opaque

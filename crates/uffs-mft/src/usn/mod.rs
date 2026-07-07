@@ -383,11 +383,6 @@ pub use windows::{query_usn_journal, read_targeted_frs_records, read_usn_journal
 ///
 /// Always returns an error on non-Windows platforms.
 #[cfg(not(windows))]
-#[expect(
-    clippy::std_instead_of_core,
-    reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-              Remove this expect once `error_in_core` stabilises."
-)]
 pub fn query_usn_journal(
     _volume: crate::platform::DriveLetter,
 ) -> Result<UsnJournalInfo, std::io::Error> {
@@ -403,11 +398,6 @@ pub fn query_usn_journal(
 ///
 /// Always returns an error on non-Windows platforms.
 #[cfg(not(windows))]
-#[expect(
-    clippy::std_instead_of_core,
-    reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-              Remove this expect once `error_in_core` stabilises."
-)]
 pub fn read_usn_journal(
     _volume: crate::platform::DriveLetter,
     _journal_id: u64,

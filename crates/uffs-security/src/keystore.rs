@@ -66,7 +66,7 @@ pub fn get_cache_key() -> io::Result<[u8; KEY_SIZE]> {
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if Keychain access fails (e.g. user denies
+/// Returns [`std::io::Error`] if Keychain access fails (e.g. user denies
 /// permission, Keychain is locked, or the stored key has an invalid size
 /// after multiple regeneration attempts).
 #[cfg(target_os = "macos")]

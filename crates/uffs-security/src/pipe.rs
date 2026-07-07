@@ -162,7 +162,7 @@ impl PipeName {
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if the user SID cannot be resolved.  This
+    /// Returns [`std::io::Error`] if the user SID cannot be resolved.  This
     /// should not happen on a normally functioning Windows session; if
     /// it does, the caller should log and exit rather than fall back to
     /// an insecure name.
@@ -228,7 +228,7 @@ impl fmt::Display for PipeName {
 ///
 /// # Errors
 ///
-/// Returns [`io::Error`] if both resolution paths fail — typically only
+/// Returns [`std::io::Error`] if both resolution paths fail — typically only
 /// in very broken token scenarios.
 pub(crate) fn current_user_sid_string() -> io::Result<String> {
     // Try the linked-token path first.
@@ -269,7 +269,7 @@ impl OwnerOnlySd {
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if SID resolution or SDDL conversion fails.
+    /// Returns [`std::io::Error`] if SID resolution or SDDL conversion fails.
     pub fn for_current_user() -> io::Result<Self> {
         let sid = current_user_sid_string()?;
         Self::for_sid_string(&sid)
@@ -281,7 +281,7 @@ impl OwnerOnlySd {
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if the SDDL conversion fails.
+    /// Returns [`std::io::Error`] if the SDDL conversion fails.
     pub(crate) fn for_sid_string(sid: &str) -> io::Result<Self> {
         // SDDL: DACL with one ACE — Allow, GenericAll, to <sid>.
         let sddl = format!("D:(A;;GA;;;{sid})");

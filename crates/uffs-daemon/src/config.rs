@@ -380,13 +380,6 @@ impl Config {
     /// All other I/O errors (permission denied, EISDIR on a path
     /// that exists as a directory, etc.) propagate as
     /// [`ConfigError::Io`].
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "`core::io::ErrorKind` is not yet stable — see \
-                  rust-lang/rust#103765.  Mirrors the same pattern \
-                  used in `crate::index::aggregation`.  Remove this \
-                  expect once `error_in_core` stabilises."
-    )]
     pub(crate) fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
             Ok(body) => Self::from_toml(&body),

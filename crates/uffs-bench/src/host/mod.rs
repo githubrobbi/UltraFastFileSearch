@@ -43,7 +43,7 @@ impl ProcOutput {
 /// Implemented by [`SystemHost`] (real OS) and [`MockHost`] (in-memory, for
 /// tests). Methods are intentionally low-level wrappers; higher-level logic in
 /// `state`, `restore`, and `fingerprint` composes them and maps their
-/// [`io::Error`]s into [`crate::error::BenchError`] with path context.
+/// [`std::io::Error`]s into [`crate::error::BenchError`] with path context.
 pub trait Host {
     /// Read the entire contents of a file.
     ///

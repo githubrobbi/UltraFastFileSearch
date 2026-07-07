@@ -141,11 +141,6 @@ pub fn write_stdout_buffer(buf: &[u8]) -> std::io::Result<()> {
 /// well-formed UTF-8.  `WriteConsoleW` cannot represent invalid UTF-8
 /// anyway, so surfacing the error up-front is strictly better than a
 /// mangled console write.
-#[expect(
-    clippy::std_instead_of_core,
-    reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-              Remove this expect once `error_in_core` stabilises."
-)]
 pub fn utf8_to_utf16(buf: &[u8]) -> std::io::Result<Vec<u16>> {
     let utf8 = core::str::from_utf8(buf)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
@@ -346,11 +341,6 @@ mod platform_windows {
     /// a pipe/file/NUL stdout would fail at `WriteConsoleW` with
     /// `ERROR_INVALID_HANDLE`.
     #[expect(unsafe_code, reason = "FFI to GetStdHandle + WriteConsoleW")]
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     pub(super) fn write_to_console_w(buf: &[u8]) -> std::io::Result<()> {
         let utf16 = super::utf8_to_utf16(buf)?;
         if utf16.is_empty() {
@@ -533,11 +523,6 @@ mod shared_tests {
     /// Invalid UTF-8 must surface as `InvalidData`, not silently
     /// produce mojibake on the console.
     #[test]
-    #[expect(
-        clippy::std_instead_of_core,
-        reason = "core::io::ErrorKind is not yet stable — see rust-lang/rust#103765. \
-                  Remove this expect once `error_in_core` stabilises."
-    )]
     fn utf8_to_utf16_invalid_utf8_is_invalid_data_error() {
         // 0xFF is never valid as a standalone UTF-8 byte.
         let err = utf8_to_utf16(&[0xFF_u8]).expect_err("must reject invalid UTF-8");

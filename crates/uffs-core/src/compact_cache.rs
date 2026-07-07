@@ -308,7 +308,7 @@ pub fn compact_runtime_root() -> PathBuf {
 ///
 /// # Errors
 ///
-/// Returns an [`io::Error`] if the parent directory cannot be created
+/// Returns an [`std::io::Error`] if the parent directory cannot be created
 /// or if the owner-only permissions cannot be applied (Unix `0o700`,
 /// Windows owner-only DACL).
 fn compact_runtime_tempfile_path(
@@ -550,9 +550,9 @@ pub fn deserialize_compact(
 ///
 /// # Errors
 ///
-/// Returns an [`io::Error`] if:
+/// Returns an [`std::io::Error`] if:
 /// * the cache bytes are truncated, wrong magic, or use a stale/unsupported
-///   version (parse error lifted via [`io::Error::other`]);
+///   version (parse error lifted via `std::io::Error::other`);
 /// * `runtime_dir.create_owner_only` fails (path collision, permissions, parent
 ///   missing);
 /// * writing the layout into the tempfile fails (I/O / disk-full);

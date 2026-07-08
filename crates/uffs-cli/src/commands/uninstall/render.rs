@@ -15,6 +15,7 @@ use super::remove::{ItemStatus, RemovalOutcome};
 use super::resolve_order::{ResolutionState, StemResolution};
 #[cfg(windows)]
 use super::sweep::StrayHit;
+use crate::commands::elevation::ElevatablePlan as _;
 use crate::commands::update::model::{Channel, Scope};
 
 /// Print the running build's version + git commit at the top of an uninstall

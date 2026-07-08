@@ -10,6 +10,7 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use super::build_stray_plan;
 use super::{PlanTarget, RemovalPlan, build_plan};
+use crate::commands::elevation::ElevatablePlan as _;
 use crate::commands::uninstall::args::{UninstallArgs, UninstallScope};
 use crate::commands::uninstall::inventory::{
     ArtifactDir, ArtifactKind, BrokerServiceState, Inventory,

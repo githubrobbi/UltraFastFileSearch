@@ -19,6 +19,7 @@ use super::args::{UninstallArgs, UninstallScope};
 use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
 #[cfg(windows)]
 use super::sweep::StrayHit;
+use crate::commands::elevation::ElevatablePlan;
 use crate::commands::update::model::{Channel, Component, DetectionReport, InstallRoot, Scope};
 
 /// The `WinGet` package id UFFS publishes under.
@@ -176,21 +177,9 @@ pub(crate) struct RemovalPlan {
     pub(crate) groups: Vec<PlanGroup>,
 }
 
-impl RemovalPlan {
-    /// Iterate every item across all groups, in order.
-    pub(crate) fn items(&self) -> impl Iterator<Item = &PlanItem> {
-        self.groups.iter().flat_map(|group| &group.items)
-    }
-
-    /// Total bytes the plan would reclaim.
-    pub(crate) fn total_bytes(&self) -> u64 {
-        self.items()
-            .map(|item| item.bytes)
-            .fold(0, u64::saturating_add)
-    }
-
+impl ElevatablePlan for RemovalPlan {
     /// Whether any item requires Administrator.
-    pub(crate) fn requires_elevation(&self) -> bool {
+    fn requires_elevation(&self) -> bool {
         self.items().any(|item| item.needs_elevation)
     }
 
@@ -199,7 +188,7 @@ impl RemovalPlan {
     /// everything it *can* and leave the broker for an elevated re-run. Returns
     /// the dropped items' descriptions so the final summary can list exactly
     /// what this run skips.
-    pub(crate) fn drop_elevation_required(&mut self) -> Vec<String> {
+    fn drop_elevation_required(&mut self) -> Vec<String> {
         let mut dropped: Vec<String> = Vec::new();
         for group in &mut self.groups {
             group.items.retain(|item| {
@@ -212,6 +201,25 @@ impl RemovalPlan {
         }
         self.groups.retain(|group| !group.items.is_empty());
         dropped
+    }
+
+    /// The non-elevated preamble listing the admin-only items (the broker).
+    fn render_elevation_needed(&self) {
+        super::render::print_elevation_gate(self);
+    }
+}
+
+impl RemovalPlan {
+    /// Iterate every item across all groups, in order.
+    pub(crate) fn items(&self) -> impl Iterator<Item = &PlanItem> {
+        self.groups.iter().flat_map(|group| &group.items)
+    }
+
+    /// Total bytes the plan would reclaim.
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.items()
+            .map(|item| item.bytes)
+            .fold(0, u64::saturating_add)
     }
 
     /// Fill in the reclaim bytes of every binary-delete item, so the summary's

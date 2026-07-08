@@ -34,6 +34,8 @@ use anyhow::{Context as _, Result, bail};
 use args::UninstallArgs;
 use plan::{PlanTarget, RemovalPlan};
 
+use crate::commands::elevation::{self, ElevatablePlan as _, ElevationChoice};
+
 /// Entry point for `uffs --uninstall`. `args` is every token after the
 /// `--uninstall` command token.
 ///
@@ -90,7 +92,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     let gate = elevation_gate(&parsed, &mut removal_plan)?;
     let skipped_elevation: Vec<String> = match &gate {
         ElevationChoice::ContinueWithout(items) => items.clone(),
-        ElevationChoice::NotNeeded | ElevationChoice::ElevateAtRemoval => Vec::new(),
+        ElevationChoice::NotNeeded | ElevationChoice::ElevateLater => Vec::new(),
     };
 
     // Wait for the gather (spinner) / run it now (`-v`), then present the
@@ -121,7 +123,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     render::print_extra_table(&gathered.strays);
     render::print_plan(&removal_plan, stray_plan);
     render::print_skipped_elevation(&skipped_elevation);
-    if matches!(gate, ElevationChoice::ElevateAtRemoval) {
+    if matches!(gate, ElevationChoice::ElevateLater) {
         render::print_uac_note();
     }
 
@@ -161,7 +163,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         &removal_plan,
         stray_plan,
         remove_strays,
-        matches!(gate, ElevationChoice::ElevateAtRemoval),
+        matches!(gate, ElevationChoice::ElevateLater),
         broker_remains,
     );
     Ok(())
@@ -285,88 +287,27 @@ fn binary_dir_bytes(dir: &std::path::Path, stems: &[String]) -> u64 {
         .fold(0, u64::saturating_add)
 }
 
-/// What the elevation gate decided for this run.
-enum ElevationChoice {
-    /// Elevated, `--dry-run`, or nothing needs Administrator — plan untouched.
-    NotNeeded,
-    /// Windows, non-elevated: keep the admin items in the plan; removal routes
-    /// them through a one-shot elevated helper (a single UAC prompt at removal
-    /// time — see [`effects`]).
-    #[cfg_attr(
-        not(windows),
-        expect(dead_code, reason = "constructed only on the Windows UAC path")
-    )]
-    ElevateAtRemoval,
-    /// Non-elevated, continuing without the admin items: they are dropped from
-    /// the plan; carries their descriptions for the final summary's "NOT
-    /// removed in this run" note.
-    ContinueWithout(Vec<String>),
-}
-
 /// M3 elevation gate (U-30): THE FIRST question, before any analysis output.
-/// The broker (its `LocalSystem` service) is the only admin-only part; a
-/// non-elevated run is told immediately what needs Administrator and decides
-/// once — elevate at removal time (Windows: one UAC prompt), continue without
-/// (items dropped so the final summary never lists work that will not happen),
-/// or abort. Skipped when elevated, under `--dry-run` (the preview keeps the
-/// "needs Administrator" markers and notes that a real run asks), or when
-/// nothing needs Administrator. `--yes` continues without asking — a scripted
-/// run must never trigger a surprise UAC prompt.
-/// `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
-/// Unix effective-uid 0).
+/// Delegates to the shared [`elevation`] gate. The broker (its `LocalSystem`
+/// service) is the only admin-only part, and uninstall CAN elevate **in place**
+/// — a one-shot elevated helper at removal time (one UAC prompt) — so it offers
+/// the Windows 3-way choice (`offer_inflow_elevation = true`). Skipped when
+/// elevated, under `--dry-run`, or when nothing needs Administrator; `--yes`
+/// continues without asking (a scripted run never triggers a surprise UAC).
 fn elevation_gate(
     parsed: &UninstallArgs,
     removal_plan: &mut RemovalPlan,
 ) -> Result<ElevationChoice> {
-    if parsed.dry_run || !removal_plan.requires_elevation() || uffs_mft::platform::is_elevated() {
-        return Ok(ElevationChoice::NotNeeded);
-    }
-    render::print_elevation_gate(removal_plan);
-    if parsed.assume_yes {
-        return Ok(ElevationChoice::ContinueWithout(
-            removal_plan.drop_elevation_required(),
-        ));
-    }
-    platform_elevation_choice(removal_plan)
-}
-
-/// Windows: the interactive 3-way elevation choice. `e` records the decision —
-/// the single UAC prompt appears later, when removal actually starts, so
-/// nothing is elevated before the final confirmation.
-#[cfg(windows)]
-fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<ElevationChoice> {
-    let choice = prompt_choice(
-        "\n  e = elevate at removal time (Windows shows one UAC prompt)\n\
-         \x20 c = continue without it (the item(s) above stay installed)\n\
-         \x20 a = abort\n\
-         \n\
-         Choice [e/c/A]: ",
-    )?;
-    match choice.as_str() {
-        "e" | "elevate" => Ok(ElevationChoice::ElevateAtRemoval),
-        "c" | "continue" => Ok(ElevationChoice::ContinueWithout(
-            removal_plan.drop_elevation_required(),
-        )),
-        _ => bail!(
-            "aborted — re-run `uffs --uninstall` from an elevated (Administrator) terminal to remove everything"
-        ),
-    }
-}
-
-/// Non-Windows: there is no UAC to request, so the choice stays binary —
-/// continue without the elevation-required items, or abort to re-run elevated.
-#[cfg(not(windows))]
-fn platform_elevation_choice(removal_plan: &mut RemovalPlan) -> Result<ElevationChoice> {
-    if confirm(
-        "\nContinue without elevation? Everything else is still uninstalled; the\n\
-         item(s) above are left in place. (No aborts so you can re-run elevated) [y/N] ",
-    )? {
-        Ok(ElevationChoice::ContinueWithout(
-            removal_plan.drop_elevation_required(),
-        ))
-    } else {
-        bail!("aborted — re-run `uffs --uninstall` elevated (sudo) to remove everything")
-    }
+    elevation::elevation_gate(
+        removal_plan,
+        parsed.dry_run,
+        parsed.assume_yes,
+        true,
+        &elevation::GateWording {
+            action: "removal",
+            rerun_cmd: "uffs --uninstall",
+        },
+    )
 }
 
 /// Read one line of input for a multi-choice prompt, trimmed and lowercased.

@@ -315,8 +315,12 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
     // (continue-without / abort) — so nothing fails mid-swap. The per-root
     // elevation model lives in `plan`; the gate in `commands::elevation`.
     let mut plan = plan::UpdatePlan::build(report, &latest);
+    // Update has no in-flow elevation (winget refuses a user package elevated),
+    // so `offer_inflow_elevation = false` → the gate is the binary
+    // continue-without / abort.
     if let elevation::ElevationChoice::ContinueWithout(dropped) =
-        elevation::elevation_gate(&mut plan, false, false, &elevation::GateWording {
+        elevation::elevation_gate(&mut plan, false, false, false, &elevation::GateWording {
+            action: "update",
             rerun_cmd: "uffs --update",
         })?
     {

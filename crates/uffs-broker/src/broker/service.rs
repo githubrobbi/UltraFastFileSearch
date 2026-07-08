@@ -213,12 +213,37 @@ pub(super) fn uninstall_service() -> anyhow::Result<()> {
 
     if output.status.success() {
         println!("Service uninstalled.");
-    } else {
-        // AUDIT-OK(bytes): `sc` command output surfaced verbatim in an error
-        // message for the operator — display only, no decision.
-        anyhow::bail!("Uninstall failed: {}", sc_output(&output));
+        return Ok(());
     }
-    Ok(())
+
+    // The service already not existing IS the requested end state, so treat it
+    // as a no-op success rather than a loud failure. `sc delete` on a missing
+    // service returns ERROR_SERVICE_DOES_NOT_EXIST (1060).
+    if service_already_absent(&output) {
+        println!("Broker service is not installed — nothing to remove.");
+        return Ok(());
+    }
+
+    // AUDIT-OK(bytes): `sc` command output surfaced verbatim in an error
+    // message for the operator — display only, no decision.
+    anyhow::bail!("Uninstall failed: {}", sc_output(&output));
+}
+
+/// Whether an `sc delete` failure is just "the service does not exist"
+/// (`ERROR_SERVICE_DOES_NOT_EXIST`, 1060) — i.e. already uninstalled, so the
+/// uninstall request is already satisfied.
+fn service_already_absent(output: &std::process::Output) -> bool {
+    // AUDIT-OK(bytes): the `sc` output is inspected only to classify the "already
+    // gone" case; the exit code is the primary signal, the text a fallback.
+    absent_service_signal(output.status.code(), &sc_output(output))
+}
+
+/// Pure classifier: `sc delete` reports a missing service as
+/// `ERROR_SERVICE_DOES_NOT_EXIST` (1060) — via the process exit code (primary)
+/// or its text (fallback). Split out so the "already gone → success" decision
+/// is unit-testable without spawning `sc`.
+fn absent_service_signal(exit_code: Option<i32>, sc_text: &str) -> bool {
+    exit_code == Some(1060) || sc_text.contains("1060")
 }
 
 // ── FU-1: Windows Service control dispatcher ────────────────────────────────
@@ -383,5 +408,31 @@ fn signal_stop() {
         if let Err(err) = unsafe { CloseHandle(handle) } {
             tracing::debug!(err = ?err, "CloseHandle failed for stop-signal pipe");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::absent_service_signal;
+
+    #[test]
+    fn absent_when_sc_reports_1060_by_code_or_text() {
+        // Exit code is the primary signal.
+        assert!(absent_service_signal(Some(1060_i32), ""));
+        // Text is the fallback when the code is not surfaced.
+        assert!(absent_service_signal(
+            None,
+            "[SC] OpenService FAILED 1060:\n\nThe specified service does not exist"
+        ));
+    }
+
+    #[test]
+    fn other_failures_are_not_treated_as_absent() {
+        // Access denied (5) is a real failure, not "already gone".
+        assert!(!absent_service_signal(
+            Some(5_i32),
+            "[SC] DeleteService FAILED 5:\n\nAccess is denied."
+        ));
+        assert!(!absent_service_signal(None, "some unrelated error"));
     }
 }

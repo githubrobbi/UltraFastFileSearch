@@ -10,24 +10,35 @@
 //!
 //! ## Elevation model (per root)
 //!
-//! | Root             | Action           | `needs_elevation`                     |
-//! |------------------|------------------|---------------------------------------|
-//! | dev-build        | skip (never)     | — (skipped)                           |
-//! | unmanaged        | replace in place | the dir is not writable by this user  |
-//! | winget (user)    | `winget upgrade` | no — but must run **non-elevated**     |
-//! | winget (machine) | `winget upgrade` | yes                                   |
-//! | unknown          | skip             | — (skipped)                           |
+//! | Root              | Action           | `needs_elevation`                    |
+//! |-------------------|------------------|--------------------------------------|
+//! | already current   | skip             | — (skipped, no daemon stop)          |
+//! | dev-build/unknown | skip (never)     | — (skipped)                          |
+//! | unmanaged         | replace in place | dir not writable **or** a component here can't be stopped without elevation |
+//! | winget (user)     | `winget upgrade` | no — but must run **non-elevated**    |
+//! | winget (machine)  | `winget upgrade` | yes                                  |
 //!
-//! Stopping running components before the swap: the broker (a `LocalSystem`
-//! service) always needs elevation; the daemon/mcp are stoppable without
-//! elevation when broker-launched. The winget-user-scope-while-elevated case is
-//! **not** an elevation item — winget *refuses* to upgrade a user package from
-//! an elevated shell — so it is surfaced as a "run from a normal terminal"
-//! delegation note, the inverse of the elevation gate.
+//! Two rules keep an install the caller can't fully touch from failing mid-swap
+//! (the elevated-daemon 20 s-rollback bug):
+//!
+//! 1. **Already current** — a root whose every binary is at the target version
+//!    is a pure skip, so an already-current `~\bin` hosting an *elevated*
+//!    daemon is never dragged in (its daemon is never stopped).
+//! 2. **Stop cost is the root's cost** — replacing/upgrading a root means
+//!    stopping any component running from it first. The broker (a `LocalSystem`
+//!    service) always needs elevation; the daemon/mcp inherit fix #1's gate
+//!    (`mutating_management_needs_elevation` — an elevated daemon with no
+//!    serving broker needs Administrator). If the stop needs elevation, the
+//!    root does.
+//!
+//! The winget-user-scope-while-elevated case is **not** an elevation item —
+//! winget *refuses* to upgrade a user package from an elevated shell — so it is
+//! surfaced as a "run from a normal terminal" delegation note, the inverse of
+//! the elevation gate.
 
 use std::path::Path;
 
-use super::model::{Channel, DetectionReport, InstallRoot, Scope};
+use super::model::{Channel, Component, DetectionReport, InstallRoot, Scope};
 use crate::commands::elevation::ElevatablePlan;
 
 /// What the update will do to a given root.
@@ -41,6 +52,9 @@ pub(crate) enum UpdateAction {
     SkipDevBuild,
     /// The path could not be classified — left untouched.
     SkipUnknown,
+    /// Every binary here is already at the target version — nothing to do (and,
+    /// crucially, no running daemon here needs stopping).
+    AlreadyCurrent,
 }
 
 impl UpdateAction {
@@ -56,6 +70,7 @@ impl UpdateAction {
             Self::WingetUpgrade => "winget upgrade",
             Self::SkipDevBuild => "skip (dev-build)",
             Self::SkipUnknown => "skip (unclassified)",
+            Self::AlreadyCurrent => "skip (already current)",
         }
     }
 }
@@ -106,9 +121,19 @@ pub(crate) struct UpdatePlan {
 }
 
 impl UpdatePlan {
-    /// Build the plan by classifying every detected root.
-    pub(crate) fn build(report: &DetectionReport) -> Self {
-        let items = report.roots.iter().map(classify_root).collect::<Vec<_>>();
+    /// Build the plan by classifying every detected root against `latest`.
+    pub(crate) fn build(report: &DetectionReport, latest: &str) -> Self {
+        let latest_norm = super::normalize_tag(latest);
+        let elevated = uffs_mft::platform::is_elevated();
+        // fix #1's exact gate: can this terminal stop/restart the resident
+        // daemon at all? An elevated daemon with no serving broker → no.
+        let daemon_stop_needs_elev =
+            crate::commands::daemon_mgmt::mutating_management_needs_elevation();
+        let items = report
+            .roots
+            .iter()
+            .map(|root| classify_root(root, latest_norm, report, elevated, daemon_stop_needs_elev))
+            .collect::<Vec<_>>();
         Self { items }
     }
 
@@ -144,21 +169,43 @@ impl UpdatePlan {
 
 /// Classify one root into a planned action + elevation verdict per the module's
 /// elevation model.
-fn classify_root(root: &InstallRoot) -> UpdateItem {
+fn classify_root(
+    root: &InstallRoot,
+    latest_norm: &str,
+    report: &DetectionReport,
+    elevated: bool,
+    daemon_stop_needs_elev: bool,
+) -> UpdateItem {
+    // Already at the target version → never touched, and (crucially) its running
+    // daemon is never stopped. This is what keeps an already-current `~\bin`
+    // hosting an elevated daemon out of the update entirely.
+    if root_already_current(root, latest_norm) {
+        return skip_item(root, UpdateAction::AlreadyCurrent);
+    }
+
+    // Replacing/upgrading a root means stopping any component running from it
+    // first — so if that stop needs elevation, the whole root does.
+    let stop_needs_elev = root_stop_needs_elevation(root, report, elevated, daemon_stop_needs_elev);
+
     let (action, needs_elevation, needs_non_elevated) = match root.channel {
         Channel::DevBuild => (UpdateAction::SkipDevBuild, false, false),
         Channel::Unknown => (UpdateAction::SkipUnknown, false, false),
         Channel::Unmanaged => (
             UpdateAction::ReplaceBinaries,
-            !dir_writable(&root.dir),
+            stop_needs_elev || !dir_writable(&root.dir),
             false,
         ),
         Channel::WinGet => match root.scope {
             // winget refuses to upgrade a user package from an elevated shell,
             // so a user root never *needs* elevation — it needs the absence of
             // it. Machine scope is the opposite: winget requires Administrator.
+            // A component that needs elevation to stop overrides either way.
             Scope::Machine => (UpdateAction::WingetUpgrade, true, false),
-            Scope::User | Scope::Unknown => (UpdateAction::WingetUpgrade, false, true),
+            Scope::User | Scope::Unknown => (
+                UpdateAction::WingetUpgrade,
+                stop_needs_elev,
+                !stop_needs_elev,
+            ),
         },
     };
     UpdateItem {
@@ -169,6 +216,48 @@ fn classify_root(root: &InstallRoot) -> UpdateItem {
         needs_elevation,
         needs_non_elevated,
     }
+}
+
+/// A non-mutating item (a skip) — never needs elevation either way.
+fn skip_item(root: &InstallRoot, action: UpdateAction) -> UpdateItem {
+    UpdateItem {
+        dir: root.dir.clone(),
+        channel: root.channel,
+        scope: root.scope,
+        action,
+        needs_elevation: false,
+        needs_non_elevated: false,
+    }
+}
+
+/// Whether every binary in `root` already reports the target version — an
+/// update would be a pointless swap (and a pointless daemon stop).
+fn root_already_current(root: &InstallRoot, latest_norm: &str) -> bool {
+    !root.binaries.is_empty()
+        && root
+            .binaries
+            .iter()
+            .all(|bin| bin.version.as_deref() == Some(latest_norm))
+}
+
+/// Whether a component running from `root` cannot be stopped without elevation:
+/// the broker (a `LocalSystem` service) always needs it; the daemon/mcp inherit
+/// fix #1's gate (`daemon_stop_needs_elev` — an elevated daemon with no serving
+/// broker). The root must be stopped before it can be replaced, so this cost is
+/// the root's cost.
+fn root_stop_needs_elevation(
+    root: &InstallRoot,
+    report: &DetectionReport,
+    elevated: bool,
+    daemon_stop_needs_elev: bool,
+) -> bool {
+    report.running.iter().any(|process| {
+        process.image_path.as_deref().and_then(Path::parent) == Some(root.dir.as_path())
+            && match process.component {
+                Component::Broker => !elevated,
+                Component::Daemon | Component::Mcp => daemon_stop_needs_elev,
+            }
+    })
 }
 
 /// Probe whether `dir` is writable by the current user without elevation, by
@@ -285,9 +374,11 @@ pub(crate) fn prune_report(report: &DetectionReport, plan: &UpdatePlan) -> Detec
 
 #[cfg(test)]
 mod tests {
-    use super::{UpdateAction, UpdatePlan, classify_root};
+    use super::{UpdateAction, UpdateItem, UpdatePlan, classify_root};
     use crate::commands::elevation::ElevatablePlan as _;
-    use crate::commands::update::model::{Channel, InstallRoot, Scope};
+    use crate::commands::update::model::{
+        BinaryInfo, Channel, Component, DetectionReport, InstallRoot, RunningProcess, Scope,
+    };
 
     /// A root with the given channel/scope and no binaries/anchors.
     fn root(dir: &str, channel: Channel, scope: Scope) -> InstallRoot {
@@ -300,26 +391,54 @@ mod tests {
         }
     }
 
+    /// One binary at a version, for the already-current check.
+    fn bin(name: &str, version: &str) -> BinaryInfo {
+        BinaryInfo {
+            name: name.to_owned(),
+            version: Some(version.to_owned()),
+        }
+    }
+
+    /// A report with a single daemon running from `dir`.
+    fn report_with_daemon(dir: &std::path::Path) -> DetectionReport {
+        DetectionReport {
+            roots: Vec::new(),
+            running: vec![RunningProcess {
+                component: Component::Daemon,
+                pid: 1,
+                image_path: Some(dir.join("uffsd.exe")),
+                command_line: None,
+                version: None,
+            }],
+        }
+    }
+
     /// A path string for a directory the current user can write without
     /// elevation (the OS temp dir), so `dir_writable` returns `true`.
     fn writable_dir() -> String {
         std::env::temp_dir().to_string_lossy().into_owned()
     }
 
+    /// Classify with no running components, non-elevated, and a target no empty
+    /// root can already match — the pure channel/scope path.
+    fn classify(root: &InstallRoot) -> UpdateItem {
+        classify_root(root, "9.9.9", &DetectionReport::default(), false, false)
+    }
+
     #[test]
     fn dev_build_and_unknown_are_skipped() {
-        let dev = classify_root(&root("/x", Channel::DevBuild, Scope::Unknown));
+        let dev = classify(&root("/x", Channel::DevBuild, Scope::Unknown));
         assert_eq!(dev.action, UpdateAction::SkipDevBuild);
         assert!(!dev.needs_elevation);
         assert!(!dev.needs_non_elevated);
 
-        let unknown = classify_root(&root("/x", Channel::Unknown, Scope::Unknown));
+        let unknown = classify(&root("/x", Channel::Unknown, Scope::Unknown));
         assert_eq!(unknown.action, UpdateAction::SkipUnknown);
     }
 
     #[test]
     fn winget_user_needs_non_elevated_never_elevation() {
-        let item = classify_root(&root("/x", Channel::WinGet, Scope::User));
+        let item = classify(&root("/x", Channel::WinGet, Scope::User));
         assert_eq!(item.action, UpdateAction::WingetUpgrade);
         assert!(item.needs_non_elevated, "user scope must run non-elevated");
         assert!(
@@ -330,24 +449,52 @@ mod tests {
 
     #[test]
     fn winget_machine_needs_elevation() {
-        let item = classify_root(&root("/x", Channel::WinGet, Scope::Machine));
+        let item = classify(&root("/x", Channel::WinGet, Scope::Machine));
         assert!(item.needs_elevation);
         assert!(!item.needs_non_elevated);
     }
 
     #[test]
     fn unmanaged_writable_dir_needs_no_elevation() {
-        let item = classify_root(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown));
+        let item = classify(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown));
         assert_eq!(item.action, UpdateAction::ReplaceBinaries);
         assert!(!item.needs_elevation);
+    }
+
+    #[test]
+    fn root_already_at_target_is_a_pure_skip_even_with_an_elevated_daemon() {
+        let mut install = root(&writable_dir(), Channel::Unmanaged, Scope::Unknown);
+        install.binaries = vec![bin("uffs", "0.6.24"), bin("uffsd", "0.6.24")];
+        // Elevated daemon running here + non-elevated caller: still a pure skip,
+        // because there is nothing to update — so the daemon is never stopped.
+        let report = report_with_daemon(&install.dir);
+        let item = classify_root(&install, "0.6.24", &report, false, true);
+        assert_eq!(item.action, UpdateAction::AlreadyCurrent);
+        assert!(!item.needs_elevation);
+    }
+
+    #[test]
+    fn out_of_date_root_hosting_unstoppable_daemon_forces_elevation() {
+        let mut install = root(&writable_dir(), Channel::Unmanaged, Scope::Unknown);
+        install.binaries = vec![bin("uffs", "0.6.18")]; // out of date → needs updating
+        let report = report_with_daemon(&install.dir);
+        // daemon_stop_needs_elev = true (elevated daemon, no serving broker):
+        // the writable dir no longer makes it doable — stopping the daemon to
+        // swap the binaries needs Administrator.
+        let item = classify_root(&install, "0.6.24", &report, false, true);
+        assert_eq!(item.action, UpdateAction::ReplaceBinaries);
+        assert!(
+            item.needs_elevation,
+            "an unstoppable daemon in the root forces elevation"
+        );
     }
 
     #[test]
     fn split_off_non_elevated_only_when_elevated() {
         let build = || UpdatePlan {
             items: vec![
-                classify_root(&root("/a", Channel::WinGet, Scope::User)),
-                classify_root(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown)),
+                classify(&root("/a", Channel::WinGet, Scope::User)),
+                classify(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown)),
             ],
         };
 
@@ -371,8 +518,8 @@ mod tests {
     fn drop_elevation_required_prunes_but_keeps_doable_work() {
         let mut plan = UpdatePlan {
             items: vec![
-                classify_root(&root("/m", Channel::WinGet, Scope::Machine)),
-                classify_root(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown)),
+                classify(&root("/m", Channel::WinGet, Scope::Machine)),
+                classify(&root(&writable_dir(), Channel::Unmanaged, Scope::Unknown)),
             ],
         };
         assert!(plan.requires_elevation());

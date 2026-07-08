@@ -314,7 +314,7 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
     // elevation gate up front — surface admin-only roots, decide once
     // (continue-without / abort) — so nothing fails mid-swap. The per-root
     // elevation model lives in `plan`; the gate in `commands::elevation`.
-    let mut plan = plan::UpdatePlan::build(report);
+    let mut plan = plan::UpdatePlan::build(report, &latest);
     if let elevation::ElevationChoice::ContinueWithout(dropped) =
         elevation::elevation_gate(&mut plan, false, false, &elevation::GateWording {
             rerun_cmd: "uffs --update",
@@ -340,6 +340,15 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
     // stop-timeout → rollback on an install the caller could never update.
     let doable = plan::prune_report(report, &plan);
 
+    // Only hand-placed (unmanaged) roots go through the in-process replace
+    // (`apply`, which stops the daemon). If the gate/prune left only winget
+    // roots, skip `apply` entirely so no daemon is stopped for work that isn't
+    // there — the crux of the elevated-daemon 20s-rollback fix.
+    let has_unmanaged = doable
+        .roots
+        .iter()
+        .any(|root| matches!(root.channel, Channel::Unmanaged));
+
     print_updating(&latest);
     let snapshot_path = snapshot::write_snapshot(&doable, Some(&latest))?;
     acquire::spawn(&snapshot_path, None, verbose)?;
@@ -349,7 +358,9 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
     // fails on locked images). No-op for a plain unmanaged install (apply keeps
     // its own daemon stop).
     let quiesce = winget::quiesce(&doable)?;
-    apply::spawn(&snapshot_path, verbose)?;
+    if has_unmanaged {
+        apply::spawn(&snapshot_path, verbose)?;
+    }
     let outcome = winget::run_upgrade(&doable, &latest, &quiesce)?;
     winget::resume(quiesce, outcome);
     print_updated(&latest);
@@ -369,7 +380,7 @@ fn report_assessment(plan: &UpdateAssessment) {
 }
 
 /// Strip a leading `v` from a release tag so `v0.6.5` compares to `0.6.5`.
-fn normalize_tag(tag: &str) -> &str {
+pub(crate) fn normalize_tag(tag: &str) -> &str {
     tag.strip_prefix('v').unwrap_or(tag)
 }
 

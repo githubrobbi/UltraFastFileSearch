@@ -79,14 +79,14 @@ Every clip runs the **real binary** against real NTFS data with unedited timings
 
 ## Benchmark snapshot (v0.5.120 · June 2026)
 
-📖 **The story behind these numbers:** [*I benchmarked my Rust file search engine against Everything until I ran out of excuses*](https://uffs.io/blog/benchmarking-against-everything/) — the methodology I had to fix first, the bulk-export workload Everything's CLI can't run, and the two regressions published anyway.
+📖 **The story behind these numbers:** [*I benchmarked my Rust file search engine against Everything until I ran out of excuses*](https://uffs.io/blog/benchmarking-against-everything/) — the methodology I had to fix first, the bulk-export workload where `es.exe` hit a ~2 GB IPC limit at this scale, and the two regressions published anyway.
 
 Measured 2026-06-11 on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2 — cross-tool on four NTFS volumes (C/D/F/G, 12.8 M records, the Everything-RAM-budget-negotiated set), full-scan on all seven (25.9 M records; that workload is UFFS-only, so the negotiation doesn't constrain it). Raw data: [`cross-tool-summary.csv`](docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) · [`full-scan-all-drives.csv`](docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
 
 **vs the competition** (10 rounds per cell, p50, file sink):
 
 - **30/30 head-to-head cells faster than Everything** — median ratio **0.36× (~2.8× faster)** across C/D/F/G + the combined index; every cell from the April snapshot improved (median −33%)
-- **Full-scan export across all 7 drives: 23.3 M rows → CSV in 12.0 s ≈ 1.95 M rec/s** (+13% throughput vs April at the same scale) — a workload Everything's CLI export cannot run (~2 GB IPC ceiling)
+- **Full-scan export across all 7 drives: 23.3 M rows → CSV in 12.0 s ≈ 1.95 M rec/s** (+13% throughput vs April at the same scale) — a workload where Everything's CLI export hit a ~2 GB IPC limit at this scale
 - **180×–3 400× vs the UFFS C++ reference** on targeted queries (daemon HOT vs per-invocation MFT re-read); 6.6× on combined full-scan
 
 **Latency shape** (v0.5.120):

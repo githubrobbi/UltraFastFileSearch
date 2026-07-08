@@ -261,6 +261,46 @@ pub fn parse_pid_file(path: &std::path::Path) -> Option<(u32, u64, u64, String)>
     Some((pid, ts, hash, nonce))
 }
 
+/// Whether a process with `pid` is currently alive.
+///
+/// A bare liveness probe used by `uffs --daemon kill` to confirm a terminate
+/// actually took effect **before** the PID file is removed. A non-elevated
+/// `taskkill /F` against an *elevated* daemon fails silently (Access denied),
+/// so the caller must verify rather than trust the exit code — otherwise it
+/// deletes the PID file while the process keeps running (an orphaned daemon).
+///
+/// Unix uses `kill(pid, 0)` (existence check, no signal delivered). Windows
+/// filters `tasklist` by PID and confirms the image is `uffsd`, so a recycled
+/// PID that is now some *other* process reads as "not our daemon" → dead.
+#[must_use]
+pub fn is_pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // Unix PIDs fit in i32 by spec; the saturating fallback is unreachable.
+        let pid_i32 = i32::try_from(pid).unwrap_or(i32::MAX);
+        // SAFETY: `kill(pid, 0)` performs a permission/existence check without
+        // delivering a signal; `pid` comes from our own PID file.
+        #[expect(unsafe_code, reason = "kill(pid, 0) is a safe existence check")]
+        let rc = unsafe { libc::kill(pid_i32, 0) };
+        rc == 0
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|output| {
+                // AUDIT-OK(bytes): liveness probe via substring match; a lossy
+                // decode can only FAIL the match → reads as "not alive"
+                // (fail-safe: we never wrongly claim a live daemon is dead).
+                let text = String::from_utf8_lossy(&output.stdout);
+                text.contains(&pid.to_string()) && text.contains("uffsd")
+            })
+    }
+}
+
 /// Find the `uffs` CLI executable.
 ///
 /// The `$PATH` fallback carries the `.exe` extension on Windows so a bare

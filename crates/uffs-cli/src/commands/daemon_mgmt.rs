@@ -147,10 +147,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
         ),
         DaemonAction::Status { verbose, json } => daemon_status::daemon_status(*verbose, *json),
         DaemonAction::Stop => daemon_stop(),
-        DaemonAction::Kill => {
-            daemon_kill();
-            Ok(())
-        }
+        DaemonAction::Kill => daemon_kill(),
         DaemonAction::Restart => daemon_restart(),
         DaemonAction::Load {
             mft_file,
@@ -413,8 +410,15 @@ fn daemon_stop() -> Result<()> {
 }
 
 /// `uffs --daemon kill` — hard kill via PID file or socket discovery + cleanup.
+///
+/// The PID file / socket are removed **only after** the process is confirmed
+/// gone. If the terminate did not take effect — almost always because the
+/// daemon was started elevated and this is a non-elevated shell — the PID file
+/// is left in place (so the daemon stays discoverable) and an error explains
+/// how to finish. This closes the old "PID file deleted, process still
+/// running" half-kill.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn daemon_kill() {
+fn daemon_kill() -> Result<()> {
     let pid_path = pid_file_path();
 
     let mut pid =
@@ -428,41 +432,93 @@ fn daemon_kill() {
         pid = Some(status.pid);
     }
 
-    if let Some(target_pid) = pid {
+    let Some(target_pid) = pid else {
+        // Nothing running → sweep any stale files (no-op if already absent).
+        drop(std::fs::remove_file(&pid_path));
+        drop(std::fs::remove_file(socket_path()));
         if !is_quiet() {
-            println!("Killing daemon (PID {target_pid})...");
+            println!("No daemon found (no PID file, no socket connection).");
         }
-        kill_pid(target_pid);
-    } else if !is_quiet() {
-        println!("No daemon found (no PID file, no socket connection).");
+        return Ok(());
+    };
+
+    // A PID file that outlived its process (crash / reboot / recycled PID): the
+    // daemon is already gone, so there is nothing to kill — just clean up. This
+    // avoids reporting a "kill" when nothing was running.
+    if !uffs_client::daemon_ctl::is_pid_alive(target_pid) {
+        drop(std::fs::remove_file(&pid_path));
+        drop(std::fs::remove_file(socket_path()));
+        if !is_quiet() {
+            println!("No running daemon (stale PID {target_pid}); cleaned up PID file + socket.");
+        }
+        return Ok(());
     }
 
-    // Always clean up stale files.
-    drop(std::fs::remove_file(&pid_path));
-    drop(std::fs::remove_file(socket_path()));
-    if pid.is_some() && !is_quiet() {
-        println!("Daemon killed. PID file and socket cleaned up.");
+    if !is_quiet() {
+        println!("Killing daemon (PID {target_pid})...");
     }
+
+    if kill_pid(target_pid) {
+        // Confirmed gone — safe to drop the discovery files.
+        drop(std::fs::remove_file(&pid_path));
+        drop(std::fs::remove_file(socket_path()));
+        if !is_quiet() {
+            println!("Daemon killed. PID file and socket cleaned up.");
+        }
+        return Ok(());
+    }
+
+    // Still alive → do NOT remove the PID file (no half-kill; keep it
+    // discoverable). Almost always: an elevated daemon vs a non-elevated shell.
+    #[cfg(windows)]
+    anyhow::bail!(
+        "Could not terminate the daemon (PID {target_pid}) — it is still running.\n\n\
+         It was most likely started from an elevated (Administrator) terminal, so a\n\
+         non-elevated process cannot stop it. The PID file was left in place so the\n\
+         daemon stays discoverable.\n\n\
+         Re-run from an elevated terminal:\n\
+         \x20  uffs --daemon kill"
+    );
+    #[cfg(not(windows))]
+    anyhow::bail!(
+        "Could not terminate the daemon (PID {target_pid}) — it is still running.\n\n\
+         It was most likely started as root, so a non-root process cannot stop it.\n\
+         The PID file was left in place so the daemon stays discoverable.\n\n\
+         Re-run with elevated privileges:\n\
+         \x20  sudo uffs --daemon kill"
+    );
 }
 
-/// Send SIGKILL (Unix) or taskkill (Windows) to a process.
-fn kill_pid(pid: u32) {
+/// Terminate `pid` (SIGKILL on Unix, `taskkill /F` on Windows), then
+/// **confirm** it is actually gone. Returns `true` only when the process is no
+/// longer alive.
+///
+/// The OS call's exit code is unreliable for our case — a non-elevated
+/// `taskkill` of an elevated daemon is denied — so we verify via
+/// [`uffs_client::daemon_ctl::is_pid_alive`], polling briefly (a `/F` kill is
+/// near-instant but not synchronous).
+fn kill_pid(pid: u32) -> bool {
     #[cfg(unix)]
-    {
-        drop(
-            std::process::Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output(),
-        );
-    }
+    drop(
+        std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output(),
+    );
     #[cfg(windows)]
-    {
-        drop(
-            std::process::Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .output(),
-        );
+    drop(
+        std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output(),
+    );
+
+    // Poll for the process to disappear (fast path returns on the first check).
+    for _ in 0..10_u8 {
+        if !uffs_client::daemon_ctl::is_pid_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(core::time::Duration::from_millis(100));
     }
+    false
 }
 
 /// `uffs --daemon restart` — stop, capture data sources, then re-launch.

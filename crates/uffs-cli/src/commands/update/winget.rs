@@ -382,6 +382,16 @@ mod windows_impl {
             // ~69s on a cold cache), so animate a spinner — a silent minute is
             // the very "looks hung" symptom this rework set out to remove.
             spinner_while("Restarting the index daemon", restart_daemon);
+            // A daemon that needs elevation to read the MFT (no broker) cannot
+            // come back from this non-elevated restart. Say so with the one-time
+            // fix instead of leaving a silently-stopped daemon.
+            if !daemon_running() {
+                println!(
+                    "\u{26a0} The index daemon was stopped for the update and couldn't restart\n\
+                     \x20 non-elevated (no broker). Run `uffs-broker --install` for zero-UAC\n\
+                     \x20 restarts, or start it from an elevated terminal."
+                );
+            }
         }
     }
 
@@ -480,6 +490,15 @@ mod windows_impl {
         }
         std::thread::sleep(Duration::from_millis(750));
         true
+    }
+
+    /// Whether the resident daemon is up: a fresh PID file naming a live
+    /// process. Used after the best-effort restart to tell the user when a
+    /// no-broker elevated daemon could not come back non-elevated.
+    fn daemon_running() -> bool {
+        let path = uffs_client::daemon_ctl::pid_file_path();
+        uffs_client::daemon_ctl::parse_pid_file(&path)
+            .is_some_and(|(pid, ..)| uffs_client::daemon_ctl::is_pid_alive(pid))
     }
 
     /// Best-effort daemon restart after the upgrade (auto-start on the next

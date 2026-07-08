@@ -340,10 +340,12 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
     // stop-timeout → rollback on an install the caller could never update.
     let doable = plan::prune_report(report, &plan);
 
-    // Only hand-placed (unmanaged) roots go through the in-process replace
-    // (`apply`, which stops the daemon). If the gate/prune left only winget
-    // roots, skip `apply` entirely so no daemon is stopped for work that isn't
-    // there — the crux of the elevated-daemon 20s-rollback fix.
+    // The `uffs-update` helper (acquire + apply) only handles hand-placed
+    // (unmanaged) roots — winget roots are upgraded separately by
+    // `winget::run_upgrade`. So when the gate/prune left only winget roots,
+    // skip BOTH acquire and apply: the helper errors with "no unmanaged
+    // binaries to acquire", and apply would needlessly stop the daemon. This is
+    // the other half of the elevated-daemon fix.
     let has_unmanaged = doable
         .roots
         .iter()
@@ -351,7 +353,9 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
 
     print_updating(&latest);
     let snapshot_path = snapshot::write_snapshot(&doable, Some(&latest))?;
-    acquire::spawn(&snapshot_path, None, verbose)?;
+    if has_unmanaged {
+        acquire::spawn(&snapshot_path, None, verbose)?;
+    }
     // Quiesce-first: on a winget-managed install, stop the daemon + (package)
     // broker up front — ONE UAC — so BOTH the hand-rolled ~\bin update and the
     // winget upgrade run against a stopped install (a bare `winget upgrade`

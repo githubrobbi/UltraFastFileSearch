@@ -24,12 +24,15 @@
 //! 1. **Already current** — a root whose every binary is at the target version
 //!    is a pure skip, so an already-current `~\bin` hosting an *elevated*
 //!    daemon is never dragged in (its daemon is never stopped).
-//! 2. **Stop cost is the root's cost** — replacing/upgrading a root means
-//!    stopping any component running from it first. The broker (a `LocalSystem`
-//!    service) always needs elevation; the daemon/mcp inherit fix #1's gate
-//!    (`mutating_management_needs_elevation` — an elevated daemon with no
-//!    serving broker needs Administrator). If the stop needs elevation, the
-//!    root does.
+//! 2. **Stop cost — but only where the stop is gated.** Replacing an
+//!    **unmanaged** root means the uffs-update helper stops the daemon via the
+//!    *gated* CLI `daemon stop` (no UAC), so an elevated daemon (or a broker)
+//!    hosted there makes the root elevation-required (fix #1's
+//!    `mutating_management_needs_elevation`). A **winget** root is different:
+//!    `winget::quiesce` stops a daemon inside the package *cooperatively* (an
+//!    IPC shutdown the daemon honors regardless of elevation — not the gated
+//!    CLI path) and cycles the package broker via its own one-UAC path, so a
+//!    winget root is never gated for a running component.
 //!
 //! The winget-user-scope-while-elevated case is **not** an elevation item —
 //! winget *refuses* to upgrade a user package from an elevated shell — so it is
@@ -183,29 +186,28 @@ fn classify_root(
         return skip_item(root, UpdateAction::AlreadyCurrent);
     }
 
-    // Replacing/upgrading a root means stopping any component running from it
-    // first — so if that stop needs elevation, the whole root does.
-    let stop_needs_elev = root_stop_needs_elevation(root, report, elevated, daemon_stop_needs_elev);
-
     let (action, needs_elevation, needs_non_elevated) = match root.channel {
         Channel::DevBuild => (UpdateAction::SkipDevBuild, false, false),
         Channel::Unknown => (UpdateAction::SkipUnknown, false, false),
+        // Unmanaged: the uffs-update helper stops the daemon via the *gated* CLI
+        // `daemon stop` (no UAC), so an elevated daemon (or a broker) hosted here
+        // genuinely needs elevation — as does a non-writable dir.
         Channel::Unmanaged => (
             UpdateAction::ReplaceBinaries,
-            stop_needs_elev || !dir_writable(&root.dir),
+            !dir_writable(&root.dir)
+                || root_stop_needs_elevation(root, report, elevated, daemon_stop_needs_elev),
             false,
         ),
+        // winget's own `quiesce` stops a daemon inside the package
+        // **cooperatively** (an IPC shutdown the daemon honors regardless of its
+        // elevation — not the gated CLI `daemon stop`) and cycles the package
+        // broker via its own one-UAC path. So a winget root is never gated here;
+        // it only needs the privilege level winget itself demands: user scope
+        // must run non-elevated (winget refuses a user package elevated), machine
+        // scope requires Administrator.
         Channel::WinGet => match root.scope {
-            // winget refuses to upgrade a user package from an elevated shell,
-            // so a user root never *needs* elevation — it needs the absence of
-            // it. Machine scope is the opposite: winget requires Administrator.
-            // A component that needs elevation to stop overrides either way.
             Scope::Machine => (UpdateAction::WingetUpgrade, true, false),
-            Scope::User | Scope::Unknown => (
-                UpdateAction::WingetUpgrade,
-                stop_needs_elev,
-                !stop_needs_elev,
-            ),
+            Scope::User | Scope::Unknown => (UpdateAction::WingetUpgrade, false, true),
         },
     };
     UpdateItem {
@@ -471,6 +473,25 @@ mod tests {
         let item = classify_root(&install, "0.6.24", &report, false, true);
         assert_eq!(item.action, UpdateAction::AlreadyCurrent);
         assert!(!item.needs_elevation);
+    }
+
+    #[test]
+    fn winget_user_root_hosting_a_daemon_is_not_gated() {
+        // A daemon running from a winget-user root (even elevated) must NOT be
+        // gated: winget::quiesce stops it cooperatively (IPC shutdown, no
+        // elevation), so the upgrade runs non-elevated. Gating it would give the
+        // dead-end "re-run elevated" hint winget can't honor.
+        let dir = writable_dir();
+        let mut install = root(&dir, Channel::WinGet, Scope::User);
+        install.binaries = vec![bin("uffs", "0.6.18")]; // out of date
+        let report = report_with_daemon(&install.dir);
+        let item = classify_root(&install, "0.6.24", &report, false, true);
+        assert_eq!(item.action, UpdateAction::WingetUpgrade);
+        assert!(
+            !item.needs_elevation,
+            "winget::quiesce stops the daemon cooperatively — no elevation"
+        );
+        assert!(item.needs_non_elevated);
     }
 
     #[test]

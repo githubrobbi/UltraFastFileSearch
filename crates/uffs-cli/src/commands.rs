@@ -34,6 +34,12 @@ pub(crate) mod mcp_mgmt;
 pub mod output;
 /// Search command implementation.
 pub mod search;
+/// Braille spinner for blocking steps with no incremental progress of their own
+/// (winget upgrade, a cold-cache daemon start). Windows-only for now — its only
+/// callers (winget orchestration, uninstall coverage reload) are
+/// `#[cfg(windows)]`.
+#[cfg(windows)]
+pub(crate) mod spinner;
 /// Stats subcommand implementation.
 pub mod stats;
 /// Combined `uffs --status` command.

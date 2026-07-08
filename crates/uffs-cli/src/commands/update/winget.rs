@@ -168,6 +168,7 @@ mod windows_impl {
     use anyhow::{Context as _, Result, bail};
 
     use super::{UpgradeOutcome, WINGET_PACKAGE_ID};
+    use crate::commands::spinner::spinner_while;
     use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
     use crate::commands::update::strip_verbatim_prefix;
 
@@ -583,28 +584,6 @@ mod windows_impl {
             std::thread::sleep(POLL);
             frame = frame.wrapping_add(1);
         }
-    }
-
-    /// Run `body` on a scoped thread while animating a spinner (for a blocking
-    /// call with no incremental progress, e.g. `winget upgrade`).
-    #[expect(clippy::print_stdout, reason = "interactive progress spinner")]
-    fn spinner_while<T: Send>(label: &str, body: impl FnOnce() -> T + Send) -> T {
-        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        std::thread::scope(|scope| {
-            let handle = scope.spawn(body);
-            let mut frame = 0_usize;
-            while !handle.is_finished() {
-                let glyph = FRAMES.get(frame % FRAMES.len()).copied().unwrap_or("*");
-                print!("\r  {glyph} {label}\u{2026}      ");
-                let _flushed = std::io::stdout().flush();
-                std::thread::sleep(POLL);
-                frame = frame.wrapping_add(1);
-            }
-            clear_line();
-            // Our closures never panic; if one somehow did, aborting is safer
-            // than an unwrap that the workspace lints forbid anyway.
-            handle.join().unwrap_or_else(|_| std::process::abort())
-        })
     }
 
     /// Erase the spinner line.

@@ -186,7 +186,7 @@ fn reload_daemon_for_coverage(
         return;
     }
 
-    if let Err(err) = run_handler(quiet, &start_action(elevate_daemon)) {
+    if let Err(err) = start_daemon_for_coverage(quiet, elevate_daemon) {
         emit(quiet, notes, start_failure_note(elevate_daemon, &err));
         return;
     }
@@ -238,6 +238,21 @@ fn run_handler(quiet: bool, action: &DaemonAction) -> anyhow::Result<()> {
     } else {
         daemon_mgmt::daemon(action)
     }
+}
+
+/// Start the (possibly elevated) daemon for the reload. A cold cache can take
+/// ~90 s to load; in loud mode animate a spinner over the *quiet* start (the
+/// raw "connect attempt N/20" chatter reads as a hang), so the spinner owns the
+/// line. Quiet mode stays silent — its narration is deferred as a note by the
+/// caller.
+fn start_daemon_for_coverage(quiet: bool, elevate_daemon: bool) -> anyhow::Result<()> {
+    if quiet {
+        return daemon_mgmt::daemon_quiet(&start_action(elevate_daemon));
+    }
+    crate::commands::spinner::spinner_while(
+        "starting the index daemon (a cold cache can take up to ~90 s)",
+        || daemon_mgmt::daemon_quiet(&start_action(elevate_daemon)),
+    )
 }
 
 /// Route one narration line: printed live in loud mode, deferred as a note in

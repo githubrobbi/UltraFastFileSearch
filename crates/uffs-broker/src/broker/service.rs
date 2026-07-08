@@ -193,6 +193,13 @@ pub(super) fn install_service() -> anyhow::Result<()> {
     reason = "CLI admin command — stdout is the user-visible result channel"
 )]
 pub(super) fn uninstall_service() -> anyhow::Result<()> {
+    // Checking existence is a non-elevated SCM query. If the service is already
+    // absent, the requested end state holds — a no-op success, and there is no
+    // reason to demand Administrator for work that would not happen.
+    if !uffs_winsvc::is_installed(SERVICE_NAME) {
+        println!("Broker service is not installed — nothing to remove.");
+        return Ok(());
+    }
     if !super::is_elevated() {
         anyhow::bail!(
             "removing the broker service requires Administrator.\n\

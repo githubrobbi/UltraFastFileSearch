@@ -26,6 +26,7 @@ pub(crate) mod binaries;
 pub(crate) mod channel;
 mod doctor;
 pub(crate) mod model;
+mod plan;
 pub(crate) mod procinfo;
 mod report;
 mod self_heal;
@@ -37,6 +38,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use model::{Anchor, Channel, Component, DetectionReport, InstallRoot, RunningProcess, Scope};
+
+use crate::commands::elevation;
 
 /// Run `uffs --update [<action>]` — uniform `--<command> [action] [--options]`
 /// grammar (design: `docs/architecture/cli-grammar.md`). The action is the
@@ -140,7 +143,7 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         // release feed). With `--repair` we run it; interactively we ask; piped
         // we just point.
         if !args.iter().any(|arg| arg == "--offline")
-            && matches!(assess(&report), UpdatePlan::Available { .. })
+            && matches!(assess(&report), UpdateAssessment::Available { .. })
         {
             if repair || prompt_yes_no("Run `uffs --update` now to fix this?") {
                 return run_automatic_update(&report, verbose);
@@ -189,7 +192,7 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
 }
 
 /// Whether an update is warranted, and the target tag.
-enum UpdatePlan {
+enum UpdateAssessment {
     /// Installed matches the latest release and there is no version skew.
     UpToDate {
         /// The latest release tag (e.g. `v0.6.5`).
@@ -207,14 +210,14 @@ enum UpdatePlan {
 
 /// Compare the detected install against the latest release (one non-mutating
 /// metadata fetch via the helper) to decide whether an update is warranted.
-fn assess(report: &DetectionReport) -> UpdatePlan {
+fn assess(report: &DetectionReport) -> UpdateAssessment {
     let installed = report::distinct_versions(report);
     let skewed = installed.len() > 1;
     // A core binary missing from a real install root makes it *incomplete* —
     // an update reconciles the full core set back into place.
     let incomplete = has_missing_core(report);
     let Some(latest) = acquire::latest_version() else {
-        return UpdatePlan::Offline;
+        return UpdateAssessment::Offline;
     };
     let newer = match installed.as_slice() {
         // A single clean version: update only if the release is different.
@@ -223,9 +226,9 @@ fn assess(report: &DetectionReport) -> UpdatePlan {
         _ => true,
     };
     if skewed || newer || incomplete {
-        UpdatePlan::Available { latest }
+        UpdateAssessment::Available { latest }
     } else {
-        UpdatePlan::UpToDate { latest }
+        UpdateAssessment::UpToDate { latest }
     }
 }
 
@@ -295,41 +298,71 @@ fn prompt_yes_no(question: &str) -> bool {
 /// Run the full end-to-end update when one is needed; otherwise report the
 /// install is current. Journaled + auto-rollback (delegated to `apply`).
 fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
-    match assess(report) {
-        UpdatePlan::UpToDate { latest } => {
+    let latest = match assess(report) {
+        UpdateAssessment::UpToDate { latest } => {
             print_already_current(&latest);
-            Ok(())
+            return Ok(());
         }
-        UpdatePlan::Offline => {
+        UpdateAssessment::Offline => {
             print_offline_notice();
-            Ok(())
+            return Ok(());
         }
-        UpdatePlan::Available { latest } => {
-            print_updating(&latest);
-            let snapshot_path = snapshot::write_snapshot(report, Some(&latest))?;
-            acquire::spawn(&snapshot_path, None, verbose)?;
-            // Quiesce-first: on a winget-managed install, stop the daemon +
-            // (package) broker up front — ONE UAC — so BOTH the hand-rolled
-            // ~\bin update and the winget upgrade run against a stopped
-            // install (a bare `winget upgrade` fails on locked images). No-op
-            // for a plain unmanaged install (apply keeps its own daemon stop).
-            let quiesce = winget::quiesce(report)?;
-            apply::spawn(&snapshot_path, verbose)?;
-            let outcome = winget::run_upgrade(report, &latest, &quiesce)?;
-            winget::resume(quiesce, outcome);
-            print_updated(&latest);
-            Ok(())
-        }
+        UpdateAssessment::Available { latest } => latest,
+    };
+
+    // Mirror `uffs --uninstall`: build the per-root plan and run the SHARED
+    // elevation gate up front — surface admin-only roots, decide once
+    // (continue-without / abort) — so nothing fails mid-swap. The per-root
+    // elevation model lives in `plan`; the gate in `commands::elevation`.
+    let mut plan = plan::UpdatePlan::build(report);
+    if let elevation::ElevationChoice::ContinueWithout(dropped) =
+        elevation::elevation_gate(&mut plan, false, false, &elevation::GateWording {
+            rerun_cmd: "uffs --update",
+        })?
+    {
+        plan::print_skipped_elevation(&dropped);
     }
+
+    // Elevated shells cannot run `winget upgrade` for a user-scope package
+    // (winget refuses) — split those out as a delegation note instead of a
+    // mid-flow failure.
+    let delegated = plan.split_off_non_elevated_when_elevated(uffs_mft::platform::is_elevated());
+    plan::print_winget_delegation(&delegated);
+
+    if !plan.has_work() {
+        plan::print_no_local_work();
+        return Ok(());
+    }
+
+    // Feed the journaled execute a report PRUNED to just the roots the gated
+    // plan will actually touch, so quiesce/apply/winget never operate on a
+    // dropped (elevation-required or delegated) root — this removes the old
+    // stop-timeout → rollback on an install the caller could never update.
+    let doable = plan::prune_report(report, &plan);
+
+    print_updating(&latest);
+    let snapshot_path = snapshot::write_snapshot(&doable, Some(&latest))?;
+    acquire::spawn(&snapshot_path, None, verbose)?;
+    // Quiesce-first: on a winget-managed install, stop the daemon + (package)
+    // broker up front — ONE UAC — so BOTH the hand-rolled ~\bin update and the
+    // winget upgrade run against a stopped install (a bare `winget upgrade`
+    // fails on locked images). No-op for a plain unmanaged install (apply keeps
+    // its own daemon stop).
+    let quiesce = winget::quiesce(&doable)?;
+    apply::spawn(&snapshot_path, verbose)?;
+    let outcome = winget::run_upgrade(&doable, &latest, &quiesce)?;
+    winget::resume(quiesce, outcome);
+    print_updated(&latest);
+    Ok(())
 }
 
 /// Print the verdict for the non-mutating `uffs --update check`.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn report_assessment(plan: &UpdatePlan) {
+fn report_assessment(plan: &UpdateAssessment) {
     match plan {
-        UpdatePlan::UpToDate { latest } => println!("\n\u{2713} Up to date ({latest})."),
-        UpdatePlan::Offline => print_offline_notice(),
-        UpdatePlan::Available { latest } => {
+        UpdateAssessment::UpToDate { latest } => println!("\n\u{2713} Up to date ({latest})."),
+        UpdateAssessment::Offline => print_offline_notice(),
+        UpdateAssessment::Available { latest } => {
             println!("\n\u{2b06} Update available: {latest} — run `uffs --update` to install.");
         }
     }

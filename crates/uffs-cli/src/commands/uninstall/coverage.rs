@@ -165,23 +165,26 @@ fn reload_daemon_for_coverage(
             notes,
             format!(
                 "\nThe daemon needs a reload before the deep sweep ({list}).\n\
-                 Reloading it (kill + start):"
+                 Reloading it (stop + start):"
             ),
         );
     }
 
-    if let Err(err) = run_handler(quiet, &DaemonAction::Kill) {
+    // Stop the running daemon COOPERATIVELY (an IPC shutdown it honors
+    // regardless of its own elevation — the same-user pipe), NOT the
+    // policy-gated `daemon kill`, which a non-elevated shell cannot use on an
+    // elevated daemon (the loud failure the user hit). Only if the daemon cannot
+    // be stopped at all do we fall back to scanning what is already indexed.
+    if !stop_running_daemon(quiet) {
         emit(
             quiet,
             notes,
-            format!(
-                "\nNote: could not stop the running daemon ({err}).\n\
-                   The deep sweep will scan the drives already indexed."
-            ),
+            "\nNote: could not stop the running daemon.\n\
+               The deep sweep will scan the drives already indexed."
+                .to_owned(),
         );
         return;
     }
-    wait_until_daemon_down();
 
     if let Err(err) = run_handler(quiet, &start_action(elevate_daemon)) {
         emit(quiet, notes, start_failure_note(elevate_daemon, &err));
@@ -264,12 +267,39 @@ fn start_action(elevate: bool) -> DaemonAction {
     }
 }
 
+/// Stop the running daemon for the reload. Tries the **cooperative** IPC
+/// shutdown first — the daemon exits itself on the RPC regardless of its own
+/// elevation (the pipe is same-user), so it works from a non-elevated shell,
+/// unlike the policy-gated `daemon kill`. Falls back to the gated kill only if
+/// the daemon ignores the shutdown (works for a non-elevated / broker daemon;
+/// needs Administrator for an elevated one). Returns whether the daemon is
+/// actually down afterward.
+fn stop_running_daemon(quiet: bool) -> bool {
+    if UffsClientSync::connect_raw().is_ok_and(|mut client| client.shutdown().is_ok()) {
+        wait_until_daemon_down();
+    }
+    if daemon_is_down() {
+        return true;
+    }
+    // The daemon ignored the cooperative shutdown (or its pipe was unreachable
+    // yet the process lives) — try the gated kill, then re-check.
+    if run_handler(quiet, &DaemonAction::Kill).is_ok() {
+        wait_until_daemon_down();
+    }
+    daemon_is_down()
+}
+
+/// Whether the daemon's IPC endpoint is no longer reachable (fully shut down).
+fn daemon_is_down() -> bool {
+    UffsClientSync::connect_raw().is_err()
+}
+
 /// Poll until the daemon is no longer reachable (fully shut down) or
 /// [`SHUTDOWN_WAIT`] elapses.
 fn wait_until_daemon_down() {
     let deadline = Instant::now() + SHUTDOWN_WAIT;
     while Instant::now() < deadline {
-        if UffsClientSync::connect_raw().is_err() {
+        if daemon_is_down() {
             return;
         }
         std::thread::sleep(POLL_INTERVAL);

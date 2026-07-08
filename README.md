@@ -58,6 +58,8 @@ UFFS is built for **exact filename, path, and metadata search** at scales where 
 
 Every clip runs the **real binary** against real NTFS data with unedited timings and result counts — captured with the reproducible [demo kit](scripts/dev/demo/README.md).
 
+▶️ **[Watch the full demos on YouTube](https://www.youtube.com/playlist?list=PLTTMn_SUmnqqTVXWHYPSyvGm3yp-mutRN)**: the CLI, MCP, and TUI reels, uncut.
+
 <p align="center">
   <img src="assets/demo/uffs-tui-short.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives against a hot daemon in seconds." width="900"><br>
   <sub><b>TUI</b> — unzip, run <code>uffs-tui</code>, and browse your own drives in seconds. <a href="assets/demo/uffs-tui.gif">Full reel</a>.</sub>

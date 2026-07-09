@@ -105,6 +105,7 @@ pub(crate) fn version_strays(paths: &[PathBuf]) -> Vec<StrayHit> {
         .min(paths.len());
     let next = AtomicUsize::new(0);
     let timed_out = AtomicUsize::new(0);
+    let legacy_gui = AtomicUsize::new(0);
 
     let mut strays: Vec<StrayHit> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_count)
@@ -118,6 +119,7 @@ pub(crate) fn version_strays(paths: &[PathBuf]) -> Vec<StrayHit> {
                         // different product, not our console CLI. Drop it:
                         // probing it pops a window, is slow, and it is not ours.
                         if is_legacy_gui_uffs(path) {
+                            legacy_gui.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
                         let version = if is_probeable_binary(path) {
@@ -152,6 +154,12 @@ pub(crate) fn version_strays(paths: &[PathBuf]) -> Vec<StrayHit> {
     if timed_out_count > 0 {
         dbg_line(&format!(
             "{timed_out_count} probe(s) hit the {PROBE_TIMEOUT:?} timeout and were left unversioned"
+        ));
+    }
+    let legacy_gui_count = legacy_gui.load(Ordering::Relaxed);
+    if legacy_gui_count > 0 {
+        dbg_line(&format!(
+            "{legacy_gui_count} legacy GUI `uffs.exe` copy/copies excluded (the predecessor C++ product, a different app — not removed)"
         ));
     }
     strays

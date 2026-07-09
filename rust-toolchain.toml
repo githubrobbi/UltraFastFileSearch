@@ -32,7 +32,7 @@
 # Run `just toolchain-sync` to re-attempt a channel bump; the CI
 # pipeline auto-refreshes on `ship --fresh` unless `--skip-toolchain-sync`
 # is passed.
-channel = "nightly-2026-07-06"
+channel = "nightly-2026-07-09"
 
 # Specify components that should always be available
 components = [

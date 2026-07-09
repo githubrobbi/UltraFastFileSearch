@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.25] - 2026-07-08
+
+### Changed
+
+- uninstall: shared elevation gate + privilege-UX fixes (#546)
+- build: Windows ship binaries strip the panic backtrace (build-std) (#547)
+
+### Fixed
+
+- non-elevated self-update + honest daemon stop/kill (privilege UX) (#544)
+
 ## [0.6.24] - 2026-07-07
 
 ### Changed — consistent `--version` across every UFFS binary
@@ -2669,7 +2680,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.24...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.25...HEAD
+[0.6.25]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.24...v0.6.25
 [0.6.24]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.23...v0.6.24
 [0.6.23]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.22...v0.6.23
 [0.6.18]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.17...v0.6.18

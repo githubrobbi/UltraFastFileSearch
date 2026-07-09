@@ -246,3 +246,25 @@ workflow-resume:
     @printf "\033[0;34m🔄 Resuming workflow...\033[0m\n"
     @cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- workflow-resume
 
+
+# File a port suggestion on the template repo (rust-forge-template).
+#
+# UFFS is the daily driver where scaffolding improvements are usually
+# discovered (new clippy lints, gate tweaks, workflow hardening, hook
+# fixes). When a change is generic — useful to ANY project, not just
+# UFFS — let the template know so it doesn't silently drift behind:
+#
+#   just forge-note "adopt clippy::new_lint at deny" "landed in PR #NNN; rationale ..."
+#
+# The issue lands on skyllc-ai/rust-forge-template with the
+# `upstream-port` label and a backlink to the current UFFS commit.
+forge-note TITLE BODY="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SHA=$(git rev-parse --short HEAD)
+    BRANCH=$(git branch --show-current)
+    gh issue create -R skyllc-ai/rust-forge-template \
+        --title "port: {{ TITLE }}" \
+        --label upstream-port \
+        --body "$(printf 'Port suggestion from UFFS (`%s` @ `%s`).\n\n%s\n\n---\nChecklist for the port:\n- [ ] genericize (no UFFS identifiers / product specifics)\n- [ ] apply to the template on a branch; its own gates prove it\n- [ ] update COMPONENTS.md / docs if the surface changed' "$BRANCH" "$SHA" "{{ BODY }}")"
+    printf "\033[0;32m✅ Filed on rust-forge-template (label: upstream-port)\033[0m\n"

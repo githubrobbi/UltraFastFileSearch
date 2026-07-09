@@ -21,6 +21,10 @@ const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 /// drive the underlying work in its *quiet* form so the spinner owns the line.
 #[expect(clippy::print_stdout, reason = "interactive progress spinner")]
 pub(crate) fn spinner_while<T: Send>(label: &str, body: impl FnOnce() -> T + Send) -> T {
+    // Width of the line drawn each frame ("  <glyph> <label>…      "), so the
+    // final erase covers it exactly — a fixed width shorter than the label
+    // leaves a stale tail on screen.
+    let line_width = label.chars().count() + 11;
     std::thread::scope(|scope| {
         let handle = scope.spawn(body);
         let mut frame = 0_usize;
@@ -31,7 +35,7 @@ pub(crate) fn spinner_while<T: Send>(label: &str, body: impl FnOnce() -> T + Sen
             std::thread::sleep(POLL);
             frame = frame.wrapping_add(1);
         }
-        print!("\r{:60}\r", "");
+        print!("\r{:line_width$}\r", "");
         let _flushed = std::io::stdout().flush();
         // Our closures never panic; aborting is safer than an unwrap the
         // workspace lints forbid anyway.

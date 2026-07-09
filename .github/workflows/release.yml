@@ -530,6 +530,26 @@ jobs:
           # → the native cargo build. Same flags/profile either way.
           if [[ "${{ matrix.target }}" == *musl* ]]; then
             cargo zigbuild --locked --release --target ${{ matrix.target }} --workspace --bins
+          elif [[ "${{ matrix.target }}" == *windows* ]]; then
+            # Windows-ONLY size strip: rebuild std with panic=immediate-abort +
+            # size-optimized std, so a field panic is a bare, process-local
+            # abort() with no backtrace. The gimli/addr2line DWARF machinery is
+            # ~10% of the CLI and useless on a stripped binary; a panic is a
+            # should-never-happen bug (the workspace lints forbid unwrap/panic
+            # in prod), so dropping the diagnostic is the right trade for ship.
+            # Needs nightly + rust-src (both from rust-toolchain.toml). Linux and
+            # macOS deliberately stay on the plain release profile. Measured:
+            # uffs.exe 1,292,800 -> 1,167,872 (-9.7%). See [profile.ship] in
+            # Cargo.toml.
+            cargo build --locked --profile ship \
+              -Z build-std=std,panic_abort \
+              -Z build-std-features=optimize_for_size \
+              --target ${{ matrix.target }} --workspace --bins
+            # The `ship` profile outputs to target/<triple>/ship/, but every
+            # packaging step below reads target/<triple>/release/ — mirror the
+            # built .exe files across so none of those paths need to change.
+            mkdir -p "target/${{ matrix.target }}/release"
+            cp "target/${{ matrix.target }}/ship/"*.exe "target/${{ matrix.target }}/release/"
           else
             cargo build --locked --release --target ${{ matrix.target }} --workspace --bins
           fi

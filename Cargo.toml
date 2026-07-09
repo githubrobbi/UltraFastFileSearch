@@ -1,3 +1,7 @@
+cargo-features = [
+  "panic-immediate-abort",
+] # ship profile only (needs -Z build-std)
+
 # =============================================================================
 # Cargo.toml - UFFS (Ultra Fast File Search) Workspace
 # =============================================================================
@@ -761,6 +765,34 @@ opt-level = 0
 # The workspace-level `release` profile keeps `opt-level = 3` for
 # daemon/mcp where steady-state perf dominates.
 [profile.release.package.uffs-cli]
+opt-level = "z"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ship profile — minimal panic (removes the field-useless backtrace machinery)
+# ─────────────────────────────────────────────────────────────────────────────
+# Field binaries are stripped, so a *symbolized* backtrace is dead weight — the
+# `gimli`/`addr2line` DWARF machinery inside std is ~10% of the CLI. This profile
+# rebuilds std with `panic = "immediate-abort"`, so a field panic is a bare,
+# process-local `abort()` (no message, no backtrace) — which matches the
+# workspace no-panic lint policy (panics are forbidden in prod anyway). Dev + CI
+# keep normal panics + full backtraces.
+#
+# Built ONLY with build-std (needs nightly + the `rust-src` component):
+#   cargo [xwin] build --profile ship -Z build-std=std,panic_abort --target <T>
+#
+# Measured (x86_64-pc-windows-msvc, uffs.exe): 1,292,800 → 1,167,872  (−9.7%).
+#
+# CAVEAT: `panic_immediate_abort` became a first-class panic strategy in recent
+# nightlies (it was a `-Z build-std-features` flag before), so this is unstable
+# and may need re-touching on a toolchain bump. Deliberately NOT wired into the
+# default release — opt in from the ship build when ready to own that.
+[profile.ship]
+inherits = "release"
+panic = "immediate-abort"
+
+# Per-package overrides do not inherit into a derived profile, so keep the CLI
+# size-first here too.
+[profile.ship.package.uffs-cli]
 opt-level = "z"
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -445,10 +445,20 @@ fn render_not_running(json: bool) -> Result<()> {
     );
     let pid_path = pid_file_path();
     if pid_path.exists() {
-        println!(
-            "  {}",
-            palette.dim(&format!("(stale PID file at {})", pid_path.display()))
-        );
+        // A PID file with no reachable daemon is usually stale — but not always.
+        // On Windows `is_pid_alive` confirms the PID is a live *uffsd* (a
+        // recycled PID owned by an unrelated process reads as not-alive), so a
+        // live result here means a real daemon holds the PID yet the IPC
+        // endpoint did not answer: it is still loading, or it is wedged. Say so
+        // rather than mislabeling a live daemon "stale".
+        let note = match uffs_client::daemon_ctl::parse_pid_file(&pid_path) {
+            Some((pid, ..)) if uffs_client::daemon_ctl::is_pid_alive(pid) => format!(
+                "(daemon process is alive at PID {pid} but not answering on IPC — it may \
+                 still be loading, or it is wedged; run `uffs --daemon restart` to clear it)"
+            ),
+            _ => format!("(stale PID file at {})", pid_path.display()),
+        };
+        println!("  {}", palette.dim(&note));
     }
     Ok(())
 }

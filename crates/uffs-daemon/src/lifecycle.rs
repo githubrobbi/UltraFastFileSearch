@@ -338,52 +338,83 @@ impl LifecycleManager {
         }
     }
 
-    /// Check for stale PID file on startup. Returns `true` if safe to proceed.
+    /// Check for a stale PID file on startup. Returns `true` if it is safe to
+    /// proceed (no live daemon) and `false` if another `uffsd` is genuinely
+    /// running.
     ///
-    /// Uses [`crate::lifecycle::LifecycleManager::parse_pid_file`] for
-    /// structured parsing and validates the exe
-    /// hash via [`crate::lifecycle::LifecycleManager::expected_daemon_exe_hash`] to detect stale files from
-    /// different binaries.
+    /// Thin `&self` wrapper over [`Self::check_stale_pid_at`], which holds the
+    /// (unit-tested) decision logic.
     pub(crate) fn check_stale_pid(&self) -> bool {
-        if !self.pid_path.exists() {
+        Self::check_stale_pid_at(&self.pid_path)
+    }
+
+    /// Testable core of [`Self::check_stale_pid`].
+    ///
+    /// Reads the PID file at `pid_path`, decides whether startup may proceed,
+    /// and reclaims the file as a side effect when it is stale. Split from the
+    /// `&self` wrapper so tests can point at a tempfile without building a full
+    /// [`LifecycleManager`].
+    ///
+    /// The load-bearing subtlety is the liveness test. A bare "does *a* process
+    /// with this PID exist?" is unsound on Windows: PIDs are recycled
+    /// aggressively (and a terminated process can linger as a zombie while a
+    /// handle to it stays open), so a stale PID file routinely resolves to a
+    /// live but unrelated process. Treating that as "the daemon is running"
+    /// wedges startup **forever** behind the stale file — the exact trap this
+    /// guard exists to prevent, turned inside out. So we require the live
+    /// process to actually be a `uffsd` binary (via
+    /// [`Self::is_daemon_process_alive`]) before honoring the singleton guard;
+    /// a recycled or foreign PID is treated as a stale file and reclaimed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::single_call_fn,
+            reason = "testable core split from the &self wrapper"
+        )
+    )]
+    fn check_stale_pid_at(pid_path: &std::path::Path) -> bool {
+        if !pid_path.exists() {
             return true;
         }
 
-        let Some((pid, _ts, exe_hash, _nonce)) = Self::parse_pid_file(&self.pid_path) else {
-            // Unparseable — remove and proceed
-            let _ignore = std::fs::remove_file(&self.pid_path);
+        let Some((pid, _ts, exe_hash, _nonce)) = Self::parse_pid_file(pid_path) else {
+            // Unparseable — remove and proceed.
+            let _ignore = std::fs::remove_file(pid_path);
             return true;
         };
 
         if pid == 0 {
-            let _ignore = std::fs::remove_file(&self.pid_path);
+            let _ignore = std::fs::remove_file(pid_path);
             return true;
         }
 
-        // Liveness check comes FIRST — if the process is alive, the daemon
-        // is running regardless of whether the binary was rebuilt since then.
-        if Self::is_process_alive(pid) {
+        // Honor the singleton guard only for a *verified* live daemon — not for
+        // any process that merely happens to hold this recycled PID.
+        if Self::is_daemon_process_alive(pid) {
             tracing::warn!(
                 pid,
-                "Another daemon instance is running. Use 'shutdown' to stop it first."
+                "Another uffsd daemon instance is running. Use 'shutdown' to stop it first."
             );
             return false;
         }
 
-        // Process is dead.  The exe hash is only useful for detecting
-        // leftover PID files from a *different* binary installation (e.g.
-        // after `just use-local` rebuilt everything), but only when the
-        // process is already gone.
+        // Not a running daemon: the process is gone, or its PID was recycled by
+        // a non-uffsd process. Either way the file is stale — reclaim it. The
+        // `exe_hash` only refines the log line (leftover from a different
+        // install vs. a plain dead PID); both outcomes clean up and proceed.
         let expected_hash = Self::expected_daemon_exe_hash();
         if expected_hash != 0 && exe_hash != expected_hash {
             tracing::info!(
                 pid,
-                "PID file exe hash mismatch (stale from different binary), cleaning up"
+                "Stale PID file (recorded a different binary or a recycled PID), cleaning up"
             );
         } else {
-            tracing::info!(pid, "Cleaning up stale PID file from dead process");
+            tracing::info!(
+                pid,
+                "Stale PID file (no live uffsd at this PID), cleaning up"
+            );
         }
-        let _ignore = std::fs::remove_file(&self.pid_path);
+        let _ignore = std::fs::remove_file(pid_path);
         true
     }
 
@@ -635,6 +666,185 @@ impl LifecycleManager {
         })
     }
 
+    /// Whether `pid` is a live process that is genuinely a `uffsd` daemon.
+    ///
+    /// Layers an identity check over the bare [`Self::is_process_alive`] probe:
+    /// resolve the live process's image path and confirm it names a `uffsd`
+    /// binary. This is what keeps a recycled PID — a stale PID file now
+    /// pointing at an unrelated live process — from masquerading as the
+    /// daemon and wedging startup. Mirrors the client's connect-time
+    /// identity check.
+    ///
+    /// Returns `true` only when the process is alive **and** its image is a
+    /// `uffsd` binary. A dead PID, or a live PID whose image is a different
+    /// binary, returns `false`. If the process is alive but its image path
+    /// cannot be read — rare, since the liveness probe already opened it — the
+    /// answer errs toward `true` so two daemons never race to bind the pipe;
+    /// that case is logged.
+    #[expect(
+        clippy::single_call_fn,
+        reason = "identity-liveness helper — clarity over inlining into check_stale_pid_at"
+    )]
+    fn is_daemon_process_alive(pid: u32) -> bool {
+        if !Self::is_process_alive(pid) {
+            return false;
+        }
+        let image = Self::process_image_path(pid);
+        let running = Self::pid_entry_is_running_daemon(true, image.as_deref());
+        match image.as_deref() {
+            Some(path) if !running => tracing::info!(
+                pid,
+                image = %path.display(),
+                "PID file resolves to a live non-uffsd process (recycled PID); treating as stale"
+            ),
+            None => tracing::warn!(
+                pid,
+                "PID is alive but its image path is unreadable — cannot confirm daemon \
+                 identity; assuming it is the running daemon"
+            ),
+            Some(_) => {}
+        }
+        running
+    }
+
+    /// Pure liveness-plus-identity decision, factored out for exhaustive tests.
+    ///
+    /// `alive` is the OS liveness result and `image` the resolved image path
+    /// (or `None` when it could not be read). Returns whether the PID
+    /// should count as a running daemon: alive **and** either a confirmed
+    /// `uffsd` image, or an unreadable image (conservative — see
+    /// [`Self::is_daemon_process_alive`]).
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::single_call_fn,
+            reason = "pure decision split out for exhaustive unit tests"
+        )
+    )]
+    fn pid_entry_is_running_daemon(alive: bool, image: Option<&std::path::Path>) -> bool {
+        alive && image.is_none_or(Self::is_uffsd_image)
+    }
+
+    /// Whether `path`'s file name is a recognised `uffsd` daemon binary.
+    ///
+    /// Matches the current `uffsd[.exe]` stem plus the legacy
+    /// `uffs-daemon` / `uffs_daemon` names. Compares the file **name** only, so
+    /// it is robust to the path-string differences between how the daemon
+    /// records its launch path (`current_exe`) and how a PID lookup resolves
+    /// the image (`QueryFullProcessImageNameW` / `/proc` / `proc_pidpath`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::single_call_fn,
+            reason = "identity predicate split out for unit tests"
+        )
+    )]
+    fn is_uffsd_image(path: &std::path::Path) -> bool {
+        let Some(name) = path.file_name().and_then(|osn| osn.to_str()) else {
+            return false;
+        };
+        matches!(name, "uffsd" | "uffsd.exe")
+            || name.starts_with("uffs-daemon")
+            || name.starts_with("uffs_daemon")
+    }
+
+    /// Resolve the executable image path for a live PID (Windows).
+    ///
+    /// Used only for daemon-identity verification in
+    /// [`Self::is_daemon_process_alive`]; returns `None` when the process is
+    /// gone or the OS lookup fails.
+    #[cfg(windows)]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "platform image-path probe — clarity over inlining"
+    )]
+    fn process_image_path(pid: u32) -> Option<PathBuf> {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
+        };
+
+        let mut buf = vec![0_u16; 4096];
+        let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+
+        #[expect(unsafe_code, reason = "Win32 OpenProcess FFI")]
+        // SAFETY: `OpenProcess` returns `Result<HANDLE>`; the handle is used
+        // only on success and `pid` is read-only caller input.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+
+        #[expect(unsafe_code, reason = "Win32 QueryFullProcessImageNameW FFI")]
+        // SAFETY: `handle` is a valid open process handle; `buf` and `size` live
+        // for the whole call and `size` starts at `buf.len()`.
+        let result = unsafe {
+            QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_FORMAT(0),
+                windows::core::PWSTR(buf.as_mut_ptr()),
+                core::ptr::from_mut(&mut size),
+            )
+        };
+
+        #[expect(unsafe_code, reason = "CloseHandle for the owned Win32 handle")]
+        // SAFETY: `handle` was returned by `OpenProcess` above and is closed
+        // exactly once here.
+        let _close = unsafe { CloseHandle(handle) };
+
+        if result.is_err() || size == 0 {
+            return None;
+        }
+        // `size` is the UTF-16 code-unit count written, always ≤ `buf.len()`;
+        // `.get()` stays panic-free. `OsString::from_wide` decodes losslessly —
+        // no U+FFFD mangling before the identity comparison.
+        let slice = buf.get(..size as usize)?;
+        Some(PathBuf::from(std::ffi::OsString::from_wide(slice)))
+    }
+
+    /// Resolve the executable image path for a live PID (macOS, via
+    /// `proc_pidpath`).
+    #[cfg(target_os = "macos")]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "platform image-path probe — clarity over inlining"
+    )]
+    fn process_image_path(pid: u32) -> Option<PathBuf> {
+        let mut buf = vec![0_u8; 4096];
+        let c_pid = i32::try_from(pid).ok()?;
+        let buf_size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        #[expect(unsafe_code, reason = "proc_pidpath requires unsafe FFI")]
+        // SAFETY: `proc_pidpath` is a documented macOS API (libproc.h); it is
+        // passed an owned buffer and its true capacity.
+        let len =
+            unsafe { libc::proc_pidpath(c_pid, buf.as_mut_ptr().cast::<libc::c_void>(), buf_size) };
+        let len_usize = usize::try_from(len).ok().filter(|&val| val > 0)?;
+        let path = core::str::from_utf8(buf.get(..len_usize)?).ok()?;
+        Some(PathBuf::from(path))
+    }
+
+    /// Resolve the executable image path for a live PID (Linux, via
+    /// `/proc/<pid>/exe`).
+    #[cfg(target_os = "linux")]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "platform image-path probe — clarity over inlining"
+    )]
+    fn process_image_path(pid: u32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+
+    /// Fallback: process image paths cannot be resolved on this platform, so
+    /// daemon identity cannot be confirmed (callers degrade gracefully).
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    #[expect(
+        clippy::single_call_fn,
+        reason = "platform image-path probe — clarity over inlining"
+    )]
+    fn process_image_path(_pid: u32) -> Option<PathBuf> {
+        None
+    }
+
     /// `FNV-1a` hash of the current executable path (S4.3.1).
     #[expect(
         clippy::single_call_fn,
@@ -761,6 +971,121 @@ mod tests {
         drop(std::fs::create_dir_all(&dir));
         let (events_tx, _rx) = events::event_channel();
         LifecycleManager::new(&dir, timeout, events_tx)
+    }
+
+    // ── stale-PID identity liveness (recycled-PID lockout regression) ─────
+
+    #[test]
+    fn is_uffsd_image_matches_only_daemon_binaries() {
+        use std::path::Path;
+        // Forward slashes are separators on every target (Windows accepts them
+        // too), so these assertions exercise the file-name logic identically on
+        // the CI host and on Windows.
+        //
+        // Current + legacy daemon names, with and without the .exe suffix.
+        assert!(LifecycleManager::is_uffsd_image(Path::new(
+            "C:/bin/uffsd.exe"
+        )));
+        assert!(LifecycleManager::is_uffsd_image(Path::new(
+            "/usr/bin/uffsd"
+        )));
+        assert!(LifecycleManager::is_uffsd_image(Path::new(
+            "/opt/uffs-daemon"
+        )));
+        assert!(LifecycleManager::is_uffsd_image(Path::new(
+            "/opt/uffs_daemon.exe"
+        )));
+        // Sibling UFFS binaries and unrelated processes must NOT match — this is
+        // what makes a recycled PID read as "not our daemon".
+        assert!(!LifecycleManager::is_uffsd_image(Path::new(
+            "/usr/bin/uffs"
+        )));
+        assert!(!LifecycleManager::is_uffsd_image(Path::new(
+            "C:/x/uffs.exe"
+        )));
+        assert!(!LifecycleManager::is_uffsd_image(Path::new(
+            "C:/x/uffsmcp.exe"
+        )));
+        assert!(!LifecycleManager::is_uffsd_image(Path::new(
+            "C:/x/chrome.exe"
+        )));
+        // On Windows, backslash is the native separator — confirm real
+        // `\`-delimited image paths (as returned by the OS) resolve too.
+        #[cfg(windows)]
+        {
+            assert!(LifecycleManager::is_uffsd_image(Path::new(
+                r"C:\Users\rnio\bin\uffsd.exe"
+            )));
+            assert!(!LifecycleManager::is_uffsd_image(Path::new(
+                r"C:\Windows\explorer.exe"
+            )));
+        }
+    }
+
+    #[test]
+    fn pid_entry_running_daemon_covers_every_branch() {
+        use std::path::Path;
+        let uffsd = Path::new("/usr/bin/uffsd");
+        let other = Path::new("/usr/bin/chrome");
+        // Dead process is never a running daemon, whatever the image resolves to.
+        assert!(!LifecycleManager::pid_entry_is_running_daemon(
+            false,
+            Some(uffsd)
+        ));
+        assert!(!LifecycleManager::pid_entry_is_running_daemon(false, None));
+        // Alive + confirmed uffsd image → running.
+        assert!(LifecycleManager::pid_entry_is_running_daemon(
+            true,
+            Some(uffsd)
+        ));
+        // Alive + a *different* live process (recycled PID) → NOT running: this
+        // is the case that used to wedge startup forever.
+        assert!(!LifecycleManager::pid_entry_is_running_daemon(
+            true,
+            Some(other)
+        ));
+        // Alive but image unreadable → conservative "assume running" so two
+        // daemons never race to bind the same pipe.
+        assert!(LifecycleManager::pid_entry_is_running_daemon(true, None));
+    }
+
+    #[test]
+    fn check_stale_pid_reclaims_dead_pid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pid_path = dir.path().join("daemon.pid");
+        // A PID that is never live (just below u32::MAX; invalid on every OS we
+        // target). Format: pid\n timestamp \n exe_hash \n nonce \n
+        std::fs::write(&pid_path, "4294967294\n0\n0\nnonce\n").expect("write pid file");
+        assert!(
+            LifecycleManager::check_stale_pid_at(&pid_path),
+            "a dead recorded PID must be treated as a stale file and reclaimed"
+        );
+        assert!(!pid_path.exists(), "the stale PID file must be removed");
+    }
+
+    #[test]
+    fn check_stale_pid_reclaims_unparseable_and_zero_pid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Garbage contents — unparseable.
+        let junk = dir.path().join("junk.pid");
+        std::fs::write(&junk, "not-a-pid-file").expect("write junk");
+        assert!(LifecycleManager::check_stale_pid_at(&junk));
+        assert!(!junk.exists(), "unparseable PID file must be removed");
+        // Explicit PID 0.
+        let zero = dir.path().join("zero.pid");
+        std::fs::write(&zero, "0\n0\n0\nnonce\n").expect("write zero");
+        assert!(LifecycleManager::check_stale_pid_at(&zero));
+        assert!(!zero.exists(), "PID-0 file must be removed");
+    }
+
+    #[test]
+    fn check_stale_pid_missing_file_is_safe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.pid");
+        assert!(
+            LifecycleManager::check_stale_pid_at(&missing),
+            "no PID file → safe to start"
+        );
     }
 
     // ── effective_timeout_from_tier ──────────────────────────────────────

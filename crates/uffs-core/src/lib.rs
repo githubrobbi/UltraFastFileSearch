@@ -126,6 +126,7 @@ pub mod compact_loader;
 pub(crate) mod compact_mmap;
 pub mod compact_storage;
 pub(crate) mod compiled_pattern;
+pub mod diff;
 mod error;
 mod export;
 pub mod extensions;

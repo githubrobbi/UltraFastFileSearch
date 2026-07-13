@@ -23,6 +23,9 @@ pub(crate) mod daemon_status;
 /// under the 800-LOC policy ceiling.  Forward-looking: 8-D `forget`
 /// and 8-E `status_drives` will land their shims here as well.
 pub(crate) mod daemon_tiering;
+/// `uffs --deleted --mft-file <PATH>` — forensic tombstone read (deleted
+/// files).
+pub(crate) mod deleted;
 /// `uffs --diff <BASELINE> --drive <D>` — snapshot delete-visibility diff.
 pub(crate) mod diff;
 /// Shared elevation gate for the mutating flows (uninstall / update): surface

@@ -753,7 +753,10 @@ fn format_filetime_with_tz(filetime: i64, tz_offset_secs: i32) -> String {
 /// fallback path was configured.  CSV / parity / custom formatters
 /// take their offset from the config (`--tz-offset`) via
 /// [`format_filetime_with_tz`] instead.
-fn format_filetime_local(filetime: i64) -> String {
+///
+/// `pub(crate)` so the forensic `--deleted` command reuses the exact same
+/// wall-clock rendering as the search table.
+pub(crate) fn format_filetime_local(filetime: i64) -> String {
     format_filetime_with_tz(filetime, *LOCAL_TZ_OFFSET_SECS)
 }
 

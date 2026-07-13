@@ -505,6 +505,7 @@ COMMANDS:
   --stats [PATH]       Show filesystem statistics
   --agg <PRESET>       Run aggregate analytics
   --diff <BASELINE>    Diff a baseline MFT snapshot vs the live index (deletes)
+  --deleted            Forensic tombstone read: recently-deleted files from an MFT
   --daemon <ACTION>    Manage the UFFS daemon (start/stop/load/status)
   --mcp <ACTION>       Manage the UFFS MCP server
   --update [ACTION]    Self-update (snapshot/acquire/apply/doctor/recover)
@@ -650,6 +651,40 @@ EXAMPLE:
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 pub(crate) fn print_diff_help() {
     print!("{DIFF_HELP}");
+}
+
+/// Help text for `uffs --deleted`.
+const DELETED_HELP: &str = "\
+uffs --deleted — Forensic tombstone read (recently-deleted files)
+
+When NTFS deletes a file it clears the in-use flag but leaves the record (name,
+parent, timestamps) intact until the MFT slot is reused. This surfaces those
+not-in-use records as recently-deleted tombstones and reconstructs each path
+from the surviving parent chain. No baseline needed.
+
+USAGE:  uffs --deleted --mft-file <PATH> [OPTIONS]
+
+OPTIONS:
+  --mft-file <PATH>    MFT capture to scan (required; a live --drive scan is
+                       not wired yet).
+  -d, --drive <D>      Drive letter to label reconstructed paths with.
+  -n, --limit <N>      Max tombstones to print (0 = all).
+  --json               Emit JSON instead of a table.
+
+LIMITS (best-effort by nature):
+  - Only deletes whose MFT slot has NOT been recycled are visible.
+  - The timestamp is the file's last-write time, NOT the deletion time.
+  - A path is unreliable if a parent directory's slot was itself reused
+    (such paths are prefixed with `…`).
+
+EXAMPLE:
+  uffs --deleted --mft-file C_mft.bin --drive C --limit 50
+";
+
+/// Print deleted help.
+#[expect(clippy::print_stdout, reason = "intentional help output")]
+pub(crate) fn print_deleted_help() {
+    print!("{DELETED_HELP}");
 }
 
 /// Help text for `uffs --agg`.

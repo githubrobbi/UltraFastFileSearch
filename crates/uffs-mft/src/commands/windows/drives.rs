@@ -24,7 +24,6 @@
 use anyhow::{Context as _, Result};
 use uffs_mft::u64_to_f64;
 
-use super::shared::drive_type_label;
 use crate::cli::OutputFormat;
 use crate::display::{format_bytes, format_number_commas, truncate_string};
 
@@ -58,13 +57,12 @@ struct DriveInfo {
 #[cfg(windows)]
 pub(crate) async fn cmd_drives(format: OutputFormat) -> Result<()> {
     use tracing::debug;
-    use uffs_mft::platform::detect_ntfs_drives;
 
     debug!("🔍 Detecting NTFS drives...");
 
-    let drives = detect_ntfs_drives();
+    let drive_infos = collect_drive_infos();
 
-    if drives.is_empty() {
+    if drive_infos.is_empty() {
         debug!("❌ No NTFS drives found");
         if matches!(format, OutputFormat::Json) {
             println!("[]");
@@ -75,12 +73,10 @@ pub(crate) async fn cmd_drives(format: OutputFormat) -> Result<()> {
     }
 
     debug!(
-        count = drives.len(),
+        count = drive_infos.len(),
         "✅ Found {} NTFS drive(s)",
-        drives.len()
+        drive_infos.len()
     );
-
-    let drive_infos = collect_drive_infos(&drives);
 
     // JSON consumers (e.g. the benchmark report) get the machine form and
     // skip the human table entirely.
@@ -92,65 +88,60 @@ pub(crate) async fn cmd_drives(format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// Query type, label, capacity, and `$MFT` statistics for each drive.
+/// Build the per-drive table rows: the non-privileged physical summary from
+/// [`uffs_mft::platform::physical_drives`] (type, label, capacity, used,
+/// free) augmented with `$MFT` geometry.
 ///
-/// Drives whose volume handle cannot be opened (insufficient privileges,
-/// dismounted volume) are silently skipped — the listing is best-effort.
+/// The `$MFT` columns need an opened volume handle (Administrator or the
+/// Access Broker), so they are best-effort — a drive whose handle cannot be
+/// opened still lists its physical facts and reports zero MFT stats, rather
+/// than being dropped from the table.
 #[cfg(windows)]
-fn collect_drive_infos(drives: &[uffs_mft::platform::DriveLetter]) -> Vec<DriveInfo> {
+fn collect_drive_infos() -> Vec<DriveInfo> {
     use tracing::debug;
-    use uffs_mft::platform::{VolumeHandle, detect_drive_type, is_boot_drive};
+    use uffs_mft::platform::{VolumeHandle, physical_drives};
 
-    let mut drive_infos: Vec<DriveInfo> = Vec::new();
-
-    for drive in drives {
-        // Detect drive type
-        let drive_type = detect_drive_type(*drive);
-        let drive_type_str = drive_type_label(drive_type, "???");
-
-        // Get volume label
-        let label = get_volume_label(*drive).unwrap_or_default();
-
-        // Try to get volume info for each drive
-        if let Ok(handle) = VolumeHandle::open(*drive) {
-            let vol_data = handle.volume_data();
-            let total_size = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
-            let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
-            let used_space = total_size.saturating_sub(free_space);
-            let used_pct = if total_size > 0 {
-                (u64_to_f64(used_space) / u64_to_f64(total_size)) * 100.0
-            } else {
-                0.0
-            };
-            let mft_size = vol_data.mft_valid_data_length;
-            let mft_records = mft_size / u64::from(vol_data.bytes_per_file_record_segment);
+    physical_drives()
+        .into_iter()
+        .map(|drive| {
+            let (mft_size, mft_records) =
+                VolumeHandle::open(drive.letter)
+                    .ok()
+                    .map_or((0, 0), |handle| {
+                        let vol_data = handle.volume_data();
+                        let size = vol_data.mft_valid_data_length;
+                        let records = size / u64::from(vol_data.bytes_per_file_record_segment);
+                        (size, records)
+                    });
 
             debug!(
-                drive = %drive,
-                label = %label,
-                drive_type = drive_type_str,
-                total_size,
-                free_space,
+                drive = %drive.letter,
+                label = %drive.label,
+                drive_type = drive.type_label(),
+                total_size = drive.total_bytes,
+                free_space = drive.free_bytes,
                 mft_records,
                 "📁 Drive details"
             );
 
-            drive_infos.push(DriveInfo {
-                letter: *drive,
-                is_boot: is_boot_drive(*drive),
-                label,
-                drive_type: drive_type_str.to_owned(),
-                total_size,
-                free_space,
-                used_space,
+            // Read the borrow-dependent fields before moving `drive.label`
+            // into the struct (avoids a partial-move of `drive`).
+            let drive_type = drive.type_label().to_owned();
+            let used_pct = drive.used_pct();
+            DriveInfo {
+                letter: drive.letter,
+                is_boot: drive.is_boot,
+                label: drive.label,
+                drive_type,
+                total_size: drive.total_bytes,
+                free_space: drive.free_bytes,
+                used_space: drive.used_bytes,
                 used_pct,
                 mft_size,
                 mft_records,
-            });
-        }
-    }
-
-    drive_infos
+            }
+        })
+        .collect()
 }
 
 /// Print the human-readable drives summary table with a totals row.
@@ -283,49 +274,4 @@ fn print_drives_json(drive_infos: &[DriveInfo]) -> Result<()> {
     let json = serde_json::to_string_pretty(&records).context("serialising drives to JSON")?;
     println!("{json}");
     Ok(())
-}
-
-/// Look up the volume label for `drive` via `GetVolumeInformationW`.
-///
-/// Returns `None` if the call fails or the volume has no label set.
-#[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "required for windows ffi call to GetVolumeInformationW"
-)]
-fn get_volume_label(drive: uffs_mft::platform::DriveLetter) -> Option<String> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt as _;
-
-    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
-    use windows::core::PCWSTR;
-
-    let root_path: Vec<u16> = format!("{drive}:\\")
-        .encode_utf16()
-        .chain(core::iter::once(0))
-        .collect();
-
-    let mut volume_name_buf = [0_u16; 261];
-
-    // SAFETY: `root_path` is a NUL-terminated UTF-16 buffer kept alive for the
-    // call duration; `volume_name_buf` is a writable 261-element stack buffer
-    // matching the Win32 maximum volume-name length; the remaining four
-    // optional out-parameters are documented as accepting `None`.
-    let result = unsafe {
-        GetVolumeInformationW(
-            PCWSTR::from_raw(root_path.as_ptr()),
-            Some(&mut volume_name_buf),
-            None,
-            None,
-            None,
-            None,
-        )
-    };
-
-    result.is_ok().then(|| {
-        let len = volume_name_buf.iter().position(|&c| c == 0).unwrap_or(0);
-        let name_slice = volume_name_buf.get(..len).unwrap_or(&[]);
-        let label = OsString::from_wide(name_slice);
-        label.to_string_lossy().to_string()
-    })
 }

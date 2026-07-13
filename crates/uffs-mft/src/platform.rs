@@ -44,6 +44,7 @@ pub mod metafile;
 pub mod metafile_decode;
 /// Live-volume NTFS metafile readers ($Boot, $DATA streams, $UsnJrnl).
 pub mod metafile_read;
+mod physical;
 /// Native Windows process introspection for the self-update detector.
 ///
 /// Image path + pid enumeration — keeps the `unsafe` FFI out of `uffs-cli`.
@@ -62,6 +63,7 @@ pub use extents::MftExtent;
 pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
+pub use physical::{PhysicalDrive, physical_drives};
 pub use system::DriveType;
 // Caller's effective uid — Unix-only; lets daemon-management compare the
 // caller against the running daemon's owner (its PID-file uid).

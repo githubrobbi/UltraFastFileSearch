@@ -31,7 +31,6 @@
 use anyhow::{Context as _, Result};
 use uffs_mft::{MftReader, bytes_to_mb_f64, u64_to_f64, usize_to_u64};
 
-use super::shared::drive_type_label;
 use crate::cli::OutputFormat;
 use crate::display::{format_bytes, format_duration, format_number_commas};
 
@@ -70,7 +69,7 @@ pub(crate) async fn cmd_info(
 
     // Detect drive type for display
     let drive_type = detect_drive_type(drive);
-    let drive_type_str = drive_type_label(drive_type, "Unknown");
+    let drive_type_str = drive_type.label();
     debug!(drive = %drive, drive_type = drive_type_str, "🚀 Drive type detected");
 
     let vol_data = handle.volume_data();

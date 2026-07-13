@@ -361,6 +361,22 @@ pub enum DriveType {
 }
 
 impl DriveType {
+    /// Short human display label for this medium (`"NVMe"`, `"SSD"`, `"HDD"`,
+    /// `"Removable"`, `"Virtual"`, `"Unknown"`). Shared by the `uffs-mft
+    /// drives` table and the `uffs --daemon status -v` physical view so both
+    /// surfaces name drive kinds identically.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Nvme => "NVMe",
+            Self::Ssd => "SSD",
+            Self::Hdd => "HDD",
+            Self::Removable => "Removable",
+            Self::Virtual => "Virtual",
+            Self::Unknown => "Unknown",
+        }
+    }
+
     /// Returns the optimal chunk size for this drive type.
     #[must_use]
     pub const fn optimal_chunk_size(self) -> usize {

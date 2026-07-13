@@ -50,7 +50,6 @@ use anyhow::{Context as _, Result};
 use tracing::info;
 use uffs_mft::{u64_to_f64, usize_to_u64};
 
-use super::shared::drive_type_label;
 use crate::display::{clean_path_for_display, format_bytes, format_duration, format_number_commas};
 
 // ============================================================================
@@ -96,7 +95,7 @@ pub(crate) async fn cmd_save(
     let vol_data = handle.volume_data();
 
     let drive_type = detect_drive_type(drive);
-    let drive_type_str = drive_type_label(drive_type, "Unknown");
+    let drive_type_str = drive_type.label();
 
     // Calculate metrics
     let record_count =
@@ -233,7 +232,7 @@ async fn cmd_save_iocp(
     let vol_data = handle.volume_data();
 
     let drive_type = detect_drive_type(drive);
-    let drive_type_str = drive_type_label(drive_type, "Unknown");
+    let drive_type_str = drive_type.label();
 
     // Calculate metrics
     let record_count =

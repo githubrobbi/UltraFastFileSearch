@@ -23,7 +23,8 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::compact::{CompactRecord, DriveCompactIndex};
+use crate::compact::{CompactRecord, DriveCompactIndex, MalformedRender};
+use crate::search::tree::resolve_path;
 
 /// The classified delta between a baseline and a current compact index.
 ///
@@ -156,6 +157,94 @@ pub fn diff_indexes(baseline: &DriveCompactIndex, current: &DriveCompactIndex) -
 #[inline]
 fn len_to_u32(idx: usize) -> u32 {
     uffs_mft::len_to_u32(idx)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Path-resolved surface (what the daemon RPC / CLI consume)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// One classified change with its row resolved to a full path and the metadata
+/// a caller needs to render it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeltaEntry {
+    /// Full path (`C:\Users\…\file.ext`), reconstructed by walking the parent
+    /// chain in the side the row belongs to (baseline for deletes, current for
+    /// adds/modifies).
+    pub path: String,
+    /// Logical file size in bytes. For a modify this is the *current* size; for
+    /// a delete it is the last-known size from the baseline.
+    pub size: u64,
+    /// Last-write time (Unix microseconds), from the same side as `path`.
+    pub modified: i64,
+}
+
+/// A [`DeltaReport`] with every row index resolved to a full path + metadata —
+/// the presentation-ready form the daemon returns over the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedDelta {
+    /// Files present in the current index but not the baseline (created).
+    pub added: Vec<DeltaEntry>,
+    /// Files present in the baseline but not the current (deleted).
+    pub deleted: Vec<DeltaEntry>,
+    /// Files in both whose `size` or `modified` timestamp changed.
+    pub modified: Vec<DeltaEntry>,
+    /// `true` when `limit` capped at least one class (more rows exist than were
+    /// returned). `false` means every classified row is present.
+    pub truncated: bool,
+}
+
+/// Diff two loaded indexes and resolve each classified row to a full path.
+///
+/// `limit` caps **each class independently** (`0` = unlimited); `truncated` is
+/// set when any class had more rows than `limit`. Adds and modifies resolve
+/// against `current`; deletes resolve against `baseline` — see [`DeltaReport`]
+/// for why each side owns its rows.
+#[must_use]
+pub fn resolve_delta(
+    baseline: &DriveCompactIndex,
+    current: &DriveCompactIndex,
+    limit: usize,
+) -> ResolvedDelta {
+    let report = diff_indexes(baseline, current);
+    let mut truncated = false;
+    let added = resolve_class(current, &report.added, limit, &mut truncated);
+    let deleted = resolve_class(baseline, &report.deleted, limit, &mut truncated);
+    let modified = resolve_class(current, &report.modified, limit, &mut truncated);
+    ResolvedDelta {
+        added,
+        deleted,
+        modified,
+        truncated,
+    }
+}
+
+/// Resolve one class's row indices against `drive`, capping at `limit`
+/// (`0` = unlimited) and flagging `truncated` when the cap drops any rows.
+fn resolve_class(
+    drive: &DriveCompactIndex,
+    indices: &[u32],
+    limit: usize,
+    truncated: &mut bool,
+) -> Vec<DeltaEntry> {
+    let prefix = format!("{}:\\", drive.letter);
+    let capped = if limit > 0 && indices.len() > limit {
+        *truncated = true;
+        indices.get(..limit).unwrap_or(indices)
+    } else {
+        indices
+    };
+    capped
+        .iter()
+        .filter_map(|&raw_idx| {
+            let idx = raw_idx as usize;
+            let rec = drive.records.get(idx)?;
+            Some(DeltaEntry {
+                path: resolve_path(drive, idx, &prefix, MalformedRender::Lossy),
+                size: rec.size,
+                modified: rec.modified,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -302,5 +391,129 @@ mod tests {
         };
         assert!(!one.is_empty());
         assert_eq!(one.len(), 1);
+    }
+
+    // ── Path-resolved surface ────────────────────────────────────────────
+
+    use alloc::sync::Arc;
+    use std::path::PathBuf;
+
+    use uffs_text::case_fold::CaseFold;
+
+    use super::resolve_delta;
+    use crate::compact::{ChildrenIndex, DriveCompactIndex, ExtensionIndex, IndexSource};
+    use crate::compact_storage::ColumnStorage;
+    use crate::trigram::TrigramIndex;
+
+    /// Shared names blob for the resolution fixtures:
+    /// `C`[0..1] `docs`[1..5] `a.txt`[5..10] `b.txt`[10..15] `c.txt`[15..20].
+    const NAMES: &[u8] = b"Cdocsa.txtb.txtc.txt";
+
+    /// A leaf-file record under `docs` (idx 1) with the given identity + size.
+    fn file(name_offset: u32, first: u8, frs: u64, size: u64, modified: i64) -> CompactRecord {
+        CompactRecord {
+            size,
+            modified,
+            file_ref: CompactRecord::pack_file_reference(frs, 1),
+            name_offset,
+            parent_idx: 1,
+            name_len: 5,
+            name_first_byte: first,
+            ..CompactRecord::default()
+        }
+    }
+
+    /// Build a resolvable drive: root `C` (idx0), dir `docs` (idx1), then the
+    /// given leaf files (idx2..). Root/dir carry no diff identity (`file_ref`
+    /// 0 / an unchanging dir ref), so only the leaves drive the delta.
+    fn drive(files: Vec<CompactRecord>) -> DriveCompactIndex {
+        let mut records = vec![
+            CompactRecord {
+                name_offset: 0,
+                flags: 0x10,
+                parent_idx: u32::MAX,
+                name_len: 1,
+                name_first_byte: b'C',
+                ..CompactRecord::default()
+            },
+            CompactRecord {
+                file_ref: CompactRecord::pack_file_reference(100, 1),
+                name_offset: 1,
+                flags: 0x10,
+                parent_idx: 0,
+                name_len: 4,
+                name_first_byte: b'd',
+                ..CompactRecord::default()
+            },
+        ];
+        records.extend(files);
+        let names = NAMES.to_vec();
+        let fold = CaseFold::default_table();
+        let trigram = TrigramIndex::build(&records, &names, fold);
+        let children = ChildrenIndex::build(&records);
+        let ext_index = ExtensionIndex::build(&records);
+        DriveCompactIndex {
+            letter: uffs_mft::platform::DriveLetter::C,
+            records: ColumnStorage::from_vec(records),
+            names: ColumnStorage::from_vec(names),
+            trigram: Arc::new(trigram),
+            children: Arc::new(children),
+            ext_index: Arc::new(ext_index),
+            fold,
+            ext_names: vec![Box::from("")],
+            source: IndexSource::MftFile(PathBuf::from("C:")),
+            source_epoch: 1,
+            bloom: None,
+            path_trie: None,
+            frs_to_compact: Vec::new(),
+            delta: None,
+        }
+    }
+
+    #[test]
+    fn resolve_delta_classifies_and_resolves_full_paths() {
+        // baseline: a.txt (200), b.txt (201).
+        let baseline = drive(vec![
+            file(5, b'a', 200, 100, 5),
+            file(10, b'b', 201, 200, 6),
+        ]);
+        // current: a.txt grew (modified), b.txt gone (delete), c.txt new (add).
+        let current = drive(vec![file(5, b'a', 200, 999, 5), file(15, b'c', 202, 50, 9)]);
+
+        let delta = resolve_delta(&baseline, &current, 0);
+
+        assert_eq!(delta.added.len(), 1, "c.txt is the only add");
+        let added = delta.added.first().expect("one add");
+        assert!(added.path.ends_with("docs\\c.txt"), "{:?}", added.path);
+        assert_eq!(added.size, 50);
+
+        assert_eq!(delta.deleted.len(), 1, "b.txt is the only delete");
+        let deleted = delta.deleted.first().expect("one delete");
+        assert!(deleted.path.ends_with("docs\\b.txt"), "{:?}", deleted.path);
+        assert_eq!(deleted.size, 200, "delete carries the baseline size");
+
+        assert_eq!(delta.modified.len(), 1, "a.txt is the only modify");
+        let modified = delta.modified.first().expect("one modify");
+        assert!(
+            modified.path.ends_with("docs\\a.txt"),
+            "{:?}",
+            modified.path
+        );
+        assert_eq!(modified.size, 999, "modify carries the current size");
+
+        assert!(!delta.truncated, "no limit → nothing truncated");
+    }
+
+    #[test]
+    fn resolve_delta_limit_caps_each_class_and_flags_truncation() {
+        // Two adds; a limit of 1 keeps one and marks the delta truncated.
+        let baseline = drive(vec![]);
+        let current = drive(vec![file(5, b'a', 200, 1, 1), file(10, b'b', 201, 2, 2)]);
+        let delta = resolve_delta(&baseline, &current, 1);
+        assert_eq!(delta.added.len(), 1, "limit 1 keeps a single add");
+        assert!(
+            delta.truncated,
+            "dropping the second add must flag truncation"
+        );
     }
 }

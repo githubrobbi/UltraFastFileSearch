@@ -407,17 +407,28 @@ mod tests {
     /// without masking a genuine regression.
     #[test]
     fn drop_is_prompt_when_guard_is_disarmed() {
-        let guard = WindowsDeadlineGuard::new(Duration::from_mins(1))
-            .expect("guard construction must succeed on a healthy Windows box");
-        let start = std::time::Instant::now();
-        drop(guard);
-        let elapsed = start.elapsed();
+        // A single wall-clock sample is flaky on a loaded CI Windows runner
+        // (AV / scheduler jitter can push one drop past 10 ms). Take the
+        // *minimum* across several iterations instead: the instant-wake floor
+        // is < 1 ms, while a regression to the old `thread::sleep(50 ms)` poll
+        // would put even the fastest drop near 48 ms — so the min cleanly
+        // separates healthy from regressed regardless of per-sample jitter.
+        let min_drop = (0..8_u32)
+            .map(|_| {
+                let guard = WindowsDeadlineGuard::new(Duration::from_mins(1))
+                    .expect("guard construction must succeed on a healthy Windows box");
+                let start = std::time::Instant::now();
+                drop(guard);
+                start.elapsed()
+            })
+            .min()
+            .expect("at least one sample");
         assert!(
-            elapsed < Duration::from_millis(10),
-            "drop took {elapsed:?}; regression beyond 10 ms means the mpsc-channel \
-             shutdown wake is gone. Run 11 bisect: before the channel fix the \
-             watchdog used `thread::sleep(50 ms)` and the CLI hot path paid \
-             48 ms median on every invocation.",
+            min_drop < Duration::from_millis(10),
+            "fastest drop over 8 iters was {min_drop:?}; a floor beyond 10 ms means \
+             the mpsc-channel shutdown wake is gone. Run 11 bisect: before the \
+             channel fix the watchdog used `thread::sleep(50 ms)` and the CLI hot \
+             path paid 48 ms median on every invocation.",
         );
     }
 

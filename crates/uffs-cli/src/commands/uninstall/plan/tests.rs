@@ -330,10 +330,21 @@ fn size_binaries_fills_only_binary_delete_items_from_the_sizer() {
 #[test]
 fn ensure_daemon_shutdown_injects_a_stop_before_the_runtime_binaries() {
     // No daemon was running when the plan was built (the deep sweep starts one
-    // afterwards), so the plan has no daemon stop — but it does have runtime
-    // binaries whose image the sweep-started daemon would lock.
+    // afterwards), so the plan has no daemon stop — but the root holds a
+    // RUNTIME binary (uffsd, the daemon image the sweep-started daemon would
+    // lock), so a "Runtime binaries (after shutdown)" group forms and the
+    // shutdown-before-runtime ordering is actually exercised. The shared
+    // `root()` helper's default `uffs` is a *tool* stem that lands in the
+    // "Binaries" group and forms no runtime group — the pre-existing bug this
+    // `#[cfg(windows)]`, never-run-in-CI test hid until the workspace was first
+    // tested natively on Windows.
+    let mut install_root = root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin");
+    install_root.binaries.push(BinaryInfo {
+        name: "uffsd".to_owned(),
+        version: Some("0.6.16".to_owned()),
+    });
     let report = DetectionReport {
-        roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
+        roots: vec![install_root],
         running: Vec::new(),
     };
     let mut plan = built(

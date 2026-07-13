@@ -377,7 +377,12 @@ mod tests {
         // Pass the dir twice: it must still be added exactly once (deduped).
         super::add_roots_for_dirs(&mut report, &[dir.clone(), dir.clone()]);
 
-        let key = std::fs::canonicalize(&dir).unwrap();
+        // `add_roots_for_dirs` stores the verbatim-stripped canonical path
+        // (`C:\…`), so the expected key must strip too — on Windows
+        // `canonicalize` yields the `\\?\C:\…` verbatim form, which would never
+        // match the stored key. `strip_verbatim_prefix` is a no-op off Windows.
+        let key =
+            crate::commands::update::strip_verbatim_prefix(std::fs::canonicalize(&dir).unwrap());
         let matching: Vec<_> = report.roots.iter().filter(|root| root.dir == key).collect();
         assert_eq!(
             matching.len(),

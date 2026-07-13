@@ -640,11 +640,13 @@ jobs:
         run: cargo-machete --skip-target-dir
 
   # ─────────────────────────────────────────────────────────────────────
-  # windows-lint — native Windows clippy gate on `windows-latest`.
+  # windows-lint — native Windows clippy + test gate on `windows-latest`.
   # Authoritative cross-target lint gate (local xwin is advisory — see
   # dev-flow-implementation-plan.md § 1.3.3).  Replaces the weekly
   # Tier 2 Windows job; Tier 2 drops that job in the same PR as Phase
-  # 4b housekeeping.
+  # 4b housekeeping. Also runs the workspace test suite natively on
+  # Windows (2026-07-13) so cross-platform-logic bugs that only bite on
+  # Windows are caught in the merge queue, not the nightly Tier 2 run.
   #
   # Phase W5.5 of windows-clippy-and-linux-cross-plan.md flipped this
   # job from `cargo check` → `cargo clippy -- -D warnings`.  The
@@ -653,11 +655,11 @@ jobs:
   # strict flag stack now passes natively on `windows-latest`.
   # ─────────────────────────────────────────────────────────────────────
   windows-lint:
-    name: Windows clippy
+    name: Windows clippy + tests
     runs-on: windows-latest
     needs: [classify, sanity]
     if: needs.classify.outputs.code == 'true' && github.event_name != 'pull_request'
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       # Windows-appropriate target-cpu baseline (same as release.yml's
       # Windows matrix rows).  DO NOT use target-cpu=native here — it
@@ -678,6 +680,19 @@ jobs:
       # locally (cargo-xwin variant).  Native Windows runs natively here;
       # local xwin remains the developer-loop equivalent.
       - run: cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
+
+      # Windows test run (added 2026-07-13). The workspace is full of
+      # cross-platform pure-logic tests that had only ever run on ubuntu, so a
+      # bug that manifests only on Windows — an absent-path `secure_remove`, a
+      # verbatim `\\?\` path assumption, a `#[cfg(windows)]` test that never ran
+      # in CI — slipped through to the nightly Tier 2 run (or not at all).
+      # Exercise the same suite natively on Windows in the merge queue so the
+      # class is caught before merge. Mirrors the ubuntu `tests` job's
+      # invocation; `#[ignore]`d live-MFT tests still skip.
+      - uses: taiki-e/install-action@dfc84ffb7254b048a0a843316ff5a2714dcdc7bd # v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --workspace --all-features --lib --tests --profile ci --locked
 
   # ─────────────────────────────────────────────────────────────────────
   # required — sole branch-protection target (post-2026-04-23 cutover).

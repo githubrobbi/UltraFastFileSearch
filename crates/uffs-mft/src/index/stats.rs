@@ -155,10 +155,13 @@ impl MftStats {
         if self.dir_count == 0 {
             return 5;
         }
-        // Integer log2: number of bits needed to represent dir_count.
-        // u32::BITS - leading_zeros gives the position of the highest set bit.
-        let log2 = (u32::BITS - self.dir_count.leading_zeros()) as usize;
-        (log2 + 1).clamp(3, 20) // +1 instead of +2 because ilog2 rounds down
+        // Number of bits needed to represent dir_count (position of the
+        // highest set bit). dir_count > 0 here — the zero case returned
+        // above. `bit_width()` == `u32::BITS - leading_zeros()`, spelled the
+        // idiomatic way so clippy's `manual_bit_width` lint stays satisfied
+        // on newer toolchains.
+        let bits = self.dir_count.bit_width() as usize;
+        (bits + 1).clamp(3, 20) // +1 keeps the original depth heuristic
     }
 
     /// Estimate average path length in bytes.

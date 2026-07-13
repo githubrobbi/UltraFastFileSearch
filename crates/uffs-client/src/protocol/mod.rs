@@ -13,6 +13,7 @@
 pub mod aggregate_wire;
 pub mod cli_args;
 mod cli_args_helpers;
+pub mod diff_wire;
 pub mod response;
 pub(crate) mod response_status;
 pub(crate) mod response_tiering;
@@ -23,6 +24,7 @@ mod tests;
 pub use aggregate_wire::{
     AggregateResultWire, AggregateSpecWire, BucketWire, DrilldownWire, SampleRowWire, StatsWire,
 };
+pub use diff_wire::{DiffEntryWire, DiffParams, DiffResultWire};
 use serde::{Deserialize, Serialize};
 
 // ────────────────────────────────────────────────────────────────────────────

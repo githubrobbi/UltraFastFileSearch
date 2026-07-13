@@ -504,6 +504,7 @@ COMMANDS:
   --search <PATTERN>   Explicit search (same as the bare default)
   --stats [PATH]       Show filesystem statistics
   --agg <PRESET>       Run aggregate analytics
+  --diff <BASELINE>    Diff a baseline MFT snapshot vs the live index (deletes)
   --daemon <ACTION>    Manage the UFFS daemon (start/stop/load/status)
   --mcp <ACTION>       Manage the UFFS MCP server
   --update [ACTION]    Self-update (snapshot/acquire/apply/doctor/recover)
@@ -619,6 +620,36 @@ OPTIONS:
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 pub(crate) fn print_stats_help() {
     print!("{STATS_HELP}");
+}
+
+/// Help text for `uffs --diff`.
+const DIFF_HELP: &str = "\
+uffs --diff — Snapshot delete-visibility diff
+
+Diff a baseline MFT capture against the drive's LIVE in-memory index and report
+what was created, deleted, or modified since the baseline. The deletion-visible
+companion to --newer (which can only see creates/modifies). The drive must be
+loaded in a running daemon.
+
+USAGE:  uffs --diff <BASELINE> --drive <D> [OPTIONS]
+
+ARGUMENTS:
+  <BASELINE>           Path to the baseline snapshot (raw MFT capture) to
+                       diff the live index against.
+
+OPTIONS:
+  -d, --drive <D>      Drive letter the baseline covers (required, e.g. C).
+  -n, --limit <N>      Max entries per class (added/deleted/modified); 0 = all.
+  --json               Emit the raw result as JSON instead of a table.
+
+EXAMPLE:
+  uffs --diff D:\\snapshots\\c_last_week.bin --drive C
+";
+
+/// Print diff help.
+#[expect(clippy::print_stdout, reason = "intentional help output")]
+pub(crate) fn print_diff_help() {
+    print!("{DIFF_HELP}");
 }
 
 /// Help text for `uffs --agg`.

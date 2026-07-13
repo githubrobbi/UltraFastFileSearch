@@ -39,6 +39,12 @@ mod blob;
 mod parse_search_params;
 use parse_search_params::ParseSearchParamsError;
 
+// `handle_diff` lives in a sibling file for the same 800-LOC policy reason as
+// `handler_blob.rs`; `#[path]` keeps it an `impl RequestHandler` method so the
+// dispatcher above calls `self.handle_diff(...)` unchanged.
+#[path = "handler_diff.rs"]
+mod diff_handler;
+
 /// Request handler holding shared daemon state.
 pub(crate) struct RequestHandler {
     /// Shared index manager.
@@ -70,6 +76,7 @@ impl RequestHandler {
             "load_drive" => self.handle_load_drive(id, req).await,
             "refresh" => self.handle_refresh(id, req),
             "facet_values" => self.handle_facet_values(id, req).await,
+            "diff" => self.handle_diff(id, req).await,
             "keepalive" => self.handle_keepalive(id, req),
             "shutdown" => self.handle_shutdown(id, req),
             // Phase 8-B … 8-E — operator-driven memory tiering.

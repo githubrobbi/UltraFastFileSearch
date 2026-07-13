@@ -26,6 +26,8 @@ pub(crate) enum Command {
     Stats,
     /// `--agg <preset>`.
     Agg,
+    /// `--diff <baseline> --drive <D>`.
+    Diff,
     /// `--daemon <action>`.
     Daemon,
     /// `--mcp <action>`.
@@ -46,6 +48,7 @@ impl Command {
             "--search" => Self::Search,
             "--stats" => Self::Stats,
             "--agg" | "--aggregate" => Self::Agg,
+            "--diff" => Self::Diff,
             "--daemon" => Self::Daemon,
             "--mcp" => Self::Mcp,
             // `--upgrade` is a HIDDEN alias for `--update` (winget/apt muscle
@@ -67,6 +70,7 @@ const COMMAND_TOKENS: &[&str] = &[
     "--stats",
     "--agg",
     "--aggregate",
+    "--diff",
     "--daemon",
     "--mcp",
     "--update",
@@ -108,6 +112,7 @@ pub(crate) fn dispatch_command(command: Command, args: &[String]) -> Result<()> 
         Command::Search => crate::run_search(args),
         Command::Stats => crate::run_stats(args),
         Command::Agg => crate::run_aggregate(args),
+        Command::Diff => commands::diff::run_diff(args),
         Command::Daemon => crate::run_daemon(args),
         Command::Mcp => commands::mcp_mgmt::mcp_from_args(args),
         Command::Update => commands::update::run_update(args),

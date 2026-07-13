@@ -12,6 +12,7 @@
 
 mod aggregation;
 mod constructors;
+pub(crate) mod diff;
 mod dispatch;
 mod drives;
 pub(crate) mod forget_drive;

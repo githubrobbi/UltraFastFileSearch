@@ -504,6 +504,7 @@ mod proptest_tests {
             core::hint::black_box(result);
         }
 
+
         /// create_placeholder_record should always produce valid records
         #[test]
         fn placeholder_record_always_valid(frs in 0_u64..1_000_000) {
@@ -530,28 +531,41 @@ mod proptest_tests {
             prop_assert_eq!(opts.is_forensic(), expected);
         }
 
-        /// parse_record should handle any buffer without panicking
+        /// parse_record (and the zero-alloc variant) must handle any buffer
+        /// without panicking — crucially including buffers carrying the FILE
+        /// magic, which drive the attribute-walk paths where malformed header
+        /// offsets can run past a truncated record. Pure random bytes almost
+        /// never form the magic, so the forced-magic pass is what exercises
+        /// those paths (the gap the fuzz-found truncated-record crash exposed).
         #[test]
         fn parse_record_never_panics(
-            data in prop::collection::vec(any::<u8>(), 0..4096),
+            mut data in prop::collection::vec(any::<u8>(), 0..4096),
             frs in 0_u64..1_000_000
         ) {
-            // Should return Some or None, never panic
-            let result = parse_record(&data, frs);
-            // Result is valid (Some or None)
-            prop_assert!(result.is_some() || result.is_none());
+            core::hint::black_box(parse_record(&data, frs));
+            core::hint::black_box(parse_record_zero_alloc(&data, frs));
+            if data.len() >= 4 {
+                data[0..4].copy_from_slice(b"FILE");
+                core::hint::black_box(parse_record(&data, frs));
+                core::hint::black_box(parse_record(&data, u64::MAX));
+                core::hint::black_box(parse_record_zero_alloc(&data, frs));
+            }
         }
 
-        /// parse_record_full should handle any buffer without panicking
+        /// parse_record_full must handle any buffer without panicking, incl.
+        /// forced-FILE-magic buffers that drive the attribute walk.
         #[test]
         fn parse_record_full_never_panics(
-            data in prop::collection::vec(any::<u8>(), 0..4096),
+            mut data in prop::collection::vec(any::<u8>(), 0..4096),
             frs in 0_u64..1_000_000
         ) {
-            // Should return a ParseResult variant, never panic
             let result = parse_record_full(&data, frs);
-            // Result is valid (one of the variants: Base, Extension, or Skip)
             prop_assert!(matches!(result, ParseResult::Base(_) | ParseResult::Extension(_) | ParseResult::Skip));
+            if data.len() >= 4 {
+                data[0..4].copy_from_slice(b"FILE");
+                let magic_result = parse_record_full(&data, frs);
+                prop_assert!(matches!(magic_result, ParseResult::Base(_) | ParseResult::Extension(_) | ParseResult::Skip));
+            }
         }
     }
 }
@@ -703,4 +717,20 @@ fn extension_before_base_merge() {
         ParentFrs::ROOT,
         "parent_frs should be merged from extension"
     );
+}
+
+#[test]
+fn repro_fuzz_crash_881b95() {
+    let data: [u8; 72] = [
+        0x46, 0x49, 0x4C, 0x45, 0x00, 0x29, 0x31, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x4B, 0xFF, 0x86,
+        0x1B, 0xE8, 0x3A, 0xD8, 0x7B, 0x02, 0x00, 0xFF, 0x81, 0xE6, 0xE8, 0x3A, 0xD8, 0x7B, 0x00,
+        0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    core::hint::black_box(parse_record(&data, 0));
+    core::hint::black_box(parse_record(&data, 5));
+    core::hint::black_box(parse_record(&data, u64::MAX));
+    core::hint::black_box(parse_record_full(&data, 0));
+    core::hint::black_box(parse_record_zero_alloc(&data, 0));
 }

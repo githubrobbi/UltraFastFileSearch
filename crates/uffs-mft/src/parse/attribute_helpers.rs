@@ -24,10 +24,18 @@ pub(super) fn parse_standard_info_full(
         StandardInformationExtended,
     };
 
-    let value_length_bytes = &data[attr_offset + 16..attr_offset + 20];
+    // The resident-attribute header fields read below — value length (bytes
+    // 16..20) and value offset (20..22) — may fall past the end of a
+    // truncated or malformed record. Slice with `get` so fuzzed / corrupt
+    // input yields an early return instead of an out-of-bounds panic.
+    let Some(value_length_bytes) = data.get(attr_offset + 16..attr_offset + 20) else {
+        return;
+    };
     let value_length =
         u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0, 0, 0, 0])) as usize;
-    let value_offset_bytes = &data[attr_offset + 20..attr_offset + 22];
+    let Some(value_offset_bytes) = data.get(attr_offset + 20..attr_offset + 22) else {
+        return;
+    };
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
     let si_offset = attr_offset + value_offset;

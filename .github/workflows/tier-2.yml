@@ -199,7 +199,29 @@ jobs:
       - name: Run cargo-udeps
         # --locked per §2.8; cargo-udeps resolves through the same
         # lockfile as the rest of the workspace.
-        run: cargo udeps --locked --workspace --all-targets --all-features
+        #
+        # cargo-udeps embeds its own (older) cargo that cannot parse the
+        # nightly-only `cargo-features = ["panic-immediate-abort"]` gate the
+        # ship profile needs (root Cargo.toml, PR #547) — it aborts with
+        # "unknown Cargo.toml feature `panic-immediate-abort`". That gate is
+        # irrelevant to dependency analysis, so neutralize it for the scan
+        # (drop the gate, set the ship profile's panic to the stable "abort")
+        # and always restore the manifest afterwards. Removing a profile /
+        # cargo-feature does not touch dependency resolution, so `--locked`
+        # stays valid.
+        run: |
+          set -euo pipefail
+          cp Cargo.toml Cargo.toml.udeps-bak
+          restore() { mv -f Cargo.toml.udeps-bak Cargo.toml; }
+          trap restore EXIT
+          python3 - <<'PY'
+          import re
+          s = open("Cargo.toml").read()
+          s = re.sub(r'^cargo-features = \[\n.*?\n\][^\n]*\n', '', s, count=1, flags=re.S)
+          s = s.replace('panic = "immediate-abort"', 'panic = "abort"')
+          open("Cargo.toml", "w").write(s)
+          PY
+          cargo udeps --locked --workspace --all-targets --all-features
 
   # ══════════════════════════════════════════════════════════════════════════
   # Tier 2 / cargo-hack feature matrix (R3-02, landed 2026-05-12)

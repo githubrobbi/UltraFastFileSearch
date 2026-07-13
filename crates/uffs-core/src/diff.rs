@@ -31,8 +31,8 @@ use crate::search::tree::resolve_path;
 /// Every entry is a **row index** into the corresponding index's record array,
 /// not a resolved path: path reconstruction needs the whole index (the
 /// parent-chain walk), so the caller resolves each index via
-/// [`crate::tree::resolve_path`] against the right side — `deleted` against the
-/// baseline, `added` / `modified` against the current.
+/// [`crate::search::tree::resolve_path`] against the right side — `deleted`
+/// against the baseline, `added` / `modified` against the current.
 ///
 /// Rows are reported at *name* granularity: a file with N hard links (which
 /// share one File Reference) contributes N rows, so each affected path is

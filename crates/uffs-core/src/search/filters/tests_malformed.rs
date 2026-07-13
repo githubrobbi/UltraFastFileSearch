@@ -31,6 +31,7 @@ fn record_with_raw_name(raw: &[u8], names: &mut Vec<u8>) -> CompactRecord {
         created: 1,
         modified: 2,
         accessed: 3,
+        file_ref: 0,
         name_offset: offset,
         flags: 0x20,
         parent_idx: u32::MAX,

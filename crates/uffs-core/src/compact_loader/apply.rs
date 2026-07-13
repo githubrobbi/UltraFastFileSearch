@@ -138,6 +138,10 @@ pub(super) fn apply_create(
             created: staged.meta.created,
             modified: staged.meta.modified,
             accessed: staged.meta.accessed,
+            // USN strips the sequence number from the file reference
+            // (uffs_mft::usn), so a live-created record carries FRS only
+            // (seq = 0) until the next full read stamps the real generation.
+            file_ref: CompactRecord::pack_file_reference(uffs_mft::usize_to_u64(frs_usize), 0),
             name_offset: staged.name_offset,
             flags: staged.meta.flags,
             parent_idx: staged.parent_idx,

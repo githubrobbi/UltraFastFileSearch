@@ -76,6 +76,10 @@ fn expand_ads_streams(
                         created: record.stdinfo.created,
                         modified: record.stdinfo.modified,
                         accessed: record.stdinfo.accessed,
+                        file_ref: CompactRecord::pack_file_reference(
+                            record.frs.raw(),
+                            record.sequence_number,
+                        ),
                         name_offset,
                         flags: record.stdinfo.flags,
                         parent_idx,
@@ -163,6 +167,10 @@ fn expand_links_and_ads(
                     created: record.stdinfo.created,
                     modified: record.stdinfo.modified,
                     accessed: record.stdinfo.accessed,
+                    file_ref: CompactRecord::pack_file_reference(
+                        record.frs.raw(),
+                        record.sequence_number,
+                    ),
                     name_offset: link.name.offset,
                     flags: record.stdinfo.flags,
                     parent_idx: link_parent,
@@ -233,6 +241,10 @@ pub fn build_compact_index(
                 created: record.stdinfo.created,
                 modified: record.stdinfo.modified,
                 accessed: record.stdinfo.accessed,
+                file_ref: CompactRecord::pack_file_reference(
+                    record.frs.raw(),
+                    record.sequence_number,
+                ),
                 name_offset: name_ref.offset,
                 flags: record.stdinfo.flags,
                 parent_idx,

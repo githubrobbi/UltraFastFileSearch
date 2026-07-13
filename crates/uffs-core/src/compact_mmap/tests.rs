@@ -44,6 +44,7 @@ fn synth_record(seed: u32) -> CompactRecord {
         created: i64::from(seed),
         modified: i64::from(seed) + 1_i64,
         accessed: i64::from(seed) + 2_i64,
+        file_ref: 0,
         name_offset: seed,
         flags: seed,
         parent_idx: seed,

@@ -24,6 +24,7 @@ fn test_record(name: &str, names: &mut Vec<u8>) -> CompactRecord {
         created: 100_000_000,
         modified: 200_000_000,
         accessed: 300_000_000,
+        file_ref: 0,
         name_offset: offset,
         flags: 0x20, // ARCHIVE
         parent_idx: u32::MAX,

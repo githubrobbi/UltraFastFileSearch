@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! The 80-byte [`CompactRecord`] row type + the NTFS metafile-name allowlist.
+//! The 88-byte [`CompactRecord`] row type + the NTFS metafile-name allowlist.
 //!
 //! Extracted from `compact.rs` (file-size decomposition); the public path
 //! `crate::compact::CompactRecord` is preserved via re-export.
 
 /// Compact per-record data for in-memory search, filter, and sort.
 ///
-/// 80 bytes per record (76 data + 4 explicit tail padding).
+/// 88 bytes per record (87 data + 1 explicit tail padding).
 /// Derives `bytemuck::Pod` + `Zeroable` so the entire record array can be
 /// serialized/deserialized as a single bulk `memcpy` — no per-field encoding.
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,6 +29,15 @@ pub struct CompactRecord {
     pub modified: i64,
     /// Last access time (Unix microseconds).
     pub accessed: i64,
+    /// NTFS **File Reference**: `(sequence_number << 48) | frs`. The FRS (low
+    /// 48 bits) is the MFT slot; the sequence number (high 16 bits)
+    /// disambiguates slot reuse, so together they uniquely identify a *file
+    /// incarnation* — the key a delete/forensic diff must use to tell a
+    /// modified file from a recycled slot. `0` for synthetic rows (aggregate
+    /// rollups, ADS/hardlink expansions that share the base record identity).
+    /// Populated by
+    /// [`build_compact_index`](crate::compact::build_compact_index).
+    pub file_ref: u64,
 
     // ── u32 fields (4-byte aligned) ───────────────────────────────
     /// Byte offset into the names blob.
@@ -67,6 +76,32 @@ pub struct CompactRecord {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad: [u8; 1],
+}
+
+/// Mask for the 48-bit FRS half of a [`CompactRecord::file_ref`].
+const FRS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+impl CompactRecord {
+    /// Pack an NTFS **File Reference** from its FRS (MFT slot) and sequence
+    /// number (slot-reuse generation): `(sequence_number << 48) | frs`.
+    #[must_use]
+    pub fn pack_file_reference(frs: u64, sequence_number: u16) -> u64 {
+        (frs & FRS_MASK) | (u64::from(sequence_number) << 48)
+    }
+
+    /// The FRS (MFT slot, low 48 bits) of this record's file reference.
+    #[must_use]
+    pub const fn frs(&self) -> u64 {
+        self.file_ref & FRS_MASK
+    }
+
+    /// The sequence number (slot-reuse generation, high 16 bits) of this
+    /// record's file reference. `>> 48` always fits `u16`, so the `try_from`
+    /// never fails; `unwrap_or` avoids an `unwrap`/`expect` for the lints.
+    #[must_use]
+    pub fn sequence_number(&self) -> u16 {
+        u16::try_from(self.file_ref >> 48).unwrap_or(u16::MAX)
+    }
 }
 
 /// The fixed set of reserved NTFS metafile names: the `$`-prefixed records at
@@ -324,6 +359,6 @@ impl CompactRecord {
 
 // Compile-time size assertion.
 const _: () = assert!(
-    size_of::<CompactRecord>() == 80,
-    "CompactRecord must be exactly 80 bytes"
+    size_of::<CompactRecord>() == 88,
+    "CompactRecord must be exactly 88 bytes"
 );

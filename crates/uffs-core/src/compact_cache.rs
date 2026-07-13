@@ -151,7 +151,12 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 ///   10 caches are rejected at the header check so the daemon does a fresh MFT
 ///   rebuild and writes a v10 cache; carrying them forward with an empty
 ///   `frs_to_compact` would silently disable the surgical-patch path.
-const COMPACT_VERSION: u16 = 11;
+/// - v12: `file_ref: u64` (the NTFS File Reference `(seq << 48) | frs`) added
+///   to `CompactRecord`, growing the row 80 → 88 bytes. It is the identity key
+///   for delete-diff and the forensic view. The record array is a bulk
+///   `bytemuck` memcpy, so the row-size change alone invalidates older caches
+///   at the header version check (a fresh MFT rebuild writes v12).
+const COMPACT_VERSION: u16 = 12;
 
 mod filters_io;
 pub mod parked;

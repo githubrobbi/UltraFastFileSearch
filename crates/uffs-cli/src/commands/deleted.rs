@@ -36,12 +36,16 @@ use crate::commands::output::format_filetime_local;
 /// path walk terminates here.
 const ROOT_FRS: u64 = 5;
 
-/// Parsed `uffs --deleted` invocation.
+/// Parsed `uffs --deleted` invocation. The source is either an offline capture
+/// (`--mft-file`) or the live drive (`--drive`, Windows).
 #[derive(Debug)]
 struct DeletedArgs {
-    /// MFT capture to scan (raw `$MFT` dump).
-    mft_file: PathBuf,
-    /// Drive letter to label reconstructed paths with (default `X`).
+    /// Offline MFT capture to scan (raw `$MFT` dump). Mutually exclusive with a
+    /// live-drive scan; when both are given the file wins and `drive` only
+    /// labels paths.
+    mft_file: Option<PathBuf>,
+    /// Drive letter: the live source (Windows) when `mft_file` is absent, or
+    /// just the path label otherwise. Defaults to `X` for labelling.
     drive: Option<DriveLetter>,
     /// Max tombstones to print (0 = all).
     limit: u32,
@@ -93,13 +97,20 @@ pub(crate) fn run_deleted(args: &[String]) -> Result<()> {
     let parsed = parse_deleted_args(args)?;
     let drive = parsed.drive.unwrap_or(DriveLetter::X);
 
-    let options = LoadRawOptions {
-        header_only: false,
-        volume_letter: Some(drive),
-        forensic: true,
+    // Source the raw MFT from either an offline capture or the live drive.
+    let raw = match &parsed.mft_file {
+        Some(path) => {
+            let options = LoadRawOptions {
+                header_only: false,
+                volume_letter: Some(drive),
+                forensic: true,
+            };
+            load_raw_mft(path, &options)
+                .with_context(|| format!("failed to read MFT capture '{}'", path.display()))?
+        }
+        None => read_live_raw(drive)
+            .with_context(|| format!("failed to read the live MFT of drive {drive}"))?,
     };
-    let raw = load_raw_mft(&parsed.mft_file, &options)
-        .with_context(|| format!("failed to read MFT capture '{}'", parsed.mft_file.display()))?;
 
     // Pass 1: forensic-parse every slot but KEEP only the deleted records.
     // The default parser drops not-in-use records; forensic mode retains them.
@@ -185,7 +196,8 @@ fn lookup_parent(
 
 /// Parse the `--deleted` argument vector.
 ///
-/// `--mft-file <PATH>` is required; `--drive`, `--limit`, `--json` optional.
+/// A source is required: `--mft-file <PATH>` (offline) or `--drive <D>` (live,
+/// Windows). `--limit`, `--json` optional.
 fn parse_deleted_args(args: &[String]) -> Result<DeletedArgs> {
     let mut mft_file: Option<PathBuf> = None;
     let mut drive: Option<DriveLetter> = None;
@@ -218,16 +230,62 @@ fn parse_deleted_args(args: &[String]) -> Result<DeletedArgs> {
         }
     }
 
-    let mft_path = mft_file.with_context(|| {
-        "missing `--mft-file <PATH>`; a live `--drive` scan is not wired yet — \
-         point at an MFT capture"
-    })?;
+    if mft_file.is_none() && drive.is_none() {
+        anyhow::bail!(
+            "missing a source: pass `--mft-file <PATH>` (offline capture) or \
+             `--drive <D>` (live volume, Windows)"
+        );
+    }
     Ok(DeletedArgs {
-        mft_file: mft_path,
+        mft_file,
         drive,
         limit,
         json,
     })
+}
+
+/// Read the live raw MFT of `drive` into an in-memory [`RawMftData`] (Windows).
+///
+/// Uses the fast parallel reader ([`uffs_mft::MftReader::read_raw`]); the
+/// header is synthesised from the returned record size (the raw bytes carry no
+/// UFFS header). `iter_records` only consults `record_size`/`record_count`, so
+/// this is a faithful in-memory equivalent of an offline capture.
+#[cfg(windows)]
+fn read_live_raw(drive: DriveLetter) -> Result<RawMftData> {
+    use uffs_mft::MftReader;
+    use uffs_mft::raw::RawMftHeader;
+
+    let reader = MftReader::open(drive)
+        .with_context(|| format!("failed to open drive {drive}: (needs Administrator)"))?;
+    let (data, record_size) = reader.read_raw()?;
+    let data_len = uffs_mft::usize_to_u64(data.len());
+    let record_count = if record_size == 0 {
+        0
+    } else {
+        data_len / u64::from(record_size)
+    };
+    let header = RawMftHeader {
+        // Format version of the equivalent on-disk capture; unused by
+        // `iter_records`, set for a well-formed in-memory header.
+        version: 3,
+        flags: 0,
+        record_size,
+        record_count,
+        original_size: data_len,
+        compressed_size: 0,
+        volume_letter: drive,
+        reserved_allocated_bytes: 0,
+    };
+    Ok(RawMftData { header, data })
+}
+
+/// Non-Windows stub: reading a live volume is Windows-only.
+#[cfg(not(windows))]
+fn read_live_raw(drive: DriveLetter) -> Result<RawMftData> {
+    anyhow::bail!(
+        "a live `--drive {drive}` scan reads the NTFS volume directly and requires \
+         Windows (elevated); on other platforms use `--mft-file <CAPTURE>`"
+    )
 }
 
 /// Reconstruct a deleted record's full path by walking `parent` up via
@@ -381,16 +439,27 @@ mod tests {
             "--json",
         ]))
         .expect("parse");
-        assert_eq!(parsed.mft_file.to_str(), Some("C.bin"));
+        assert_eq!(
+            parsed.mft_file.as_deref().and_then(std::path::Path::to_str),
+            Some("C.bin")
+        );
         assert_eq!(parsed.drive, Some(DriveLetter::C));
         assert_eq!(parsed.limit, 5);
         assert!(parsed.json);
     }
 
     #[test]
-    fn missing_mft_file_is_an_error() {
-        let err = parse_deleted_args(&args(&["-d", "C"])).expect_err("must require --mft-file");
-        assert!(err.to_string().contains("--mft-file"), "{err}");
+    fn a_bare_drive_is_a_valid_live_source() {
+        // `-d C` with no --mft-file is a live scan (Windows); parsing accepts it.
+        let parsed = parse_deleted_args(&args(&["-d", "C"])).expect("live drive parses");
+        assert!(parsed.mft_file.is_none());
+        assert_eq!(parsed.drive, Some(DriveLetter::C));
+    }
+
+    #[test]
+    fn no_source_is_an_error() {
+        let err = parse_deleted_args(&args(&["--limit", "5"])).expect_err("must require a source");
+        assert!(err.to_string().contains("source"), "{err}");
     }
 
     #[test]

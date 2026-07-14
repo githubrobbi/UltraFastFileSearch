@@ -505,6 +505,7 @@ COMMANDS:
   --stats [PATH]       Show filesystem statistics
   --agg <PRESET>       Run aggregate analytics
   --deleted            Forensic tombstone read: recently-deleted files from an MFT
+  --snapshot           Capture the live MFT to a baseline file (Windows, for --diff)
   --daemon <ACTION>    Manage the UFFS daemon (start/stop/load/status)
   --mcp <ACTION>       Manage the UFFS MCP server
   --update [ACTION]    Self-update (snapshot/acquire/apply/doctor/recover)
@@ -625,6 +626,34 @@ pub(crate) fn print_stats_help() {
     print!("{STATS_HELP}");
 }
 
+/// Help text for `uffs --snapshot`.
+const SNAPSHOT_HELP: &str = "\
+uffs --snapshot — Capture the live MFT to a baseline file
+
+Save the drive's current MFT so a later `uffs --diff <FILE> --drive C` can
+report what was deleted since. Reads the live NTFS MFT: Windows + Administrator.
+
+USAGE:  uffs --snapshot --drive <D> --out <FILE> [OPTIONS]
+
+OPTIONS:
+  -d, --drive <D>          Drive to capture (required, e.g. C).
+  -o, --out <FILE>         Output .bin path (required).
+  --no-compress            Store uncompressed (default: zstd-compressed).
+  --compression-level <N>  zstd level 1-22 (default 3).
+  --raw                    Headerless raw dump for other MFT tools; implies
+                           --no-compress and is NOT loadable by `uffs --diff`.
+
+EXAMPLE:
+  uffs --snapshot --drive C --out C_baseline.bin
+  uffs --diff C_baseline.bin --drive C '*.txt'   # later: what .txt was deleted
+";
+
+/// Print snapshot help.
+#[expect(clippy::print_stdout, reason = "intentional help output")]
+pub(crate) fn print_snapshot_help() {
+    print!("{SNAPSHOT_HELP}");
+}
+
 /// Help text for `uffs --deleted`.
 const DELETED_HELP: &str = "\
 uffs --deleted — Forensic tombstone read (recently-deleted files)
@@ -634,12 +663,14 @@ parent, timestamps) intact until the MFT slot is reused. This surfaces those
 not-in-use records as recently-deleted tombstones and reconstructs each path
 from the surviving parent chain. No baseline needed.
 
-USAGE:  uffs --deleted --mft-file <PATH> [OPTIONS]
+USAGE:  uffs --deleted (--mft-file <PATH> | --drive <D>) [OPTIONS]
+
+SOURCE (one required):
+  --mft-file <PATH>    Offline MFT capture to scan.
+  -d, --drive <D>      Live volume scan (Windows, elevated). With --mft-file,
+                       just labels reconstructed paths.
 
 OPTIONS:
-  --mft-file <PATH>    MFT capture to scan (required; a live --drive scan is
-                       not wired yet).
-  -d, --drive <D>      Drive letter to label reconstructed paths with.
   -n, --limit <N>      Max tombstones to print (0 = all).
   --json               Emit JSON instead of a table.
 

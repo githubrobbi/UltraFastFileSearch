@@ -30,6 +30,8 @@ pub(crate) mod deleted;
 /// admin-only work up front and decide once (elevate / continue-without /
 /// abort) instead of failing mid-flow. Keeps both flows' elevation UX aligned.
 pub(crate) mod elevation;
+/// `uffs --snapshot --drive C --out FILE` — capture the live MFT to a baseline.
+pub(crate) mod snapshot;
 // Index and info subcommands were merged into other modules.
 /// MCP server management subcommands.
 pub(crate) mod mcp_mgmt;

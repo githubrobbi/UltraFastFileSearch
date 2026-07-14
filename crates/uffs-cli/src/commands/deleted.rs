@@ -15,16 +15,19 @@
 //! best-effort (you only see deletes whose slot has not been recycled), no
 //! true *deletion* time (the timestamp is the file's own last-write), and a
 //! path is unreliable if a parent directory's slot was itself reused.
+//!
+//! Memory: the scan collects only the *deleted* records (a small fraction of
+//! the MFT) and resolves each parent **on demand** from the raw buffer with a
+//! small cache — it never materializes all N records, so peak memory is ~the
+//! raw MFT plus the deleted subset, not a multiple of it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use uffs_mft::parse::{
-    ParseOptions, ParseResult, ParsedRecord, apply_fixup, parse_record_forensic,
-};
+use uffs_mft::parse::{ParseOptions, ParseResult, apply_fixup, parse_record_forensic};
 use uffs_mft::platform::DriveLetter;
-use uffs_mft::raw::{LoadRawOptions, load_raw_mft};
+use uffs_mft::raw::{LoadRawOptions, RawMftData, load_raw_mft};
 
 use crate::args::parse_drive_letter;
 use crate::commands::output::format_filetime_local;
@@ -46,14 +49,28 @@ struct DeletedArgs {
     json: bool,
 }
 
-/// One reconstructed deleted-file tombstone.
+/// A deleted record captured during the scan, before path resolution.
+struct DeletedEntry {
+    /// Parent directory FRS (start of the path walk).
+    parent: u64,
+    /// The deleted file's own name (leaf).
+    name: String,
+    /// Logical file size in bytes.
+    size: u64,
+    /// The file's own last-write time (raw FILETIME) — NOT the deletion time.
+    modified: i64,
+    /// Whether the record is a directory.
+    is_dir: bool,
+}
+
+/// One reconstructed deleted-file tombstone (path-resolved, ready to render).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Tombstone {
     /// Reconstructed full path (best-effort — see module docs).
     path: String,
-    /// Logical file size in bytes (from the surviving record).
+    /// Logical file size in bytes.
     size: u64,
-    /// The file's own last-write time (raw FILETIME) — NOT the deletion time.
+    /// The file's own last-write time (raw FILETIME).
     modified: i64,
     /// Whether the record is a directory.
     is_dir: bool,
@@ -84,23 +101,51 @@ pub(crate) fn run_deleted(args: &[String]) -> Result<()> {
     let raw = load_raw_mft(&parsed.mft_file, &options)
         .with_context(|| format!("failed to read MFT capture '{}'", parsed.mft_file.display()))?;
 
-    // Forensic-parse every slot: this keeps the not-in-use (deleted) records
-    // that the default parser drops, and the live records we need to resolve
-    // deleted files' parent chains.
-    let capacity = usize::try_from(raw.record_count()).unwrap_or(0);
-    let mut records = Vec::with_capacity(capacity);
+    // Pass 1: forensic-parse every slot but KEEP only the deleted records.
+    // The default parser drops not-in-use records; forensic mode retains them.
+    // One reusable fixup buffer avoids a per-record allocation.
+    let mut deleted: Vec<DeletedEntry> = Vec::new();
+    let mut fixup_buf: Vec<u8> = Vec::new();
     for (frs, data) in raw.iter_records() {
-        let mut record_buf = data.to_vec();
-        let fixup_ok = apply_fixup(&mut record_buf);
-        if let ParseResult::Base(parsed_record) =
-            parse_record_forensic(&record_buf, frs, ParseOptions::FORENSIC, !fixup_ok)
+        fixup_buf.clear();
+        fixup_buf.extend_from_slice(data);
+        let fixup_ok = apply_fixup(&mut fixup_buf);
+        if let ParseResult::Base(record) =
+            parse_record_forensic(&fixup_buf, frs, ParseOptions::FORENSIC, !fixup_ok)
+            && record.is_deleted
         {
-            records.push(parsed_record);
+            deleted.push(DeletedEntry {
+                parent: record.parent_frs.raw(),
+                name: record.name,
+                size: record.size,
+                modified: record.std_info.modified,
+                is_dir: record.is_directory,
+            });
         }
     }
 
-    let (tombstones, total, truncated) =
-        collect_tombstones(&records, drive, uffs_mft::u32_as_usize(parsed.limit));
+    let total = deleted.len();
+    let limit = uffs_mft::u32_as_usize(parsed.limit);
+    let truncated = limit > 0 && total > limit;
+    let take = if truncated { limit } else { total };
+
+    // Pass 2: resolve each kept tombstone's path by walking parents on demand
+    // from the raw buffer, memoizing shared ancestors.
+    let mut parent_cache: HashMap<u64, Option<(String, u64)>> = HashMap::new();
+    let mut lookup_buf: Vec<u8> = Vec::new();
+    let mut tombstones: Vec<Tombstone> = Vec::with_capacity(take);
+    for entry in deleted.iter().take(take) {
+        let (path, complete) = resolve_path(&entry.name, entry.parent, drive, |frs| {
+            lookup_parent(&raw, frs, &mut parent_cache, &mut lookup_buf)
+        });
+        tombstones.push(Tombstone {
+            path,
+            size: entry.size,
+            modified: entry.modified,
+            is_dir: entry.is_dir,
+            path_complete: complete,
+        });
+    }
 
     if parsed.json {
         print_json(&tombstones, total, truncated);
@@ -108,6 +153,34 @@ pub(crate) fn run_deleted(args: &[String]) -> Result<()> {
         print_human(&tombstones, total, truncated, drive);
     }
     Ok(())
+}
+
+/// Resolve a parent record's `(name, its-parent FRS)` from the raw MFT,
+/// memoizing the result (including a `None` miss) so shared ancestors are
+/// parsed once.
+fn lookup_parent(
+    raw: &RawMftData,
+    frs: u64,
+    cache: &mut HashMap<u64, Option<(String, u64)>>,
+    buf: &mut Vec<u8>,
+) -> Option<(String, u64)> {
+    if let Some(cached) = cache.get(&frs) {
+        return cached.clone();
+    }
+    let resolved = raw.get_record(frs).and_then(|data| {
+        buf.clear();
+        buf.extend_from_slice(data);
+        let fixup_ok = apply_fixup(buf);
+        if let ParseResult::Base(record) =
+            parse_record_forensic(buf, frs, ParseOptions::FORENSIC, !fixup_ok)
+        {
+            Some((record.name, record.parent_frs.raw()))
+        } else {
+            None
+        }
+    });
+    cache.insert(frs, resolved.clone());
+    resolved
 }
 
 /// Parse the `--deleted` argument vector.
@@ -157,58 +230,16 @@ fn parse_deleted_args(args: &[String]) -> Result<DeletedArgs> {
     })
 }
 
-/// Collect and path-resolve every deleted record. Returns the (capped)
-/// tombstones, the total deleted count (before the cap), and whether the cap
-/// dropped any.
-fn collect_tombstones(
-    records: &[ParsedRecord],
-    drive: DriveLetter,
-    limit: usize,
-) -> (Vec<Tombstone>, usize, bool) {
-    // FRS -> (name, parent FRS) for *every* record, so a deleted file's parent
-    // chain resolves even through intermediate deleted directories.
-    let mut by_frs: HashMap<u64, (&str, u64)> = HashMap::with_capacity(records.len());
-    for record in records {
-        by_frs.insert(
-            record.frs.raw(),
-            (record.name.as_str(), record.parent_frs.raw()),
-        );
-    }
-
-    let deleted: Vec<&ParsedRecord> = records.iter().filter(|rec| rec.is_deleted).collect();
-    let total = deleted.len();
-    let truncated = limit > 0 && total > limit;
-    let take = if truncated { limit } else { total };
-
-    let tombstones = deleted
-        .iter()
-        .take(take)
-        .map(|rec| {
-            let (path, complete) =
-                resolve_deleted_path(&rec.name, rec.parent_frs.raw(), &by_frs, drive);
-            Tombstone {
-                path,
-                size: rec.size,
-                modified: rec.std_info.modified,
-                is_dir: rec.is_directory,
-                path_complete: complete,
-            }
-        })
-        .collect();
-
-    (tombstones, total, truncated)
-}
-
-/// Reconstruct a deleted record's full path by walking `parent` up `by_frs`
-/// until the volume root. Returns `(path, complete)`; `complete` is `false`
-/// when a parent FRS is absent (the path is prefixed with `…` to flag it).
-fn resolve_deleted_path(
+/// Reconstruct a deleted record's full path by walking `parent` up via
+/// `lookup` until the volume root. Returns `(path, complete)`; `complete` is
+/// `false` when a parent FRS is absent (the path is prefixed with `…`).
+fn resolve_path(
     name: &str,
     parent: u64,
-    by_frs: &HashMap<u64, (&str, u64)>,
     drive: DriveLetter,
+    mut lookup: impl FnMut(u64) -> Option<(String, u64)>,
 ) -> (String, bool) {
-    let mut parts: Vec<&str> = vec![name];
+    let mut parts: Vec<String> = vec![name.to_owned()];
     let mut current = parent;
     let mut complete = true;
 
@@ -218,7 +249,7 @@ fn resolve_deleted_path(
         if current == ROOT_FRS {
             break;
         }
-        let Some(&(parent_name, grandparent)) = by_frs.get(&current) else {
+        let Some((parent_name, grandparent)) = lookup(current) else {
             complete = false;
             break;
         };
@@ -321,33 +352,21 @@ fn human_bytes(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use uffs_mft::parse::ParsedRecord;
+    use std::collections::HashMap;
+
     use uffs_mft::platform::DriveLetter;
 
-    use super::{collect_tombstones, parse_deleted_args};
+    use super::{parse_deleted_args, resolve_path};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|item| (*item).to_owned()).collect()
     }
 
-    /// Build a record: `frs`, `parent` FRS, name, size, deleted?, dir?.
-    fn record(
-        frs: u64,
-        parent: u64,
-        name: &str,
-        size: u64,
-        deleted: bool,
-        dir: bool,
-    ) -> ParsedRecord {
-        ParsedRecord {
-            frs: uffs_mft::frs::Frs::new(frs),
-            parent_frs: uffs_mft::frs::ParentFrs::new(parent),
-            name: name.to_owned(),
-            size,
-            is_deleted: deleted,
-            is_directory: dir,
-            ..ParsedRecord::default()
-        }
+    /// A `by_frs` map → the `lookup` closure `resolve_path` expects.
+    fn lookup_from(
+        map: &HashMap<u64, (String, u64)>,
+    ) -> impl FnMut(u64) -> Option<(String, u64)> + '_ {
+        move |frs| map.get(&frs).cloned()
     }
 
     #[test]
@@ -375,69 +394,43 @@ mod tests {
     }
 
     #[test]
-    fn only_deleted_records_become_tombstones_with_resolved_paths() {
-        // Root(5) → docs(100) → [a.txt(200) deleted, live.txt(201) alive].
-        let records = vec![
-            record(100, ROOT_FRS_T, "docs", 0, false, true),
-            record(200, 100, "a.txt", 100, true, false),
-            record(201, 100, "live.txt", 50, false, false),
-        ];
-        let (tombs, total, truncated) = collect_tombstones(&records, DriveLetter::C, 0);
-        assert_eq!(total, 1, "only a.txt is deleted");
-        assert!(!truncated);
-        let tomb = tombs.first().expect("one tombstone");
-        assert_eq!(
-            tomb.path, r"C:\docs\a.txt",
-            "resolved through the live parent"
-        );
-        assert_eq!(tomb.size, 100);
-        assert!(tomb.path_complete);
+    fn resolves_through_a_live_parent_to_the_root() {
+        // Root(5) → docs(100). A deleted a.txt(parent 100) resolves fully.
+        let mut map = HashMap::new();
+        map.insert(100_u64, ("docs".to_owned(), ROOT_FRS_T));
+        let (path, complete) = resolve_path("a.txt", 100, DriveLetter::C, lookup_from(&map));
+        assert_eq!(path, r"C:\docs\a.txt");
+        assert!(complete);
     }
 
     #[test]
-    fn a_deleted_dir_on_the_chain_still_resolves() {
-        // Root(5) → gone(100, deleted dir) → file(200, deleted). The deleted
-        // parent is still in the MFT, so the path reconstructs completely.
-        let records = vec![
-            record(100, ROOT_FRS_T, "gone", 0, true, true),
-            record(200, 100, "file.txt", 10, true, false),
-        ];
-        let (tombs, total, _) = collect_tombstones(&records, DriveLetter::C, 0);
-        assert_eq!(total, 2);
-        let file = tombs
-            .iter()
-            .find(|tomb| tomb.path.ends_with("file.txt"))
-            .expect("file tombstone");
-        assert_eq!(file.path, r"C:\gone\file.txt");
-        assert!(file.path_complete);
+    fn resolves_through_a_deleted_parent_still_in_the_mft() {
+        // The parent dir `gone`(100) is itself deleted but its record survives,
+        // so lookup still returns it and the path reconstructs completely.
+        let mut map = HashMap::new();
+        map.insert(100_u64, ("gone".to_owned(), ROOT_FRS_T));
+        let (path, complete) = resolve_path("file.txt", 100, DriveLetter::C, lookup_from(&map));
+        assert_eq!(path, r"C:\gone\file.txt");
+        assert!(complete);
     }
 
     #[test]
     fn a_missing_parent_marks_the_path_incomplete() {
-        // The parent FRS (999) is not in the capture (slot reused / evicted).
-        let records = vec![record(200, 999, "orphan.log", 44, true, false)];
-        let (tombs, _, _) = collect_tombstones(&records, DriveLetter::C, 0);
-        let tomb = tombs.first().expect("one tombstone");
-        assert!(!tomb.path_complete, "missing parent → incomplete");
-        assert!(
-            tomb.path.contains('…'),
-            "incomplete path is flagged: {}",
-            tomb.path
-        );
-        assert!(tomb.path.ends_with("orphan.log"));
+        // Parent 999 is not in the capture (slot reused / evicted).
+        let map: HashMap<u64, (String, u64)> = HashMap::new();
+        let (path, complete) = resolve_path("orphan.log", 999, DriveLetter::C, lookup_from(&map));
+        assert!(!complete, "missing parent → incomplete");
+        assert!(path.contains('…'), "incomplete path is flagged: {path}");
+        assert!(path.ends_with("orphan.log"));
     }
 
     #[test]
-    fn limit_caps_and_flags_truncation() {
-        let records = vec![
-            record(200, ROOT_FRS_T, "a", 1, true, false),
-            record(201, ROOT_FRS_T, "b", 2, true, false),
-            record(202, ROOT_FRS_T, "c", 3, true, false),
-        ];
-        let (tombs, total, truncated) = collect_tombstones(&records, DriveLetter::C, 2);
-        assert_eq!(total, 3, "total counts all deleted");
-        assert_eq!(tombs.len(), 2, "cap keeps 2");
-        assert!(truncated);
+    fn a_file_directly_under_root_needs_no_lookup() {
+        let map: HashMap<u64, (String, u64)> = HashMap::new();
+        let (path, complete) =
+            resolve_path("boot.ini", ROOT_FRS_T, DriveLetter::C, lookup_from(&map));
+        assert_eq!(path, r"C:\boot.ini");
+        assert!(complete);
     }
 
     /// Root FRS mirrored into the test module (the production const is private

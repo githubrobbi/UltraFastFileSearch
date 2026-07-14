@@ -26,8 +26,6 @@ pub(crate) mod daemon_tiering;
 /// `uffs --deleted --mft-file <PATH>` — forensic tombstone read (deleted
 /// files).
 pub(crate) mod deleted;
-/// `uffs --diff <BASELINE> --drive <D>` — snapshot delete-visibility diff.
-pub(crate) mod diff;
 /// Shared elevation gate for the mutating flows (uninstall / update): surface
 /// admin-only work up front and decide once (elevate / continue-without /
 /// abort) instead of failing mid-flow. Keeps both flows' elevation UX aligned.

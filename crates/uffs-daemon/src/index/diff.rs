@@ -1,39 +1,49 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Snapshot delete-visibility diff for [`IndexManager`] (RPC `diff`).
+//! Snapshot delete-visibility diff for [`IndexManager`], surfaced through the
+//! **full search pipeline** (RPC `search` with a `diff_baseline`).
 //!
-//! The `diff` RPC answers "what was created, deleted, or modified on a drive
-//! since a baseline snapshot" — the deletion-visible companion to `--newer`,
-//! which is structurally blind to deletes. It loads the caller's baseline MFT
-//! capture off-thread, diffs it against the **live in-memory index** for the
-//! drive via [`uffs_core::diff::resolve_delta`] (so the "current" side is the
-//! hot index the daemon already serves searches from), and returns the
-//! classified, path-resolved delta.
+//! A diff answers "what was deleted on a drive since a baseline snapshot" — the
+//! deletion-visible companion to `--newer`. Rather than a bespoke output, it
+//! reuses everything a normal search does: pattern, `--ext`,
+//! `--newer`/`--older`, `--min-size`, sort, projection, and every output format
+//! all filter/shape the deleted set. The mechanism:
 //!
-//! All the classification + path-resolution logic lives in `uffs_core::diff`
-//! and is unit-tested there; this module is the daemon glue — snapshot the
-//! registry, load the baseline, hand both to the engine, map the result onto
-//! the wire type.
+//! 1. Load the baseline MFT capture into a compact index (off the async
+//!    runtime).
+//! 2. Diff it against the drive's **live** in-memory index by File Reference
+//!    ([`uffs_core::diff::diff_indexes`]) to find the rows that vanished.
+//! 3. Mark those baseline rows with the `DELETED` flag.
+//! 4. Run the normal search pipeline ([`IndexManager::run_search_over`]) over
+//!    the marked baseline, with a forced `deleted-only` filter.
 
 use alloc::sync::Arc;
 use std::path::PathBuf;
 
-use uffs_client::protocol::{DiffEntryWire, DiffParams, DiffResultWire};
+use uffs_client::protocol::SearchParams;
+use uffs_client::protocol::response::SearchResponse;
 use uffs_core::compact::MftSource;
-use uffs_core::diff::{DeltaEntry, ResolvedDelta, resolve_delta};
+use uffs_core::search::backend::DriveIndex;
 use uffs_mft::platform::DriveLetter;
 
 use super::IndexManager;
 
+/// UFFS-internal "deleted tombstone" bit — mirrors
+/// `uffs_mft::flags::FileFlags::DELETED` (0x8000, bit 15, reserved in NTFS) and
+/// `uffs_core::search::filters`'s `DELETED_TOMBSTONE_FLAG`. Set on a baseline
+/// record whose File Reference vanished from the current index.
+const DELETED_FLAG: u32 = 0x8000;
+
 /// Why a `diff` request could not be served. Mapped to a JSON-RPC error by the
 /// handler; kept data-only here so this module stays free of wire concerns.
 pub(crate) enum DiffError {
-    /// The requested drive is not currently loaded in the live index, so there
-    /// is no "current" side to diff the baseline against.
+    /// No `--drive` was supplied, so there is no live index to diff against.
+    NoDrive,
+    /// The requested drive is not currently loaded in the live index.
     DriveNotLoaded(DriveLetter),
     /// The baseline snapshot at `path` could not be loaded into a compact
-    /// index (missing file, unreadable, not a valid MFT capture, …).
+    /// index.
     BaselineLoad {
         /// The baseline path the caller supplied (echoed back in the message).
         path: String,
@@ -43,117 +53,72 @@ pub(crate) enum DiffError {
 }
 
 impl IndexManager {
-    /// Diff a baseline snapshot against the live index for `params.drive`.
+    /// Run a snapshot-diff search: diff `params.diff_baseline` against the live
+    /// index for `params.drives[0]`, then search the deleted set with the full
+    /// filter/sort/output pipeline.
     ///
     /// # Errors
     ///
-    /// Returns [`DiffError::DriveNotLoaded`] when the drive has no live index,
-    /// or [`DiffError::BaselineLoad`] when the baseline path cannot be loaded.
-    pub(crate) async fn diff_snapshot(
+    /// [`DiffError::NoDrive`] when no drive is given,
+    /// [`DiffError::DriveNotLoaded`] when it has no live index, or
+    /// [`DiffError::BaselineLoad`] when the baseline path cannot be loaded.
+    pub(crate) async fn diff_search(
         &self,
-        params: &DiffParams,
-    ) -> Result<DiffResultWire, DiffError> {
+        params: &SearchParams,
+    ) -> Result<SearchResponse, DiffError> {
+        let drive = *params.drives.first().ok_or(DiffError::NoDrive)?;
+        let baseline_path = params.diff_baseline.clone().unwrap_or_default();
+
         // Current side: the live, hot in-memory index for the drive.
-        let snap = self.snapshot().await;
-        let Some(current) = snap
+        let snapshot = self.snapshot().await;
+        let Some(current) = snapshot
             .drives
             .iter()
-            .find(|dr| dr.letter == params.drive)
+            .find(|dr| dr.letter == drive)
             .map(Arc::clone)
         else {
-            return Err(DiffError::DriveNotLoaded(params.drive));
+            return Err(DiffError::DriveNotLoaded(drive));
         };
-        drop(snap); // We hold the one Arc we need; release the registry snapshot.
+        drop(snapshot);
 
-        // Baseline side: load the caller's capture and diff, both off the async
-        // runtime — the MFT parse is I/O + CPU heavy and the diff hashes over
-        // the whole record array. `no_cache = true` forces a fresh read of the
-        // baseline rather than reusing any persisted cache for that path.
-        let baseline_path = PathBuf::from(&params.baseline);
-        let drive = params.drive;
-        let limit = uffs_mft::u32_as_usize(params.limit);
-        let current_for_task = Arc::clone(&current);
+        // Load the baseline, diff it against the live index, and mark the
+        // vanished rows — all off the async runtime (MFT parse + a hash-diff).
+        let load_path = baseline_path.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            let source = MftSource::File(baseline_path, Some(drive));
-            let (baseline, _timing) = uffs_core::compact::load_drive(&source, true)?;
-            anyhow::Ok(resolve_delta(&baseline, &current_for_task, limit))
+            let source = MftSource::File(PathBuf::from(&load_path), Some(drive));
+            let (mut baseline, _timing) = uffs_core::compact::load_drive(&source, true)?;
+            let report = uffs_core::diff::diff_indexes(&baseline, &current);
+            let records = baseline.records.as_mut_slice();
+            for &idx in &report.deleted {
+                if let Some(record) = records.get_mut(idx as usize) {
+                    record.flags |= DELETED_FLAG;
+                }
+            }
+            anyhow::Ok(baseline)
         })
         .await;
 
-        match outcome {
-            Ok(Ok(resolved)) => Ok(to_wire(resolved)),
-            Ok(Err(source)) => Err(DiffError::BaselineLoad {
-                path: params.baseline.clone(),
-                source,
-            }),
-            Err(join_err) => Err(DiffError::BaselineLoad {
-                path: params.baseline.clone(),
-                source: join_err.into(),
-            }),
-        }
-    }
-}
-
-/// Map the engine's [`ResolvedDelta`] onto the JSON-RPC wire result.
-fn to_wire(resolved: ResolvedDelta) -> DiffResultWire {
-    DiffResultWire {
-        added: resolved.added.into_iter().map(entry_to_wire).collect(),
-        deleted: resolved.deleted.into_iter().map(entry_to_wire).collect(),
-        modified: resolved.modified.into_iter().map(entry_to_wire).collect(),
-        truncated: resolved.truncated,
-    }
-}
-
-/// Map one resolved [`DeltaEntry`] onto its wire form.
-fn entry_to_wire(entry: DeltaEntry) -> DiffEntryWire {
-    DiffEntryWire {
-        path: entry.path,
-        size: entry.size,
-        modified: entry.modified,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use uffs_core::diff::{DeltaEntry, ResolvedDelta};
-
-    use super::{entry_to_wire, to_wire};
-
-    #[test]
-    fn to_wire_preserves_every_class_and_the_truncated_flag() {
-        let resolved = ResolvedDelta {
-            added: vec![DeltaEntry {
-                path: r"C:\new.txt".to_owned(),
-                size: 10,
-                modified: 9,
-            }],
-            deleted: vec![DeltaEntry {
-                path: r"C:\gone.txt".to_owned(),
-                size: 200,
-                modified: 6,
-            }],
-            modified: vec![],
-            truncated: true,
+        let baseline = match outcome {
+            Ok(Ok(index)) => index,
+            Ok(Err(source)) => {
+                return Err(DiffError::BaselineLoad {
+                    path: baseline_path,
+                    source,
+                });
+            }
+            Err(join_err) => {
+                return Err(DiffError::BaselineLoad {
+                    path: baseline_path,
+                    source: join_err.into(),
+                });
+            }
         };
-        let wire = to_wire(resolved);
-        assert_eq!(wire.added.len(), 1);
-        assert_eq!(wire.deleted.len(), 1);
-        assert!(wire.modified.is_empty());
-        assert!(wire.truncated);
-        let added = wire.added.first().expect("one add");
-        assert_eq!(added.path, r"C:\new.txt");
-        assert_eq!(added.size, 10);
-    }
 
-    #[test]
-    fn entry_to_wire_is_a_faithful_field_copy() {
-        let wire = entry_to_wire(DeltaEntry {
-            path: r"C:\a.txt".to_owned(),
-            size: 42,
-            modified: 7,
+        // Search the marked baseline through the normal pipeline; the override
+        // forces the deleted-only filter (see `run_search_over`).
+        let index = Arc::new(DriveIndex {
+            drives: vec![Arc::new(baseline)],
         });
-        assert_eq!(wire.path, r"C:\a.txt");
-        assert_eq!(wire.size, 42);
-        assert_eq!(wire.modified, 7);
+        Ok(self.run_search_over(params, Some(index)).await)
     }
 }

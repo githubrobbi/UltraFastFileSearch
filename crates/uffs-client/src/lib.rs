@@ -127,10 +127,6 @@ pub mod connect_sync;
 /// `is_daemon_process`) — split off `connect_sync` to keep that file
 /// under the 800-LOC policy ceiling.
 pub(crate) mod connect_sync_autostart;
-/// Snapshot-diff RPC helper (`diff`) — delete-visibility companion to
-/// `--newer`. Split off `connect_sync` for module cohesion with the
-/// [`protocol::diff_wire`] types it consumes.
-pub(crate) mod connect_sync_diff;
 /// Platform-specific `platform_connect` impls and the `rpc_deadline` helper.
 ///
 /// Split `impl` blocks live on [`connect_sync::UffsClientSync`];

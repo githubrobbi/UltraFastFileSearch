@@ -93,6 +93,10 @@ impl SearchParams {
                     raw.agg_page_size = Some(parse_u16("--agg-page-size", &pv)?);
                 }
                 "--attr" => raw.attr = Some(flag_val(&arg, "--attr", &mut iter)?),
+                // Snapshot delete-visibility diff: search the deleted set of the
+                // given baseline MFT capture vs the live index. Every other flag
+                // then filters/shapes that set like a normal search.
+                "--diff" => raw.diff_baseline = Some(flag_val(&arg, "--diff", &mut iter)?),
                 "--newer" => raw.newer = Some(flag_val(&arg, "--newer", &mut iter)?),
                 "--older" => raw.older = Some(flag_val(&arg, "--older", &mut iter)?),
                 "--newer-created" => {
@@ -313,6 +317,9 @@ struct RawCliArgs {
     malformed: Option<bool>,
     /// WI-4.4: `Some(true)` from `--malformed-path`.
     malformed_path: Option<bool>,
+    /// Snapshot-diff baseline path from `--diff <BASELINE>`: turns the query
+    /// into a search over the deleted set of that baseline vs the live index.
+    diff_baseline: Option<String>,
     profile: bool,
     benchmark: bool,
     no_cache: bool,
@@ -768,7 +775,15 @@ impl RawCliArgs {
             // separately and overrides this field directly on the
             // passthrough `SearchParams`.
             output_drive_targets: drives,
+            // Snapshot-diff baseline (set by the `--diff` command path, which
+            // parses the remaining flags as a normal search); a plain search
+            // leaves it unset.
+            diff_baseline: self.diff_baseline.clone(),
         };
+        // A diff with no explicit pattern lists every deleted file.
+        if params.diff_baseline.is_some() && params.pattern.is_empty() {
+            "*".clone_into(&mut params.pattern);
+        }
         params.populate_canonical_fields();
         Ok(params)
     }

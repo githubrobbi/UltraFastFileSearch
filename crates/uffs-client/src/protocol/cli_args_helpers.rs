@@ -505,6 +505,46 @@ mod cli_args_error_tests {
         },);
     }
 
+    /// `--diff <baseline>` sets `diff_baseline` and composes with a plain
+    /// pattern + the `*.ext` ext-glob sugar, so a snapshot-diff is just a
+    /// search over the deleted set.
+    #[test]
+    fn from_cli_args_diff_baseline_composes_with_filters() {
+        use crate::protocol::SearchParams;
+        // `*.txt` is UFFS ext-glob sugar → pattern `*` + an ext filter, so the
+        // diff's deleted set is filtered to `.txt`; a plain `report` pattern
+        // would survive verbatim. Use the latter to pin pattern composition.
+        let args = vec![
+            "report".to_owned(),
+            "--diff".to_owned(),
+            "C_old.bin".to_owned(),
+            "--drive".to_owned(),
+            "C".to_owned(),
+        ];
+        let params = SearchParams::from_cli_args(&args).expect("valid diff search");
+        assert_eq!(params.diff_baseline.as_deref(), Some("C_old.bin"));
+        assert_eq!(
+            params.pattern, "report",
+            "the pattern still filters the deleted set"
+        );
+    }
+
+    /// A bare `--diff <baseline>` (no pattern) defaults the pattern to `*` so
+    /// it lists every deleted file.
+    #[test]
+    fn from_cli_args_bare_diff_defaults_pattern_to_star() {
+        use crate::protocol::SearchParams;
+        let args = vec![
+            "--diff".to_owned(),
+            "C_old.bin".to_owned(),
+            "--drive".to_owned(),
+            "C".to_owned(),
+        ];
+        let params = SearchParams::from_cli_args(&args).expect("valid bare diff");
+        assert_eq!(params.diff_baseline.as_deref(), Some("C_old.bin"));
+        assert_eq!(params.pattern, "*", "a bare diff lists all deleted files");
+    }
+
     /// End-to-end: a second positional argument after the pattern
     /// surfaces as `UnexpectedArgument`.
     #[test]

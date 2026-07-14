@@ -11,6 +11,7 @@
 
 //! Search execution: query dispatch, profile construction, and drive info.
 
+use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -18,14 +19,29 @@ use uffs_client::protocol::response::{
     DriveProfile, SearchPayload, SearchProfile, SearchResponse, SearchRow,
 };
 use uffs_client::protocol::{SearchFilterMode, SearchParams, SearchResponseMode};
-use uffs_core::search::backend::{FilterMode, PhaseTimings, SearchRequest, SortSpec, search_index};
+use uffs_core::search::backend::{
+    DriveIndex, FilterMode, PhaseTimings, SearchRequest, SortSpec, search_index,
+};
 use uffs_core::search::field::FieldId;
 use uffs_core::search::filters::{SearchFilterParams, SearchFilters};
 
 use super::IndexManager;
 
 impl IndexManager {
-    /// Execute a search query (updates perf counters).
+    /// Execute a live search query over the registry snapshot (updates perf
+    /// counters). Snapshot-diff searches (`params.diff_baseline`) are routed by
+    /// the handler to [`Self::diff_search`] instead, so they can surface setup
+    /// errors (missing baseline / unloaded drive) as JSON-RPC errors.
+    pub(crate) async fn search(&self, params: &SearchParams) -> SearchResponse {
+        self.run_search_over(params, None).await
+    }
+
+    /// Run the search pipeline over either the live registry snapshot
+    /// (`snapshot_override == None`) or a caller-supplied index — the marked
+    /// baseline built by [`Self::diff_search`]. When an override is present the
+    /// query is a snapshot diff: the `deleted-only` filter is forced on and the
+    /// registry-specific warm-up / dispatch-accounting is skipped (the baseline
+    /// is not a registry shard).
     ///
     /// When `params.profile` is `true`, populates `SearchResponse::profile`
     /// with a per-phase timing breakdown so the CLI can print it.
@@ -37,7 +53,12 @@ impl IndexManager {
         clippy::cognitive_complexity,
         reason = "search filter application with many predicate branches"
     )]
-    pub(crate) async fn search(&self, params: &SearchParams) -> SearchResponse {
+    pub(crate) async fn run_search_over(
+        &self,
+        params: &SearchParams,
+        snapshot_override: Option<Arc<DriveIndex>>,
+    ) -> SearchResponse {
+        let is_diff = snapshot_override.is_some();
         // Acquire a concurrency permit — blocks if too many searches
         // are already in flight.  The effective cap is
         // `max(2, (cpus × 26) / (drives × 10))` by default (see
@@ -149,6 +170,12 @@ impl IndexManager {
         // path (size / descendant bounds).
         Self::compile_predicates_into_filters(&mut filters, &effective_params.predicates);
 
+        // Snapshot-diff: the override index carries the baseline with its
+        // vanished rows pre-marked `DELETED`; restrict the search to those.
+        if is_diff {
+            filters.deleted = Some(true);
+        }
+
         // Phase 3 Commit C — promote any Parked/Cold shards in the
         // touched set before we snapshot the active subset.  Fast
         // path (single read-lock acquisition, no work) when every
@@ -164,18 +191,27 @@ impl IndexManager {
         // skip the promote (zero-RAM-touch contract).  Empty
         // `ext_terms` short-circuits to the Phase-3 always-promote
         // behaviour.
-        self.ensure_warm_for_dispatch(&effective_params.drives, &filters.extensions)
-            .await;
+        // Registry warm-up only applies to live shards; a diff searches the
+        // caller's baseline index, which is not in the registry.
+        if !is_diff {
+            self.ensure_warm_for_dispatch(&effective_params.drives, &filters.extensions)
+                .await;
+        }
 
         // ── Snapshot the index (< 1 μs) ────────────────────────────
         let t_lock = profiling.then(Instant::now);
-        let snapshot = self.snapshot().await;
+        let snapshot = match snapshot_override {
+            Some(baseline) => baseline,
+            None => self.snapshot().await,
+        };
         // Phase 1 of memory-tiering: record this dispatch on every
         // active shard so `DriveStats::decay_ema` (consumed by Phase 6
         // adaptive-TTL) accumulates a real signal.  See
         // `crate::cache::DriveStats` and the `record_search_dispatch`
-        // doc comment.
-        self.record_search_dispatch().await;
+        // doc comment.  Skipped for a diff (the baseline is not a shard).
+        if !is_diff {
+            self.record_search_dispatch().await;
+        }
         let lock_us = t_lock.map_or(0, |ts| ts.elapsed().as_micros());
 
         // Snapshot per-drive info (only when profiling).

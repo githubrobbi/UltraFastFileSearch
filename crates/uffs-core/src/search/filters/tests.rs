@@ -1220,6 +1220,41 @@ fn is_ext_only_false_with_type_filter() {
 // Attribute presets
 // ═══════════════════════════════════════════════════════════════════════════
 
+#[test]
+fn deleted_filter_selects_only_tombstoned_records() {
+    let mut names = Vec::new();
+    let live = test_record("live.txt", &mut names); // flags = 0x20 (ARCHIVE)
+    let mut gone = test_record("gone.txt", &mut names);
+    gone.flags |= 0x8000; // FileFlags::DELETED tombstone bit
+
+    let fold = CaseFold::default_table();
+
+    // `--deleted` (Some(true)) is a real filter and keeps only the tombstone.
+    let only_deleted = SearchFilters {
+        deleted: Some(true),
+        ..Default::default()
+    };
+    assert!(
+        !only_deleted.is_empty(),
+        "--deleted must register as active"
+    );
+    assert!(only_deleted.matches_record(&gone, &names, &mut Vec::new(), fold));
+    assert!(!only_deleted.matches_record(&live, &names, &mut Vec::new(), fold));
+
+    // Some(false) keeps only live records.
+    let only_live = SearchFilters {
+        deleted: Some(false),
+        ..Default::default()
+    };
+    assert!(!only_live.matches_record(&gone, &names, &mut Vec::new(), fold));
+    assert!(only_live.matches_record(&live, &names, &mut Vec::new(), fold));
+
+    // None = no filter: both pass.
+    let no_filter = SearchFilters::default();
+    assert!(no_filter.matches_record(&gone, &names, &mut Vec::new(), fold));
+    assert!(no_filter.matches_record(&live, &names, &mut Vec::new(), fold));
+}
+
 #[path = "tests_ext.rs"]
 mod tests_ext;
 

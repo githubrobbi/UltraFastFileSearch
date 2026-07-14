@@ -612,6 +612,47 @@ jobs:
             fi
           done
 
+      # Unsigned Rust binaries recurrently trip Defender's ML heuristic, which
+      # blocks the winget-pkgs PR (Validation-Defender-Error) hours after the
+      # release. Scan the freshly-built binaries here so the risk surfaces NOW,
+      # in the release summary, pointing at the remediation. EARLY WARNING ONLY:
+      # a clean result does NOT guarantee winget passes (its cloud/ML validation
+      # uses fresh defs this runner may lack), and a hit never fails the release.
+      - name: Defender false-positive early warning
+        if: contains(matrix.target, 'windows')
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $mp = (Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue |
+                 Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $mp) { $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" }
+          if (-not (Test-Path $mp)) { "::notice::MpCmdRun not found; skipping Defender early-warning scan."; exit 0 }
+          $sig = (Get-MpComputerStatus -ErrorAction SilentlyContinue).AntivirusSignatureVersion
+          $dir = "target/${{ matrix.target }}/release"
+          $flagged = @()
+          Get-ChildItem "$dir/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            & $mp -Scan -ScanType 3 -File $_.FullName -DisableRemediation *> $null
+            if ($LASTEXITCODE -eq 2) { $flagged += $_.Name }
+          }
+          $tag = "${{ needs.release-preparation.outputs.tag }}"
+          if ($flagged.Count -gt 0) {
+            $list = $flagged -join ", "
+            "::warning::Defender flagged $($flagged.Count) binary(ies) [$list] (defs $sig). This release will likely hit the winget Validation-Defender-Error. Remediate with: just winget-av-submit $tag"
+            @(
+              "### 🛡️ Defender false-positive early warning",
+              "",
+              "**$($flagged.Count) binary(ies) flagged** (signature defs ``$sig``): $list",
+              "",
+              "This release will very likely trip ``Validation-Defender-Error`` on the winget-pkgs PR. Prep the WDSI false-positive submission:",
+              '```',
+              "just winget-av-submit $tag",
+              '```'
+            ) | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          } else {
+            "::notice::Defender early-warning scan clean (defs $sig). Note: winget cloud/ML validation may still differ."
+            "### 🛡️ Defender early-warning scan: clean (defs ``$sig``)" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
       - name: Package binaries
         shell: bash
         run: |

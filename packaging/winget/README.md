@@ -110,3 +110,40 @@ Until then, the broker is reachable from its installed path, and the CLI's
 When the GUI demo is bundled into the zip, add one entry to
 [`nested-aliases.yaml`](nested-aliases.yaml) (`uffs-windows-x64/uffs-gui.exe` →
 `uffs-gui`) and seed it on the next winget PR. No other change required.
+
+## Defender false-positive (`Validation-Defender-Error`)
+
+Unsigned Rust binaries recurrently trip Windows Defender's ML/heuristic
+detection, which blocks the `SkyLLC.UFFS` winget-pkgs PR with the
+`Validation-Defender-Error` label a few hours after a release (it has hit 0.6.18,
+0.6.26, and 0.6.27). It is a **false positive**: the release bytes match the
+published `SHA256SUMS`, and Microsoft's analyst has cleared prior submissions.
+
+**When a winget PR goes red on Defender, run:**
+
+```bash
+just winget-av-submit v0.6.XX          # prep the submission
+just winget-av-submit v0.6.XX --open   # prep + open the WDSI form
+```
+
+The [`av-submit.sh`](av-submit.sh) helper downloads the release's
+`uffs-windows-x64.zip`, builds a password-protected archive (pw `infected`) of
+exactly the binaries winget ships, and prints the submission URL
+(<https://www.microsoft.com/en-us/wdsi/filesubmission>), the SHA-256s, and every
+form field to paste. The WDSI submission is a manual Microsoft-account web form
+(no developer API), so the final click-through is by hand.
+
+The release build also runs a **best-effort Defender early-warning scan**
+([`release.yml`](../../.github/workflows/release.yml)): if the fresh Windows
+binaries scan dirty it flags the release summary and points at this command, so
+the block surfaces at release time instead of from the winget PR hours later. A
+clean scan is not a guarantee (winget's cloud/ML validation may differ); a hit is
+a strong signal.
+
+**Sequence after submitting:** WDSI analyst clears the detection, then the winget
+re-validation needs a **moderator** (author `@wingetbot run` is privilege-denied)
+— nudge the PR citing the WDSI submission id and the "no positive detection"
+result, or wait for wingetbot's auto-retry, and the label lifts.
+
+**Durable fix:** Authenticode code signing (Azure Trusted Signing) stops signed
+binaries from tripping the unsigned-Rust heuristic and eliminates this drill.

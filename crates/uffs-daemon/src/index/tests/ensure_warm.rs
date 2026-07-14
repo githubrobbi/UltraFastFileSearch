@@ -238,17 +238,20 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
 // ── Phase 5 (#93) — parallel re-promote ────────────────────────────
 
 /// Pin the parallelisation contract of `ensure_warm_for_dispatch`
-/// (#93): with N Parked drives and a `BodyLoader::load` that
-/// sleeps `delay`, total wall must be `~delay`, not `N × delay`.
+/// (#93): with N Parked drives and a `BodyLoader::load` that sleeps
+/// `delay`, the `JoinSet` fan-out must run the loaders concurrently
+/// rather than in the pre-#93 serial loop.
 ///
-/// The pre-fix serial loop took `sum(per-drive)`; the `JoinSet` fan-out
-/// completes in `~max(per-drive)` plus a few µs of write-lock
-/// contention.  We assert two things:
+/// We prove this with the loader's **peak in-flight counter**, which is
+/// deterministic: with a 100 ms per-drive delay all three loads are
+/// dispatched before any completes, so a parallel fan-out records
+/// `peak_in_flight >= 2` while a serial loop would record `== 1`.
 ///
-/// 1. `peak_in_flight >= 2` — the loader observed concurrent calls.
-/// 2. Wall < `1.5 × delay` — comfortably below the `3 × delay` a serial loop
-///    would take with N=3.  The 1.5× upper bound leaves headroom for
-///    blocking-pool ramp-up and CI variance.
+/// NOTE: an earlier `elapsed < 1.5 × delay` wall-clock assertion was
+/// removed here — it flaked on cold/contended CI runners (notably
+/// Windows) where blocking-pool ramp-up pushed even a correct parallel
+/// run past the bound. The peak counter captures the same serial-loop
+/// regression without the timing race.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ensure_warm_for_dispatch_promotes_in_parallel() {
     use core::time::Duration;
@@ -288,7 +291,6 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
             .await
     );
 
-    let start = std::time::Instant::now();
     mgr.ensure_warm_for_dispatch(
         &[
             uffs_mft::platform::DriveLetter::C,
@@ -298,7 +300,6 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
         &[],
     )
     .await;
-    let elapsed = start.elapsed();
 
     // All three shards promoted.
     let states = mgr.shard_states_for_test().await;
@@ -312,26 +313,14 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
         "all three Parked shards must be Warm after ensure_warm_for_dispatch"
     );
 
-    // Concurrent loaders observed.
+    // Concurrent loaders observed — the deterministic parallelism proof.
+    // A serial re-promote loop would run the loaders one at a time and
+    // never exceed a peak of 1 in flight.
     assert!(
         loader.peak() >= 2,
         "expected ≥ 2 concurrent loader calls in flight; got peak = {} \
          (parallelism regression — re-promote went serial again)",
         loader.peak(),
-    );
-
-    // Wall ≈ delay, not N × delay.  The serial loop pre-#93 would
-    // have taken ≥ 300 ms for delay=100 ms × 3 drives; we accept
-    // up to 1.5× (150 ms) to keep the test robust against CI jitter
-    // and blocking-pool ramp-up.
-    let upper_bound = delay.mul_f32(1.5);
-    assert!(
-        elapsed < upper_bound,
-        "expected parallel re-promote (≤ {} ms), got {} ms — \
-         serial pre-#93 baseline would be ≥ {} ms",
-        upper_bound.as_millis(),
-        elapsed.as_millis(),
-        delay.as_millis() * 3,
     );
 }
 

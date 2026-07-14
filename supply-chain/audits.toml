@@ -49,6 +49,12 @@ criteria = "safe-to-deploy"
 delta = "5.0.0 -> 5.0.1"
 notes = 'Delta audit (cargo vet diff 5.0.0 -> 5.0.1, small). src/decode.rs + src/writer.rs: adds a few #[cfg(feature="std")] gates and a buffer-size fallback (`if buffer_size == 0 { 4096 } else { buffer_size }`) so a zero requested buffer size no longer yields a zero-length allocation, plus a loop `break;` fix. src/bin/error_handling_tests.rs + src/test.rs are test/bin only. No new unsafe, no new deps, no new I/O/FFI/process/network capability — defensive bugfix release of the pure-Rust brotli decoder. Publisher danielrh (Dropbox, brotli-rust maintainer).'
 
+[[audits.bytemuck]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.25.0 -> 1.25.1"
+notes = "Reviewed full 1.25.0->1.25.1 diff. Only substantive changes: (1) add not(target_arch = 'spirv') to the cfg gate on two 'impl core::error::Error' blocks (PodCastError, CheckedCastError) to fix a spirv build error (upstream PR #348); (2) a doc note on try_cast_slice about empty-slice alignment; (3) one new regression test. No new unsafe, no new deps, no fs/net/process/FFI/crypto surface. Cargo.lock churn is bytemuck's own dev lockfile only. Matches changelog. Publisher Lokathor (bytemuck maintainer)."
+
 [[audits.chrono]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -138,6 +144,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.16 -> 0.1.17"
 notes = """Delta audit (cargo vet diff 0.1.16 -> 0.1.17). Cargo.toml(.orig): version bump + redox_syscall dep 0.7 -> 0.8. src/lib.rs: (a) cosmetic reorder of a libc MSG_* re-export list (no semantic change); (b) adds one Redox kernel FFI binding redox_relpathat_v0(dirfd, fd, dst_base, dst_len) -> RawResult plus the safe wrappers Fd::relpathat / call::relpathat, mirroring the existing redox_fpath_v1 binding exactly (Error::demux over an unsafe extern call using the caller-provided &mut [u8] buffer's ptr+len). The single new unsafe block is a like-for-like copy of the adjacent fpath binding. libredox is the Redox stable-ABI shim, reachable only via redox_users on target_os="redox"; the extern symbols are never linked on UFFS shipping targets (Windows/macOS). No network/FS-path/process/env additions. Publisher 4lDO2 (Redox maintainer)."""
+
+[[audits.memchr]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.8.2 -> 2.8.3"
+notes = "Reviewed full 2.8.2->2.8.3 diff. Two source files change (unsafe count 342->349): (1) src/arch/x86_64/memchr.rs marks the pub(crate) raw-pointer functions (memchr_raw/memrchr_raw/memchr2_raw/memrchr2_raw/memchr3_raw/memrchr3_raw/count_raw, all taking *const u8) as 'unsafe fn' with no body changes -- an explicit-safety-contract hardening; internal callers updated (crate compiles). (2) src/arch/generic/memchr.rs adds a guarded core::hint::unreachable_unchecked() perf hint asserting the found index is in-bounds (sound: a matched byte's distance from start is always < haystack.len()). No new deps, no fs/net/process/FFI surface. Authored by BurntSushi (memchr maintainer), whom this project already trusts."
 
 [[audits.memmap2]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -349,6 +361,12 @@ criteria = "safe-to-deploy"
 delta = "1.12.3 -> 1.12.4"
 notes = "Reviewed full diff (3 files): changelog + version metadata + regex-syntax dependency requirement 0.8.5 -> 0.8.11 and a benches/ include glob. No source code changes in the regex crate itself; the substantive change ships in regex-syntax 0.8.11 (audited separately)."
 
+[[audits.regex]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.12.4 -> 1.13.0"
+notes = "Reviewed full 1.12.4->1.13.0 diff. Sole substantive change is the new 'regex!' / 'bytes::regex!' declarative macro (CHANGELOG #709): a 'static Lazy<Regex>' wrapper (regex_automata::util::lazy::Lazy, re-exported via a #[doc(hidden)] __private module) for one-time compilation of literal patterns; panics via .expect on an invalid literal at first use (documented, opt-in). No unsafe, no new deps, no new capabilities; existing regex usage unchanged. Authored by BurntSushi, whom this project already trusts."
+
 [[audits.regex-syntax]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -373,6 +391,12 @@ criteria = "safe-to-deploy"
 delta = "1.8.0 -> 2.1.0"
 notes = "Delta audit (cargo vet diff 1.8.0 -> 2.1.0, ~10k-line diff; bulk is the MCP 2025-11-25 spec migration in src/model/* - mechanical serde type renames (GetTaskInfoParams->GetTaskParams, CreateElicitationRequest->ElicitRequest, request_id becomes Option, etc.) plus matching handler/service plumbing and large test additions). Capability grep of ALL added lines found net/process usage ONLY inside #[cfg(test)] blocks and tests/ (loopback axum test servers, test child-process spawn); zero new unsafe. Security-relevant runtime changes are all HARDENING: (1) transport/auth.rs adds SSRF protections to OAuth discovery - redirects now manually followed with same-origin enforcement + 10-redirect cap, authorization-server metadata URLs rejected for private/loopback/link-local/CGNAT/benchmark ranges, IPv4-mapped IPv6, localhost and cloud metadata hosts (metadata.google.internal etc.); RFC 9728 resource field now required and must match base_url; resource_metadata URLs from WWW-Authenticate must be same-origin; RFC 6749 s6 fix retains the old refresh token when a refresh response omits one. (2) reqwest default client sets redirect::Policy::none so custom headers cannot replay to redirect targets. (3) streamable_http_server/tower.rs validates the MCP-Protocol-Version header before creating a session. (4) transport/async_rw.rs fixes read_until cancellation safety (partial line kept across select! polls) and stops replying to syntactically-invalid JSON (error-storm prevention, matches other official SDKs; well-formed-but-wrong JSON still gets Invalid Request). Publisher alexhancock (Alex Hancock) - crates.io shows the SAME publisher for 1.7.0/1.8.0/2.0.0/2.1.0, i.e. continuity with our accepted baseline; repo is the official modelcontextprotocol/rust-sdk."
 
+[[audits.rmcp]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.1.0 -> 2.2.0"
+notes = "Reviewed full 2.1.0->2.2.0 diff. 'unsafe' count 0 -> 0; no runtime dependency or feature changes (only a version bump + a new [[test]] registration). Changes are the documented conformance/robustness work: reject auth servers lacking S256 PKCE + metadata-discovery host allowlisting/SSRF hardening in transport/auth.rs (client/http feature this project does not enable); don't respond to cancelled requests (service.rs); TTL seconds->milliseconds per MCP spec with a deprecated alias (task_manager.rs); fail orphaned streamable-HTTP responses on session reinit (streamable_http_client.rs); mime 'text'->'text/plain' (model). Only URLs in the diff are example.com in tests. No suspicious endpoints or exfiltration."
+
 [[audits.rmcp-macros]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -390,6 +414,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.0 -> 2.1.0"
 notes = "Delta audit (cargo vet diff 1.8.0 -> 2.1.0, 147-line diff). Proc-macro crate; changes are purely to the token streams it emits: prompt_handler.rs fully qualifies previously-bare type paths (rmcp::model::GetPromptRequestParams, rmcp::service::RequestContext, etc.); task_handler.rs renames model types for the MCP 2025-11-25 spec (GetTaskInfoParams->GetTaskParams, GetTaskResultParams->GetTaskPayloadParams) and swaps struct-literal construction for ::new() constructors. No new unsafe, no fs/net/process/env access, no build script, generated code only references rmcp's own types. Publisher alexhancock (modelcontextprotocol/rust-sdk release chain, same as 1.8.0->2.x series)."
+
+[[audits.rmcp-macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.1.0 -> 2.2.0"
+notes = "Reviewed full 2.1.0->2.2.0 diff. Pure version bump: the only change is the version field in Cargo.toml (cargo-vet reports 1 file, 1 insertion, 1 deletion). No source, dependency, or capability changes."
 
 [[audits.rustc-hash]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -522,6 +552,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.23.3 -> 1.23.4"
 notes = "Delta audit (cargo vet diff). Source changes: src/lib.rs adds a docsrs-gated #![cfg_attr(docsrs, feature(doc_cfg))] (affects only docs.rs builds) plus version/html_root_url string bumps; src/external/serde_support.rs is intra-doc-link doc-comment fixes only. No runtime/logic change, no new unsafe, network, fs, process, or FFI surface. Patch release by KodrAus (uuid maintainer)."
+
+[[audits.uuid]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.4 -> 1.23.5"
+notes = "Reviewed full 1.23.4->1.23.5 diff. Hex encode/decode refactored to const-fn helpers (nibble_to_hex arithmetic replacing the UPPER/LOWER LUTs in fmt.rs; decode_hex32 using fixed [u8;32] buffers with preserved bad-nibble rejection in parser.rs) plus one serde doc-link fix. 'unsafe' count unchanged (19 -> 19). No runtime dep or feature changes; the added gungraun dependency is dev-only (benchmarks, non-wasm target). Authored by KodrAus (uuid maintainer)."
 
 [[audits.which]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"

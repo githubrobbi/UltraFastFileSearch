@@ -24,16 +24,11 @@ use std::path::PathBuf;
 use uffs_client::protocol::SearchParams;
 use uffs_client::protocol::response::SearchResponse;
 use uffs_core::compact::MftSource;
+use uffs_core::diff::DELETED_TOMBSTONE_FLAG;
 use uffs_core::search::backend::DriveIndex;
 use uffs_mft::platform::DriveLetter;
 
 use super::IndexManager;
-
-/// UFFS-internal "deleted tombstone" bit — mirrors
-/// `uffs_mft::flags::FileFlags::DELETED` (0x8000, bit 15, reserved in NTFS) and
-/// `uffs_core::search::filters`'s `DELETED_TOMBSTONE_FLAG`. Set on a baseline
-/// record whose File Reference vanished from the current index.
-const DELETED_FLAG: u32 = 0x8000;
 
 /// Why a `diff` request could not be served. Mapped to a JSON-RPC error by the
 /// handler; kept data-only here so this module stays free of wire concerns.
@@ -91,7 +86,7 @@ impl IndexManager {
             let records = baseline.records.as_mut_slice();
             for &idx in &report.deleted {
                 if let Some(record) = records.get_mut(idx as usize) {
-                    record.flags |= DELETED_FLAG;
+                    record.flags |= DELETED_TOMBSTONE_FLAG;
                 }
             }
             anyhow::Ok(baseline)

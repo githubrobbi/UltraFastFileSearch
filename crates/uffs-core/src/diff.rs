@@ -26,6 +26,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::compact::{CompactRecord, DriveCompactIndex, MalformedRender};
 use crate::search::tree::resolve_path;
 
+/// UFFS-internal marker bit set on a baseline [`CompactRecord`]'s `flags` to
+/// tag it as a snapshot-diff **delete** (present in the baseline, absent from
+/// the current index).
+///
+/// Bit 31 of the `u32` attribute word — deliberately **above** every NTFS
+/// `FILE_ATTRIBUTE_*` bit (which top out at
+/// `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x0040_0000`), so it never collides
+/// with a real attribute and never renders in an attribute column. The daemon
+/// sets it in `IndexManager::diff_search`;
+/// [`crate::search::filters::SearchFilters::deleted`] filters on it.
+pub const DELETED_TOMBSTONE_FLAG: u32 = 0x8000_0000;
+
 /// The classified delta between a baseline and a current compact index.
 ///
 /// Every entry is a **row index** into the corresponding index's record array,

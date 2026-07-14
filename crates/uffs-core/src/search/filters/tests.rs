@@ -1225,7 +1225,12 @@ fn deleted_filter_selects_only_tombstoned_records() {
     let mut names = Vec::new();
     let live = test_record("live.txt", &mut names); // flags = 0x20 (ARCHIVE)
     let mut gone = test_record("gone.txt", &mut names);
-    gone.flags |= 0x8000; // FileFlags::DELETED tombstone bit
+    gone.flags |= DELETED_TOMBSTONE_FLAG; // diff-marked deleted (bit 31)
+    // Collision guard: a record with the real NTFS Integrity attribute
+    // (FILE_ATTRIBUTE_INTEGRITY_STREAM = 0x8000) must NOT read as a diff delete
+    // — the marker is bit 31, deliberately clear of every NTFS attribute bit.
+    let mut integrity = test_record("integrity.dat", &mut names);
+    integrity.flags |= 0x8000;
 
     let fold = CaseFold::default_table();
 
@@ -1240,6 +1245,10 @@ fn deleted_filter_selects_only_tombstoned_records() {
     );
     assert!(only_deleted.matches_record(&gone, &names, &mut Vec::new(), fold));
     assert!(!only_deleted.matches_record(&live, &names, &mut Vec::new(), fold));
+    assert!(
+        !only_deleted.matches_record(&integrity, &names, &mut Vec::new(), fold),
+        "the NTFS Integrity attribute (0x8000) must not be read as a diff delete",
+    );
 
     // Some(false) keeps only live records.
     let only_live = SearchFilters {

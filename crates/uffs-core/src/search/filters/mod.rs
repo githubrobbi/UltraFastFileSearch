@@ -151,9 +151,8 @@ pub struct SearchFilters {
     pub malformed: Option<bool>,
 
     /// Filter on whether the record is a **deleted tombstone** — its
-    /// `FileFlags::DELETED` bit (`0x8000`, bit 15, UFFS-internal) is set.
-    /// `Some(true)` keeps only deleted records;
-    /// `Some(false)` only live ones; `None` = no filter.
+    /// [`crate::diff::DELETED_TOMBSTONE_FLAG`] bit is set. `Some(true)` keeps
+    /// only deleted records; `Some(false)` only live ones; `None` = no filter.
     ///
     /// Populated by the snapshot-diff path, which marks the baseline rows that
     /// vanished from the current index before running the normal search over
@@ -852,11 +851,7 @@ impl SearchFilters {
     }
 }
 
-/// UFFS-internal "deleted tombstone" bit — mirrors
-/// `uffs_mft::flags::FileFlags::DELETED` (0x8000, bit 15, reserved in NTFS).
-/// The snapshot-diff path sets it on a baseline record whose File Reference
-/// vanished from the current index; `SearchFilters::deleted` filters on it.
-const DELETED_TOMBSTONE_FLAG: u32 = 0x8000;
+use crate::diff::DELETED_TOMBSTONE_FLAG;
 
 #[cfg(test)]
 mod tests;

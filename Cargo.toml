@@ -65,7 +65,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.6.26"
+version = "0.6.27"
 edition = "2024"
 # No `rust-version` claim: the workspace is structurally nightly-only.
 # `crates/uffs-polars` enables `polars/nightly` unconditionally, which
@@ -132,30 +132,30 @@ publish = false
 # proposed-plan output for 12 days because `release-plz update`
 # failed at `cargo package` with this very error.  See
 # `release-automation-baseline.md` §10 for the diagnostic trail.
-uffs-polars = { path = "crates/uffs-polars", version = "0.6.26" }
-uffs-security = { path = "crates/uffs-security", version = "0.6.26" }
-uffs-text = { path = "crates/uffs-text", version = "0.6.26" }
-uffs-time = { path = "crates/uffs-time", version = "0.6.26" }
-uffs-version = { path = "crates/uffs-version", version = "0.6.26" }
-uffs-statusfmt = { path = "crates/uffs-statusfmt", version = "0.6.26" }
-uffs-mft = { path = "crates/uffs-mft", version = "0.6.26" }
-uffs-format = { path = "crates/uffs-format", version = "0.6.26" }
-uffs-core = { path = "crates/uffs-core", version = "0.6.26" }
-uffs-client = { path = "crates/uffs-client", version = "0.6.26" }
+uffs-polars = { path = "crates/uffs-polars", version = "0.6.27" }
+uffs-security = { path = "crates/uffs-security", version = "0.6.27" }
+uffs-text = { path = "crates/uffs-text", version = "0.6.27" }
+uffs-time = { path = "crates/uffs-time", version = "0.6.27" }
+uffs-version = { path = "crates/uffs-version", version = "0.6.27" }
+uffs-statusfmt = { path = "crates/uffs-statusfmt", version = "0.6.27" }
+uffs-mft = { path = "crates/uffs-mft", version = "0.6.27" }
+uffs-format = { path = "crates/uffs-format", version = "0.6.27" }
+uffs-core = { path = "crates/uffs-core", version = "0.6.27" }
+uffs-client = { path = "crates/uffs-client", version = "0.6.27" }
 # `uffs-broker-protocol` carries the wire-protocol types shared between
 # `uffs-broker` (the elevated handle vendor, Windows-only binary) and
 # `uffs-daemon::broker_client` (the handle consumer).  Pure-logic
 # Layer-0 lib — cross-platform tests run on every CI lane.  Added in
 # F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
 # wire-format byte literals.
-uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.26" }
+uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.27" }
 # `uffs-winsvc` — native Windows service control (SCM query/start/stop) +
 # the non-connecting broker-pipe readiness probe.  Layer-0 leaf: its only
 # dependency is the `windows` crate (windows-target), with non-Windows
 # stubs so cross-platform consumers (uffs-update, uffs-cli) compile.
 # Single source of truth for the `sc`/SCM mechanics previously duplicated
 # across uffs-broker, uffs-update, and uffs-cli.
-uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.26" }
+uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.27" }
 # NOTE: no `uffs-broker` workspace dependency alias on purpose —
 # `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
 # this protocol module's now-extracted sibling); no other workspace
@@ -235,7 +235,7 @@ toml = "1.1.2"
 
 # ───── Data Structures ─────
 bitflags = "2.13.0"
-bytemuck = { version = "1.25.0", features = ["derive"] }
+bytemuck = { version = "1.25.1", features = ["derive"] }
 smallvec = "1.15.1"
 zerocopy = { version = "0.8", features = ["derive"] }
 
@@ -244,7 +244,7 @@ thiserror = "2.0.18"
 anyhow = "1.0.103"
 
 # ───── MCP (Model Context Protocol) ─────
-rmcp = { version = "2.1.0", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "2.2.0", features = ["server", "transport-io", "macros"] }
 schemars = "1.2.1"
 
 # ───── HTTP / Tower (for MCP Streamable HTTP gateway) ─────
@@ -276,8 +276,8 @@ devicons = "0.6.12"
 colored = "3.1.1"
 
 # ───── Pattern Matching ─────
-regex = "1.12.4"
-memchr = "2.8.2"
+regex = "1.13.0"
+memchr = "2.8.3"
 aho-corasick = "1.1.4"
 globset = "0.4.18"
 
@@ -334,7 +334,7 @@ hostname = "0.4.2"
 num_cpus = "1.17.0"
 # Random unique identifiers.  Only the `v4` (random) feature is enabled
 # workspace-wide; consumers that need v1/v5/v7 etc. re-add the feature.
-uuid = { version = "1.23.4", features = ["v4"] }
+uuid = { version = "1.23.5", features = ["v4"] }
 
 # ───── Security / Crypto ─────
 aes-gcm = "0.11.0"

@@ -45,7 +45,7 @@ When forensic mode is enabled, additional columns are available:
 
 ### Forensic Use Cases
 
-- **Deleted file recovery**: Find recently deleted files whose MFT records haven't been reused
+- **Deleted file recovery**: Find recently deleted files whose MFT records haven't been reused (surfaced by `uffs --deleted` / `uffs --diff` — see [Delete Visibility](#delete-visibility-uffs-cli))
 - **Corruption detection**: Identify records with torn writes or disk errors
 - **Timeline analysis**: Use `$STANDARD_INFORMATION` vs `$FILE_NAME` timestamp discrepancies to detect anti-forensic timestamp manipulation
 - **Extension record analysis**: Understand file fragmentation across MFT records
@@ -73,6 +73,45 @@ For each 1KB record in MFT:
 ```
 
 **Output size impact:** Forensic mode typically produces 10–50% more rows depending on volume history. Heavily used volumes with many deleted files can produce 2–3× more rows.
+
+---
+
+## Delete Visibility (`uffs` CLI)
+
+The forensic engine above powers three user-facing `uffs` commands for answering "what was deleted". They use the two mechanisms in `docs/architecture/delete-visibility-snapshot-diff.md`: **snapshot diff** (compare two states) and **tombstone read** (surface not-in-use records). Every live MFT read needs Windows + Administrator; the offline (`--mft-file`) paths run anywhere.
+
+### `uffs --snapshot` — capture a baseline
+
+```bash
+uffs --snapshot --drive C --out C_baseline.bin      # zstd-compressed, UFFS header
+uffs --snapshot --drive C --out C_base.bin --no-compress
+```
+
+Thin wrapper over the same `MftReader::open` + `save_raw_to_file` primitives as `uffs-mft save` (below), but part of the main `uffs` binary so the diff workflow needs no second tool. `--raw` produces a headerless dump for other MFT tools — but that form is **not** loadable by `uffs --diff`.
+
+### `uffs --diff` — snapshot diff, full-filter (primary)
+
+`--diff <BASELINE>` is a **search flag**, not a separate command: it diffs the baseline capture against the drive's live in-memory index (by NTFS File Reference — `(sequence_number << 48) | frs` — so a delete-then-reuse of an MFT slot is a delete + an add, never a false "modify"), marks the vanished rows, and runs the **normal search pipeline** over the deleted set. So deleted files filter/sort by every criterion a normal search has:
+
+```bash
+uffs --diff C_baseline.bin --drive C                    # all deleted files
+uffs --diff C_baseline.bin --drive C '*.txt' --newer 30d --min-size 1MB
+uffs --diff C_baseline.bin --drive C 'report*' --sort -size -n 100 --format csv
+```
+
+This is the reliable, journal-free delete delta (offline captures, non-Windows, wrapped/disabled USN). It reports the *net* delete between two states, not every intermediate delete the way USN's continuous log does. The drive must be loaded in a running daemon (it supplies the live "current" side).
+
+### `uffs --deleted` — tombstone read (no baseline)
+
+Surfaces recently-deleted files straight from not-in-use MFT records — no baseline needed — reconstructing each path from the surviving parent chain:
+
+```bash
+uffs --deleted --drive C                 # live volume (Windows, elevated)
+uffs --deleted --mft-file C_old.bin      # or an offline capture
+uffs --deleted --drive C --limit 50 --json
+```
+
+Best-effort by nature: only deletes whose MFT slot has not been recycled are visible, the timestamp is the file's own last-write (not the deletion time), and a path is unreliable (flagged with a leading `…`) if a parent directory's slot was itself reused. The scan streams only the deleted records, so it stays memory-bounded on large volumes.
 
 ---
 

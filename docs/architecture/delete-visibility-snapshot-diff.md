@@ -5,7 +5,22 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # Delete visibility for the `--newer` fallback (snapshot diff + tombstone read)
 
-**Status:** design sketch / proposed slice
+**Status:** **implemented** — both mechanisms shipped.
+- **Snapshot diff** (Mechanism 1): the NTFS File Reference `(seq, frs)` is
+  persisted inline on every `CompactRecord` (`file_ref`), `uffs_core::diff`
+  computes the delta, and `--diff <BASELINE>` is a search flag that runs the
+  full filter/sort/output pipeline over the deleted set (daemon
+  `IndexManager::diff_search`). `uffs --snapshot` captures the baseline.
+- **Tombstone read** (Mechanism 2): `uffs --deleted` (live `--drive` or
+  offline `--mft-file`) surfaces not-in-use records via forensic parsing.
+- User-facing surface is documented in
+  [engine/12-forensics-diagnostics.md](engine/12-forensics-diagnostics.md#delete-visibility-uffs-cli).
+
+Phases 1–3 of the plan below are done; the phased text is retained as the
+design record. Not built: promoting the diff into the daemon's slice-8.6
+reconciliation, and a dedicated per-drive baseline-retention ring (today the
+baseline is a capture file the user manages).
+
 **Motivating gap:** the `--newer` (timestamp) delta path can report files
 *created or modified* after a date, but it is structurally blind to
 *deletions*. A deleted file simply stops appearing; a timestamp cannot express

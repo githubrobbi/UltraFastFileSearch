@@ -129,6 +129,7 @@ All filters are detailed in the [Filters guide](filters.md).  Summary:
 | `--well-formed` | Forensic | Only valid names (inverse of `--malformed`) |
 | `--malformed-path` | Forensic | Match when any path segment is ill-formed |
 | `--normalize-malformed` | Forensic | Display: render corrupt code units as `<BAD:HHHH>` not `�` |
+| `--diff <BASELINE>` | Forensic | Search the **deleted** set vs a baseline MFT capture; composes with every filter above ([Delete Visibility](../architecture/engine/12-forensics-diagnostics.md#delete-visibility-uffs-cli)) |
 | `-n, --limit <N>` | Limit | Max results (0 = unlimited) |
 
 ---
@@ -229,6 +230,33 @@ uffs --agg count            # Simple total count
 ```
 
 > **Full guide:** [Aggregation](aggregation.md)
+
+### `uffs --snapshot` — capture a baseline MFT
+
+Save the drive's current MFT to a file so a later `uffs --diff` can report
+what was deleted since. Reads the live NTFS MFT: **Windows + Administrator**.
+
+```bash
+uffs --snapshot --drive C --out C_baseline.bin   # zstd-compressed (default)
+uffs --snapshot --drive C --out C_base.bin --no-compress
+```
+
+### `uffs --deleted` — forensic tombstone read
+
+Surface recently-deleted files straight from not-in-use MFT records — **no
+baseline needed** — reconstructing each path from the surviving parent chain.
+Best-effort: only deletes whose MFT slot hasn't been recycled are visible, and
+the timestamp is the file's own last-write, not the deletion time.
+
+```bash
+uffs --deleted --drive C                 # live volume (Windows, elevated)
+uffs --deleted --mft-file C_old.bin      # or an offline capture
+uffs --deleted --drive C --limit 50 --json
+```
+
+> Deleting *with filters* since a baseline? Use the `--diff` search flag (§2)
+> instead — it runs the full filter/sort/output pipeline over the deleted set.
+> **Full guide:** [Delete Visibility](../architecture/engine/12-forensics-diagnostics.md#delete-visibility-uffs-cli)
 
 ### `uffs --daemon`
 

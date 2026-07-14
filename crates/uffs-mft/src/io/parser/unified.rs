@@ -345,6 +345,16 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
     let frs_base_typed = crate::frs::Frs::new(frs_base);
     let base_ri = u32_as_usize(index.ensure_record(frs_base_typed));
 
+    // Persist the NTFS sequence number (slot-reuse generation) from the base
+    // record's own header. With the FRS it forms the File Reference the compact
+    // index packs into `file_ref`; the snapshot diff needs it to tell a
+    // delete-then-reuse of an MFT slot apart from an unchanged file (the slot
+    // number alone is stable across reuse). Extension records carry their own
+    // sequence, so only a base record's header sets the file's sequence.
+    if header.is_base_record() {
+        index.records[base_ri].sequence_number = header.sequence_number;
+    }
+
     // ── Attribute loop ─────────────────────────────────────────────────
     let mut offset = usize::from(header.first_attribute_offset);
     let max_offset = core::cmp::min(u32_as_usize(header.bytes_in_use), data.len());

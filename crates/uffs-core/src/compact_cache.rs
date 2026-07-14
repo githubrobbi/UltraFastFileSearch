@@ -156,7 +156,12 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 ///   for delete-diff and the forensic view. The record array is a bulk
 ///   `bytemuck` memcpy, so the row-size change alone invalidates older caches
 ///   at the header version check (a fresh MFT rebuild writes v12).
-const COMPACT_VERSION: u16 = 12;
+/// - v13: the MFT parsers now persist the record's `sequence_number`, so
+///   `file_ref` carries the real slot-reuse generation instead of `0`. v12
+///   caches were written with `file_ref == frs` (seq 0), which makes the
+///   snapshot diff blind to deletions (MFT slot numbers are stable across
+///   reuse); rejecting them forces a rebuild that captures the sequence number.
+const COMPACT_VERSION: u16 = 13;
 
 mod filters_io;
 pub mod parked;

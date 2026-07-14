@@ -720,6 +720,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // Now get or create the record in the index - no more index mutations
     // after this.
     let record = index.get_or_create(crate::frs::Frs::new(frs));
+    // Persist the NTFS sequence number (slot-reuse generation). Together with
+    // the FRS it forms the File Reference the compact index packs into
+    // `file_ref`; without it a delete-then-reuse of an MFT slot is invisible to
+    // the snapshot diff (the slot number alone is stable across reuse).
+    record.sequence_number = header.sequence_number;
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,

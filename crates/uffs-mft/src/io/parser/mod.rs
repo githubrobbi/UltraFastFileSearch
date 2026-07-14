@@ -45,6 +45,34 @@ mod tests {
         assert!(!parse_record_to_fragment(&[0_u8; 3], 42, &mut fragment));
     }
 
+    /// Regression pin: `process_record` must persist the header's NTFS
+    /// **sequence number** onto the record. Without it `file_ref` degrades to
+    /// the FRS alone, and the snapshot diff — keyed on the File Reference —
+    /// goes blind to deletions (MFT slot numbers are stable across reuse).
+    #[test]
+    fn process_record_persists_the_sequence_number() {
+        // Minimal in-use base FILE record; sequence_number is a u16 at header
+        // offset 0x10. No attributes needed — the record is created regardless
+        // and the fix copies the header seq onto it before the attribute loop.
+        let mut record = RecordBuilder::new(56).build();
+        record
+            .get_mut(16..18)
+            .expect("header has a sequence-number field at 0x10")
+            .copy_from_slice(&0x1234_u16.to_le_bytes());
+
+        let mut index = MftIndex::new(crate::platform::DriveLetter::C);
+        let mut name_buf = String::new();
+        process_record(&record, 42, &mut index, &mut name_buf);
+
+        let rec = index
+            .find(crate::frs::Frs::new(42))
+            .expect("process_record must create the base record");
+        assert_eq!(
+            rec.sequence_number, 0x1234,
+            "the header sequence number must be persisted onto the record",
+        );
+    }
+
     // ── WI-5.2 panic-resistance corpus ──────────────────────────────
     //
     // The daemon builds with `panic = "abort"`: a single parser panic on a

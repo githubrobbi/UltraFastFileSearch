@@ -404,3 +404,62 @@ fn await_ready_polls_when_cached_status_is_loading() {
          not Ready; saw: {sent:?}",
     );
 }
+
+/// Regression — heavy-system-load daemon-start resilience: a real report
+/// showed `uffs --daemon start` failing with "Daemon did not become ready
+/// in time / request timed out" on a 7-drive / 25M-record production
+/// machine whose load legitimately took 2m27s — 27s past the (then-fixed)
+/// 2-minute client timeout — even though `--daemon status` moments later
+/// showed the daemon healthy and fully loaded.
+///
+/// `await_ready`'s `timeout` is now an *idle* budget: every `Loading`
+/// response whose `drives_loaded` advances resets the deadline. This test
+/// feeds two distinct progress ticks (1 drive, then 2 drives) ahead of
+/// `Ready`, with a 250ms idle budget. Real time elapses sleeping between
+/// polls (100ms → 200ms), so total wall-clock exceeds 250ms — proving the
+/// deadline was pushed out by progress rather than left fixed at start+250ms
+/// (which would have expired before the third poll ever ran).
+#[test]
+fn await_ready_extends_deadline_on_drive_load_progress() {
+    let canned = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"status":{"state":"loading","drives_loaded":2,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":3,"result":{"status":{"state":"ready"},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+    )
+    .as_bytes();
+    let (mut client, _writer) = client_with_canned_response(canned);
+
+    let outcome = client.await_ready(core::time::Duration::from_millis(250));
+    assert!(
+        outcome.is_ok(),
+        "progress ticks (1 drive, then 2) must each extend the idle deadline \
+         so the loop reaches the eventual Ready response instead of timing \
+         out at the fixed start+250ms mark; got {outcome:?}",
+    );
+}
+
+/// Companion to the progress-extends-deadline test above: a daemon that
+/// reports the *same* `drives_loaded` on every poll (a genuine stall, e.g.
+/// wedged on one drive) must NOT get free deadline extensions forever —
+/// the idle budget still applies when there is no real progress.
+#[test]
+fn await_ready_times_out_when_drive_load_progress_stalls() {
+    let canned = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+    )
+    .as_bytes();
+    let (mut client, _writer) = client_with_canned_response(canned);
+
+    let outcome = client.await_ready(core::time::Duration::from_millis(120));
+    assert!(
+        matches!(outcome, Err(ClientError::Timeout)),
+        "an unchanged drives_loaded across polls is a stall, not progress — \
+         it must not extend the idle deadline indefinitely; got {outcome:?}",
+    );
+}

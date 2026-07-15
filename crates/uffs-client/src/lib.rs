@@ -102,6 +102,11 @@ use uffs_security as _;
 /// `ws2_32.dll`) from its binary.
 #[cfg(feature = "async")]
 pub mod connect;
+/// Connect / auto-start entry points for [`connect::UffsClient`] — split
+/// off `connect.rs` to keep that file under the 800-LOC policy ceiling
+/// after the drive-load-progress `await_ready` resilience work grew it.
+#[cfg(feature = "async")]
+mod connect_autostart;
 /// Background keepalive task + `KeepaliveGuard` for long-lived clients.
 ///
 /// `start_keepalive` is re-attached to `UffsClient` via a split `impl`;

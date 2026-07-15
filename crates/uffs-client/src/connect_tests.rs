@@ -391,3 +391,68 @@ async fn await_ready_polls_when_cached_status_is_loading() {
          not Ready; saw: {sent:?}",
     );
 }
+
+/// Regression — heavy-system-load daemon-start resilience (async sibling of
+/// the same-named test in `connect_sync_tests.rs`): `await_ready`'s
+/// `timeout` is an idle budget, not a fixed wall-clock cutoff. Every
+/// `Loading` response whose `drives_loaded` advances resets the deadline, so
+/// a big multi-drive load that keeps visibly progressing under heavy system
+/// load is never killed by an arbitrary cutoff. Feeds two progress ticks (1
+/// drive, then 2) ahead of `Ready` with a 250ms idle budget; the real sleeps
+/// between polls push total wall-clock past 250ms, proving the deadline
+/// followed the progress instead of staying fixed at start+250ms.
+#[tokio::test]
+async fn await_ready_extends_deadline_on_drive_load_progress() {
+    let canned = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"status":{"state":"loading","drives_loaded":2,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":3,"result":{"status":{"state":"ready"},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+    )
+    .as_bytes();
+    let (mut client, _writer) = client_with_canned_response(canned);
+
+    let outcome = client
+        .await_ready(core::time::Duration::from_millis(250))
+        .await;
+    assert!(
+        outcome.is_ok(),
+        "progress ticks (1 drive, then 2) must each extend the idle deadline \
+         so the loop reaches the eventual Ready response instead of timing \
+         out at the fixed start+250ms mark; got {outcome:?}",
+    );
+}
+
+/// Companion to the progress-extends-deadline test above: a daemon that
+/// reports the *same* `drives_loaded` on every poll (a genuine stall) must
+/// NOT get free deadline extensions forever.
+#[tokio::test]
+async fn await_ready_times_out_when_drive_load_progress_stalls() {
+    let canned = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"status":{"state":"loading","drives_loaded":1,"drives_total":3},"uptime_secs":1,"connections":1,"pid":1}}"#,
+        "\n",
+    )
+    .as_bytes();
+    let (mut client, _writer) = client_with_canned_response(canned);
+
+    let outcome = client
+        .await_ready(core::time::Duration::from_millis(120))
+        .await;
+    match outcome {
+        Err(ClientError::ConnectionFailed(msg)) => {
+            assert!(
+                msg.contains("Timed out"),
+                "expected the async timeout message, got {msg}",
+            );
+        }
+        other => panic!(
+            "an unchanged drives_loaded across polls is a stall, not \
+             progress — it must not extend the idle deadline indefinitely; \
+             got {other:?}"
+        ),
+    }
+}

@@ -640,3 +640,75 @@ fn metafile_name_rejects_ordinary_dollar_files() {
         );
     }
 }
+
+/// Build a `DriveCompactIndex` whose `ext_names` table is at its
+/// legitimate maximum size (`u16::MAX` entries — see
+/// `DriveCompactIndex::intern_extension`'s own ceiling check).
+fn drive_with_full_ext_names_table() -> DriveCompactIndex {
+    let names: Vec<u8> = Vec::new();
+    let records: Vec<CompactRecord> = Vec::new();
+    let fold = uffs_text::case_fold::CaseFold::default_table();
+    let trigram = TrigramIndex::build(&records, &names, fold);
+    let children = ChildrenIndex::build(&records);
+    let ext_index = ExtensionIndex::build(&records);
+
+    // ids 0..u16::MAX-1 → exactly u16::MAX entries, the largest table
+    // `intern_extension` will ever produce (it refuses to assign
+    // id == u16::MAX).  Slot 0 keeps the reserved "no extension" string.
+    let mut ext_names: Vec<Box<str>> = (0..u16::MAX)
+        .map(|i| Box::from(format!("ext{i}")))
+        .collect();
+    if let Some(slot) = ext_names.get_mut(0) {
+        *slot = Box::from("");
+    }
+
+    DriveCompactIndex {
+        letter: uffs_mft::platform::DriveLetter::C,
+        records: ColumnStorage::from_vec(records),
+        names: ColumnStorage::from_vec(names),
+        trigram: Arc::new(trigram),
+        children: Arc::new(children),
+        ext_index: Arc::new(ext_index),
+        fold,
+        ext_names,
+        source: IndexSource::MftFile(std::path::PathBuf::from("C:")),
+        source_epoch: 0,
+        bloom: None,
+        path_trie: None,
+        frs_to_compact: Vec::new(),
+        delta: None,
+    }
+}
+
+/// Regression (uffsd crash on `--ext <list>` with several misses):
+/// `resolve_ext_ids` used to zip an unbounded `0_u16..` range against
+/// `ext_names.iter()`. `RangeFrom<u16>::next()` computes its *next*
+/// state before yielding, so once `ext_names` reached its legitimate
+/// `u16::MAX`-entry ceiling, looking up an extension absent from the
+/// table drove the range one step past `u16::MAX` and panicked with
+/// "attempt to add with overflow" — even though every id the table
+/// could ever hold fit comfortably in a `u16`. Queries that missed on
+/// even one requested extension (common with a multi-extension
+/// `--ext` filter) crashed the whole daemon.
+#[test]
+fn resolve_ext_ids_handles_full_table_miss_without_overflow() {
+    let drive = drive_with_full_ext_names_table();
+    assert_eq!(drive.ext_names.len(), usize::from(u16::MAX));
+
+    // Absent extension: must scan the entire (full) table and return
+    // no matches instead of panicking.
+    let ids = drive.resolve_ext_ids(&["nonexistent".to_owned()]);
+    assert!(ids.is_empty());
+}
+
+/// Companion to the miss-case regression above: a real extension at
+/// the very last valid slot still resolves to the correct id.
+#[test]
+fn resolve_ext_ids_finds_last_slot_of_full_table() {
+    let drive = drive_with_full_ext_names_table();
+    let last_id = u16::MAX - 1;
+    let last_ext = format!("ext{last_id}");
+
+    let ids = drive.resolve_ext_ids(&[last_ext]);
+    assert_eq!(ids, vec![last_id]);
+}

@@ -142,7 +142,7 @@ pub fn attribute_list_data_frs(list: &[u8], stream_name: &str) -> Vec<u64> {
             let name_off = usize::from(*list.get(pos + 7).unwrap_or(&0));
             let name = list
                 .get(pos + name_off..pos + name_off + name_len * 2)
-                .map(decode_utf16_lossy)
+                .map(decode_utf16_name)
                 .unwrap_or_default();
             if name == stream_name
                 && let Some(base_ref) = rd_u64(list, pos + 0x10)
@@ -158,15 +158,21 @@ pub fn attribute_list_data_frs(list: &[u8], stream_name: &str) -> Vec<u64> {
     out
 }
 
-/// Decode UTF-16LE bytes to a lossy UTF-8 string.
-fn decode_utf16_lossy(bytes: &[u8]) -> String {
+/// Decode UTF-16LE bytes naming an NTFS file/stream through the crate's
+/// shared, malformed-name-safe decoder (Category 4, WI-4.1) — the same
+/// [`crate::io::parser::unified::decode_name_u16`] every live-MFT name
+/// decode uses, so a captured `$ATTRIBUTE_LIST`/`$UsnJrnl:$J` payload gets
+/// identical surrogate handling instead of `String::from_utf16_lossy`'s
+/// silent substitution. Discards the replacement count: these offline
+/// decoders have no `LOSSY_NAME_COUNT`-style telemetry sink of their own.
+fn decode_utf16_name(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
         .as_chunks::<2>()
         .0
         .iter()
         .map(|pair| u16::from_le_bytes(*pair))
         .collect();
-    String::from_utf16_lossy(&units)
+    crate::io::parser::unified::decode_name_u16(&units).0
 }
 
 /// One decoded USN change-journal record (the surfaced fields).
@@ -248,7 +254,7 @@ pub fn parse_usn(payload: &[u8]) -> UsnSummary {
         if summary.sample.len() < USN_SAMPLE_MAX {
             let name = record
                 .get(name_off..name_off + name_len)
-                .map(decode_utf16_lossy)
+                .map(decode_utf16_name)
                 .unwrap_or_default();
             summary.sample.push(UsnEntry { usn, reason, name });
         }

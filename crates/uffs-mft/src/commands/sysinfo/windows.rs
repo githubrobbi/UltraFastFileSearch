@@ -230,6 +230,10 @@ fn collect_volumes() -> Vec<Volume> {
 /// Decode a NUL-terminated UTF-16 buffer up to its first NUL.
 fn u16_to_string(buf: &[u16]) -> String {
     let len = buf.iter().position(|&code| code == 0).unwrap_or(buf.len());
+    // AUDIT-OK(bytes): decodes a Win32 filesystem-name buffer (e.g. "NTFS",
+    // "FAT32") from GetVolumeInformationW, not an NTFS on-disk filename — it
+    // never touches the MFT name path the WI-4.1 malformed-name mitigation
+    // guards, and the value is display-only sysinfo, not indexed/searched.
     String::from_utf16_lossy(buf.get(..len).unwrap_or(&[]))
 }
 
@@ -271,6 +275,9 @@ fn reg_string(subkey: &str, value: &str) -> Option<String> {
     // `cb` counts bytes including the trailing NUL; convert to a u16 length.
     let units = usize::try_from(cb).unwrap_or(0) / size_of::<u16>();
     let len = units.saturating_sub(1).min(buf.len());
+    // AUDIT-OK(bytes): decodes an HKLM OS-identity registry string (e.g.
+    // ProductName), not an NTFS on-disk filename — no MFT name path or
+    // WI-4.1 mitigation applies; display-only sysinfo, not indexed/searched.
     let text = String::from_utf16_lossy(buf.get(..len)?);
     let trimmed = text.trim().to_owned();
     (!trimmed.is_empty()).then_some(trimmed)

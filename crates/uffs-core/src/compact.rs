@@ -457,6 +457,15 @@ impl DriveCompactIndex {
     /// The lookup is a linear scan of `ext_names` (~500–2000 short strings),
     /// which takes < 1 µs.  This runs **once per search per drive**, not per
     /// record.
+    ///
+    /// Uses `.enumerate()` rather than `(0_u16..).zip(...)`: `ext_names` can
+    /// legitimately grow to `u16::MAX` entries (see
+    /// [`Self::intern_extension`]'s own ceiling check), and
+    /// `RangeFrom<u16>::next()` computes its *next* state eagerly before
+    /// yielding — so an unbounded `0_u16..` zipped against a full-length
+    /// table overflows on the lookup's final step whenever the query misses
+    /// (queried extension absent from this drive), even though every
+    /// `ext_id` it ever needed to yield fit in `u16`.
     #[must_use]
     pub(crate) fn resolve_ext_ids(&self, extensions: &[String]) -> Vec<u16> {
         let mut ids = Vec::with_capacity(extensions.len());
@@ -465,9 +474,9 @@ impl DriveCompactIndex {
             if normalized.is_empty() {
                 continue;
             }
-            for (ext_id, name) in (0_u16..).zip(self.ext_names.iter()) {
+            for (idx, name) in self.ext_names.iter().enumerate() {
                 if name.as_ref() == normalized {
-                    ids.push(ext_id);
+                    ids.push(u16::try_from(idx).unwrap_or(0));
                     break;
                 }
             }

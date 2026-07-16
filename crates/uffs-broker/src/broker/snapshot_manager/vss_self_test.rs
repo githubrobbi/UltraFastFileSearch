@@ -38,12 +38,18 @@ const SELF_TEST_MARKER_CONTENT: &[u8] = b"uffs-broker --self-test-vss marker";
 /// AddToSnapshotSet`, which expects that exact form.
 ///
 /// # Errors
-/// Returns an error if `test_dir` can't be created, has no root
-/// component, the marker file can't be written, snapshot creation
-/// fails, the marker can't be read back from the snapshot device path,
-/// its content doesn't match, or snapshot deletion fails.
+/// Returns an error if the deliberately-invalid-volume `Failed`-path
+/// check doesn't behave as expected (see
+/// [`self_test_invalid_volume_reports_failure`]), if `test_dir` can't
+/// be created, has no root component, the marker file can't be
+/// written, snapshot creation fails, the marker can't be read back
+/// from the snapshot device path, its content doesn't match, or
+/// snapshot deletion fails.
 pub(crate) fn self_test_round_trip(test_dir: &Path) -> anyhow::Result<()> {
     tracing::info!(test_dir = %test_dir.display(), "self-test: starting VSS round trip");
+
+    self_test_invalid_volume_reports_failure()?;
+
     std::fs::create_dir_all(test_dir)
         .map_err(|err| anyhow::anyhow!("failed to create {}: {err}", test_dir.display()))?;
     // `Path::ancestors()` walks from the path itself up to the root, so
@@ -74,6 +80,55 @@ pub(crate) fn self_test_round_trip(test_dir: &Path) -> anyhow::Result<()> {
         );
     }
     test_result
+}
+
+/// Prove the `Failed` wire event actually works: pass an unmistakably
+/// invalid volume path to `create_snapshot` and confirm the helper
+/// reports failure (rather than hanging, crashing, or somehow
+/// succeeding) and the Broker surfaces it as a diagnosable error.
+/// `Failed` is the one wire event `Ready`/`Pong`/`Released` didn't
+/// already prove works, and unlike those three it has a real production
+/// trigger (any actual VSS creation failure — disk full, service down,
+/// a bad volume), so it's worth covering even though nothing else in
+/// this self-test exercises it.
+///
+/// Spawns its own throwaway `uffs-vss-requestor` helper — a fresh
+/// [`WindowsVssProvider`], unrelated to the main round trip's snapshot —
+/// since this only needs to prove the failure-reporting path.
+///
+/// # Errors
+/// Returns an error if `create_snapshot` unexpectedly *succeeds* for an
+/// obviously-invalid volume path (which would itself be a bug worth
+/// knowing about, not silently ignoring).
+fn self_test_invalid_volume_reports_failure() -> anyhow::Result<()> {
+    tracing::info!("self-test: verifying the Failed event path with a deliberately invalid volume");
+    let provider = WindowsVssProvider::new();
+    let volume = VolumeIdentity {
+        volume_serial: 0,
+        volume_guid: Vec::new(),
+    };
+    let bogus_root = utf16le_bytes("not-a-real-volume-path");
+
+    match provider.create_snapshot(&volume, &bogus_root) {
+        Ok(handle) => {
+            // Unexpected success: clean up so a bug here doesn't also
+            // leak a real snapshot, then fail loudly -- an obviously
+            // invalid path succeeding is itself the actual problem.
+            if let Err(err) = provider.delete_snapshot(&handle.snapshot_id) {
+                tracing::warn!(
+                    error = %err,
+                    "self-test: failed to clean up the unexpectedly-created snapshot"
+                );
+            }
+            anyhow::bail!(
+                "expected create_snapshot to fail for an invalid volume path, but it succeeded"
+            );
+        }
+        Err(err) => {
+            tracing::info!(error = %err, "self-test: Failed event correctly reported");
+            Ok(())
+        }
+    }
 }
 
 /// Create the real snapshot, verify `marker_path` round-trips through

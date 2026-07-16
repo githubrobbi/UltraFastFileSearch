@@ -39,7 +39,7 @@ build/
 *.rlib
 *.bin
 # `*.bin` is meant to keep transient generated blobs out of git, but the
-# workspace contains three INTENTIONAL committed binary assets that must
+# workspace contains INTENTIONAL committed binary assets that must
 # remain tracked.  Without these carve-outs, release-plz aborts with
 # "the working directory has uncommitted changes" because it sees these
 # files as both committed AND gitignored — the same R0-pattern issue
@@ -57,6 +57,11 @@ build/
 # `ipc_integration::real_mft_search` test in `uffs-daemon` cannot find
 # its fixture and silently no-ops.
 !tests/fixtures/**/*.bin
+# uffs-content-protocol golden wire-format fixtures (frozen manifest/frame
+# byte samples) — see `crates/uffs-content-protocol/tests/golden_fixtures.rs`.
+# These are the cross-language conformance corpus per the ingest-protocol
+# addendum §5.5; committing the exact bytes is the point, not incidental.
+!crates/uffs-content-protocol/tests/fixtures/*.bin
 /test_scf
 
 # =============================================================================

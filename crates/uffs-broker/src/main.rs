@@ -40,6 +40,12 @@ extern crate alloc;
 #[cfg(windows)]
 mod broker;
 
+// Snapshot lease lifecycle (VSS lease create/renew/release/query/expire),
+// deliberately cross-platform-testable — see the module docs for why
+// this crate makes an exception to its usual Windows-only structure for
+// this one piece.
+mod snapshot_lease;
+
 #[expect(
     clippy::print_stderr,
     reason = "the --install/--uninstall paths run before any tracing subscriber \

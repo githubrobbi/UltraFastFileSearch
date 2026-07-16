@@ -44,17 +44,29 @@ path = "src/main.rs"
 # Cross-platform deps: `main.rs` calls `uffs_version::handle_version!` on every
 # platform (so `uffs-broker --version` works and the self-update probe parses
 # it), so this is used on Linux/macOS too — not a visible-but-unused marker.
+#
+# `uffs-broker-protocol` and `thiserror` are also unconditional: the Snapshot
+# Manager's lease-lifecycle state machine (`src/snapshot_lease.rs`) is
+# deliberately cross-platform-testable — it's the one piece of this
+# otherwise Windows-only crate the implementation plan (§4.2) calls out for
+# real unit tests against a fake `VssProvider`, so its wire types
+# (`VolumeIdentity`, `SnapshotLeaseState`) and error type need to compile on
+# every host, not just Windows.
 [dependencies]
 uffs-version.workspace = true
+uffs-broker-protocol.workspace = true
+thiserror.workspace = true
 
-# Windows-only deps: the elevated handle-broker logic in `broker.rs` is
-# fully `#[cfg(windows)]`, so its supporting crates compile only on the
-# Windows target.  Scoped to `[target.'cfg(windows)'.dependencies]` so
-# the bin's non-Windows compilation (a tiny error-message stub in
-# `main.rs` that uses only `eprintln!`) doesn't pull in `anyhow`,
-# `tracing`, `tracing-subscriber`, `windows`, or the broker protocol —
-# each would otherwise be visible-but-unused on Linux/macOS and need a
-# `use X as _;` marker.  F5 / issue #205.
+# Windows-only deps: the elevated handle-broker logic in `broker.rs` (and
+# the Snapshot Manager's COM/pipe/reconciliation code in
+# `broker/snapshot_manager/`) is fully `#[cfg(windows)]`, so these
+# supporting crates compile only on the Windows target.  Scoped to
+# `[target.'cfg(windows)'.dependencies]` so the bin's non-Windows
+# compilation (a tiny error-message stub in `main.rs` that uses only
+# `eprintln!`, plus the cross-platform `snapshot_lease` module) doesn't pull
+# in `anyhow`, `tracing`, `tracing-subscriber`, or `windows` — each would
+# otherwise be visible-but-unused on Linux/macOS and need a `use X as _;`
+# marker.  F5 / issue #205.
 [target.'cfg(windows)'.dependencies]
 anyhow.workspace = true
 # `tracing` macros are used heavily in the Windows-only `broker.rs`; the
@@ -63,11 +75,6 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 windows.workspace = true
-# Wire-protocol types shared with `uffs-daemon::broker_client`.  Lives
-# in its own dedicated crate (`crates/uffs-broker-protocol/`) so the
-# pure-logic protocol module is cross-platform-testable without
-# dragging the Windows FFI surface along.
-uffs-broker-protocol.workspace = true
 # Shared in-process Authenticode (`WinVerifyTrust`) verification — the
 # single implementation now lives in `uffs-security` (DRY with the
 # self-updater) instead of a broker-local copy.

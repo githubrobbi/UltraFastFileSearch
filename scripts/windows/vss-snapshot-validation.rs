@@ -35,15 +35,23 @@
 //
 // Usage:
 //   rust-script scripts/windows/vss-snapshot-validation.rs
-//   rust-script scripts/windows/vss-snapshot-validation.rs
-// C:\Temp\uffs-vss-test   rust-script
-// scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
+//   rust-script scripts/windows/vss-snapshot-validation.rs C:\Temp\uffs-vss-test
+//   rust-script scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
+//   rust-script scripts/windows/vss-snapshot-validation.rs --timeout-secs 300
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use colored::Colorize;
+
+/// How long to wait for `--self-test-vss` before killing it and
+/// reporting a timeout, absent a `--timeout-secs` override. VSS_CTX_
+/// FILE_SHARE_BACKUP snapshot creation with no writer participation is
+/// normally a few seconds; 120s gives real disk activity plenty of
+/// room without hanging forever the way a stuck helper connection did
+/// before this timeout existed.
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Parsed script arguments.
 struct ScriptArgs {
@@ -51,21 +59,31 @@ struct ScriptArgs {
     bin: String,
     /// Directory the self-test creates its marker file under.
     test_dir: String,
+    /// How long to wait before killing the child and reporting a timeout.
+    timeout: Duration,
 }
 
 /// Parse CLI args.
 ///
-/// Usage: `rust-script vss-snapshot-validation [test-dir] [--bin <path>]`
+/// Usage: `rust-script vss-snapshot-validation [test-dir] [--bin <path>]
+/// [--timeout-secs <n>]`
 fn parse_script_args() -> ScriptArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut test_dir: Option<String> = None;
     let mut bin_override: Option<String> = None;
+    let mut timeout_secs = DEFAULT_TIMEOUT_SECS;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--bin" | "--binary" => {
                 bin_override = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--timeout-secs" => {
+                if let Some(value) = args.get(i + 1).and_then(|value| value.parse().ok()) {
+                    timeout_secs = value;
+                }
                 i += 2;
             }
             other if !other.starts_with('-') && test_dir.is_none() => {
@@ -81,6 +99,7 @@ fn parse_script_args() -> ScriptArgs {
     ScriptArgs {
         bin: bin_override.unwrap_or_else(default_binary),
         test_dir: test_dir.unwrap_or_else(default_test_dir),
+        timeout: Duration::from_secs(timeout_secs),
     }
 }
 
@@ -202,28 +221,32 @@ fn main() {
     print_binary_version("uffs-vss-requestor:", &helper_binary_path(&args.bin));
     eprintln!();
 
-    eprintln!("  Running: {} --self-test-vss {}", args.bin, args.test_dir);
+    eprintln!(
+        "  Running: {} --self-test-vss {} (timeout: {}s)",
+        args.bin,
+        args.test_dir,
+        args.timeout.as_secs()
+    );
     eprintln!("  ─────────────────────────────────────────────────────────────────");
 
-    // `Stdio::inherit()` + `.status()` — deliberately NOT `.output()`.
+    // `Stdio::inherit()` + `.spawn()` — deliberately NOT `.output()`.
     // `.output()` buffers the child's entire stdout/stderr and only
     // hands it back once the process exits, which silently swallowed
     // every `tracing::info!` progress line the Broker prints while a
     // snapshot is being created: the whole point of that instrumentation
     // is to show which step a hang is stuck on *while it's stuck*, not
     // after the fact. Inheriting stdio streams the Broker's own output
-    // straight to this terminal in real time instead.
-    let status = Command::new(&args.bin)
+    // straight to this terminal in real time instead. `.spawn()` (not
+    // `.status()`) so the loop below can poll and kill on timeout — a
+    // hung helper connection previously blocked this script forever.
+    let mut child = match Command::new(&args.bin)
         .arg("--self-test-vss")
         .arg(&args.test_dir)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status();
-
-    let elapsed_ms = script_start.elapsed().as_millis();
-
-    let status = match status {
-        Ok(status) => status,
+        .spawn()
+    {
+        Ok(child) => child,
         Err(err) => {
             eprintln!("  {} failed to spawn {}: {err}", "✗".red(), args.bin);
             eprintln!(
@@ -233,19 +256,59 @@ fn main() {
         }
     };
 
-    eprintln!("  ─────────────────────────────────────────────────────────────────");
-    if status.success() {
-        eprintln!(
-            "  {} VSS create/read/delete round trip passed ({elapsed_ms}ms)",
-            "✓".green()
-        );
-    } else {
-        eprintln!(
-            "  {} VSS create/read/delete round trip failed ({elapsed_ms}ms)",
-            "✗".red()
-        );
-    }
-    eprintln!();
+    let deadline = Instant::now() + args.timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("  {} failed to poll child process: {err}", "✗".red());
+                std::process::exit(1);
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "  {} timed out after {}s — killing the Broker process",
+                "✗".red(),
+                args.timeout.as_secs()
+            );
+            if let Err(err) = child.kill() {
+                eprintln!("  {} failed to kill timed-out process: {err}", "✗".red());
+            }
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
 
-    std::process::exit(status.code().unwrap_or(1));
+    let elapsed_ms = script_start.elapsed().as_millis();
+
+    eprintln!("  ─────────────────────────────────────────────────────────────────");
+    match status {
+        Some(status) if status.success() => {
+            eprintln!(
+                "  {} VSS create/read/delete round trip passed ({elapsed_ms}ms)",
+                "✓".green()
+            );
+            eprintln!();
+            std::process::exit(0);
+        }
+        Some(status) => {
+            eprintln!(
+                "  {} VSS create/read/delete round trip failed ({elapsed_ms}ms)",
+                "✗".red()
+            );
+            eprintln!();
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        None => {
+            eprintln!(
+                "  {} VSS create/read/delete round trip timed out ({elapsed_ms}ms) — the last \
+                 \"vss: ...\"/\"self-test: ...\" line printed above is where it was stuck",
+                "✗".red()
+            );
+            eprintln!();
+            std::process::exit(124);
+        }
+    }
 }

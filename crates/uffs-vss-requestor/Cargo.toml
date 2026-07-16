@@ -1,0 +1,70 @@
+# ============================================================================
+# uffs-vss-requestor: per-run native VSS snapshot helper
+# ============================================================================
+# Tiny Windows-only helper process, spawned once per volume scan by
+# uffs-broker's Snapshot Manager. Creates one VSS_CTX_FILE_SHARE_BACKUP
+# snapshot (ephemeral, auto-release, no writer participation), holds the
+# VSS requestor session alive for the whole scan over a private pipe
+# protocol, and deletes/releases it on command or parent death. See
+# docs/dev/architecture/uffs-vss-rust-cpp-shim-implementation-guide.md
+# for the full design rationale.
+#
+# The actual IVssBackupComponents COM sequence lives in a narrow native
+# C++ shim (native/vss_shim.cpp), compiled against the official Windows
+# SDK headers via build.rs — windows-rs does not generate bindings for
+# that requestor-side interface (verified directly against the crate's
+# own generated source, not assumed). Everything else (pipe protocol,
+# process lifecycle, argument parsing) is ordinary Rust.
+# ============================================================================
+
+[package]
+name = "uffs-vss-requestor"
+description = "UFFS VSS Requestor — per-run native VSS snapshot helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Intentionally NOT published — a Windows-only helper process with no
+# library API, meaningless outside the UFFS Broker pairing. Mirrors
+# uffs-broker's own rationale.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-pc-windows-msvc"]
+default-target = "x86_64-pc-windows-msvc"
+
+[[bin]]
+name = "uffs-vss-requestor"
+path = "src/main.rs"
+
+# Cross-platform: `main.rs` calls `uffs_version::handle_version!` on
+# every platform, matching `uffs-broker`/`uffs-content`'s convention.
+[dependencies]
+uffs-version.workspace = true
+
+# Windows-only: the pipe protocol, process lifecycle, and FFI into the
+# native shim are all `#[cfg(windows)]`. Scoped so the non-Windows stub
+# (a bare `eprintln!`) doesn't pull these in — see `uffs-broker/Cargo.toml`
+# for the identical rationale (F5 / issue #205).
+[target.'cfg(windows)'.dependencies]
+anyhow.workspace = true
+windows.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[build-dependencies]
+# Compiles `native/vss_shim.cpp` into a static library linked into this
+# binary — see `build.rs`. No PE resource embedding (icon/version info)
+# for this internal helper — it's spawned by the Broker, never invoked
+# directly by a user, so it skips the `winresource` step
+# `uffs-broker`/`uffs-content` use.
+cc = "1.2.63"
+
+[lints]
+workspace = true

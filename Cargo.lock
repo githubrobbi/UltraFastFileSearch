@@ -4762,6 +4762,18 @@ name = "uffs-version"
 version = "0.6.27"
 
 [[package]]
+name = "uffs-vss-requestor"
+version = "0.6.27"
+dependencies = [
+ "anyhow",
+ "cc",
+ "serde",
+ "serde_json",
+ "uffs-version",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "uffs-winsvc"
 version = "0.6.27"
 dependencies = [

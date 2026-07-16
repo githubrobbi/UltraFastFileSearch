@@ -38,11 +38,12 @@ members = [
   "crates/uffs-format",                  # 🧾 Shared CSV formatter (daemon + thin CLI)
   "crates/uffs-core",                    # 🎯 Query engine + compact search engine
   # ── Daemon Architecture ──
-  "crates/uffs-daemon",  # 🛡️ Background service process
-  "crates/uffs-client",  # 📡 Thin client library
-  "crates/uffs-mcp",     # 🤖 MCP stdio adapter for AI agents
-  "crates/uffs-broker",  # 🔑 Windows elevated handle broker (optional)
-  "crates/uffs-content", # 📦 Content Service — VSS-snapshot-scoped file content export (optional)
+  "crates/uffs-daemon",        # 🛡️ Background service process
+  "crates/uffs-client",        # 📡 Thin client library
+  "crates/uffs-mcp",           # 🤖 MCP stdio adapter for AI agents
+  "crates/uffs-broker",        # 🔑 Windows elevated handle broker (optional)
+  "crates/uffs-vss-requestor", # 🩹 Per-run native VSS snapshot helper, spawned by uffs-broker (optional)
+  "crates/uffs-content",       # 📦 Content Service — VSS-snapshot-scoped file content export (optional)
   # ── Surfaces ──
   "crates/uffs-cli",    # 🖥️  Command-line interface
   "crates/uffs-update", # ⬆️  Self-update acquire helper (HTTP/TLS isolated from the CLI)

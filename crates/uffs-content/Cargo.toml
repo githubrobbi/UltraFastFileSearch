@@ -57,6 +57,12 @@ uffs-version.workspace = true
 # Shared wire-protocol types (manifest, frames, job/candidate states) — see
 # `crates/uffs-content-protocol/`.
 uffs-content-protocol.workspace = true
+# Durable job/candidate/attempt/ACK/snapshot-lease ledger (addendum §6) —
+# see `src/db/`.
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

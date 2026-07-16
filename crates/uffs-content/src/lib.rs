@@ -17,7 +17,10 @@
 //!
 //! # Status
 //!
-//! Scaffold only — no job intake, VSS, MFT, or streaming logic yet.
+//! Job intake, VSS, MFT, and streaming logic are not implemented yet.
+//! [`db`] (the durable job/failure-bucket ledger, addendum §6) is real.
+
+pub mod db;
 
 // Not yet wired into this library's logic — reserved for the manifest /
 // frame types this crate will produce and consume once job intake lands.

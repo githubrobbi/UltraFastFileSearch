@@ -1,0 +1,53 @@
+# ============================================================================
+# uffs-content-reader-protocol: Content Coordinator <-> Snapshot Reader
+# wire-protocol types
+# ============================================================================
+# Layer 0 Foundation crate. Tiny dedicated lib — pure-logic byte-shuffling,
+# no Windows FFI, no I/O. Mirrors `uffs-broker-protocol`'s shape and size.
+#
+# Private wire format between `uffs-content` (the unprivileged Content
+# Coordinator) and the privileged Snapshot Reader process (addendum §2.1-
+# §2.4). Deliberately a SEPARATE crate from `uffs-content-protocol` (the
+# public UFFS<->Docenta protocol) even though the two share some field
+# shapes — addendum §5.2 is explicit that the public protocol crate "MUST
+# NOT contain... privileged IPC implementation", and Docenta must never be
+# able to depend on this crate's evolution.
+#
+# This crate does NOT depend on `uffs-content-protocol` even though both
+# are Layer 0: per docs/architecture/crate-graph.md, "Layer-0 → Layer-0
+# deps... should stay absent — each Layer-0 crate is independently
+# buildable" (the same rule that keeps uffs-text and uffs-time from
+# depending on each other). The small amount of duplicated bounds-checked
+# LE-decode logic in `codec.rs` is a deliberate, small trade against that
+# independence guarantee, not an oversight.
+# ============================================================================
+
+[package]
+name = "uffs-content-reader-protocol"
+description = "Private wire protocol between uffs-content (Coordinator) and the Snapshot Reader (cross-platform, Windows-only machinery lives in the Reader binary)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Intentionally NOT published. Private, internal-only IPC contract between
+# two processes in this workspace; no meaning outside it. Reserve the name
+# on crates.io to prevent squatting, but never carry content. Mirrors
+# `uffs-broker-protocol`'s rationale.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

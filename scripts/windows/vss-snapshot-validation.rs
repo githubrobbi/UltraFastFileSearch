@@ -27,16 +27,17 @@
 //
 // Requirements:
 //   - Windows with NTFS
-//   - Administrator privileges (VSS_CTX_FILE_SHARE_BACKUP snapshot
-//     creation, and reading a shadow-copy device path back, both need it)
-//   - uffs-broker.exe and uffs-vss-requestor.exe built and sitting in
-//     the same directory (production install layout, or
-//     `cargo build --release` output: both land in target/release/)
+//   - Administrator privileges (VSS_CTX_FILE_SHARE_BACKUP snapshot creation,
+//     and reading a shadow-copy device path back, both need it)
+//   - uffs-broker.exe and uffs-vss-requestor.exe built and sitting in the same
+//     directory (production install layout, or `cargo build --release` output:
+//     both land in target/release/)
 //
 // Usage:
 //   rust-script scripts/windows/vss-snapshot-validation.rs
-//   rust-script scripts/windows/vss-snapshot-validation.rs C:\Temp\uffs-vss-test
-//   rust-script scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
+//   rust-script scripts/windows/vss-snapshot-validation.rs
+// C:\Temp\uffs-vss-test   rust-script
+// scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -85,15 +86,24 @@ fn parse_script_args() -> ScriptArgs {
 
 /// Locate an existing `uffs-broker` binary; do **not** auto-build.
 ///
-/// Search order:
-///   1. `$USERPROFILE\bin\uffs-broker.exe` — `just use` install location
-///   2. `target\release\uffs-broker.exe`   — `cargo build --release` output
+/// Search order (deliberately the reverse of the other
+/// `scripts/windows/*.rs` validation scripts, which prefer the
+/// installed `~\bin\` copy to test "whatever's released"): this script
+/// exercises `--self-test-vss`, a brand-new flag that has never shipped
+/// in any release, so an installed broker predating it would silently
+/// fall through to the Service-Control-Manager dispatch path and hang
+/// waiting for an SCM that never arrives — confusing to debug. Prefer
+/// the just-built dev binary instead:
+///   1. `target\release\uffs-broker.exe`   — `cargo build --release` output
+///   2. `$USERPROFILE\bin\uffs-broker.exe` — `just use` install location
 ///   3. Bare `uffs-broker.exe`             — falls through to PATH lookup
 fn default_binary() -> String {
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
     let candidates = [
+        PathBuf::from("target")
+            .join("release")
+            .join("uffs-broker.exe"),
         PathBuf::from(&home).join("bin").join("uffs-broker.exe"),
-        PathBuf::from("target").join("release").join("uffs-broker.exe"),
     ];
     for candidate in &candidates {
         if candidate.exists() {
@@ -113,6 +123,59 @@ fn default_test_dir() -> String {
         .join("uffs-vss-self-test")
         .to_string_lossy()
         .into_owned()
+}
+
+/// The expected `uffs-vss-requestor.exe` path: alongside `bin`,
+/// mirroring `helper_exe_path()`'s production lookup in
+/// crates/uffs-broker/src/broker/snapshot_manager/vss_helper.rs (it
+/// must be a sibling of the running `uffs-broker.exe`).
+fn helper_binary_path(bin: &str) -> PathBuf {
+    PathBuf::from(bin).parent().map_or_else(
+        || PathBuf::from("uffs-vss-requestor.exe"),
+        |dir| dir.join("uffs-vss-requestor.exe"),
+    )
+}
+
+/// Print `<path> --version -v` (the long, build-fingerprinted form
+/// every UFFS binary supports) before running anything.
+///
+/// This exists because a stale binary is exactly what caused a silent,
+/// indefinite hang once already: an installed `uffs-broker.exe`
+/// predating `--self-test-vss` fell through to the Service-Control-
+/// Manager dispatch path instead of running the self-test, with zero
+/// output to say so. Printing the git-sha/commit-date fingerprint for
+/// *both* binaries up front makes a version mismatch (or a
+/// `uffs-vss-requestor.exe` that's older than the `uffs-broker.exe`
+/// spawning it) obvious before the test even starts, instead of
+/// something you have to reverse-engineer from a hang.
+fn print_binary_version(label: &str, path: &std::path::Path) {
+    match Command::new(path).args(["--version", "-v"]).output() {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for (i, line) in text.lines().enumerate() {
+                if i == 0 {
+                    eprintln!("  {label}  {}", line.cyan());
+                } else {
+                    eprintln!("  {}  {line}", " ".repeat(label.len()));
+                }
+            }
+        }
+        Ok(output) => {
+            eprintln!(
+                "  {label}  {} exited {} — {}",
+                "?".yellow(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(err) => {
+            eprintln!(
+                "  {label}  {} not found at {}: {err}",
+                "✗".red(),
+                path.display()
+            );
+        }
+    }
 }
 
 fn main() {
@@ -135,10 +198,12 @@ fn main() {
         std::process::exit(1);
     }
 
+    print_binary_version("uffs-broker:       ", std::path::Path::new(&args.bin));
+    print_binary_version("uffs-vss-requestor:", &helper_binary_path(&args.bin));
+    eprintln!();
+
     eprintln!("  Running: {} --self-test-vss {}", args.bin, args.test_dir);
-    eprintln!(
-        "  ─────────────────────────────────────────────────────────────────"
-    );
+    eprintln!("  ─────────────────────────────────────────────────────────────────");
 
     let output = Command::new(&args.bin)
         .arg("--self-test-vss")
@@ -150,11 +215,7 @@ fn main() {
     let output = match output {
         Ok(output) => output,
         Err(err) => {
-            eprintln!(
-                "  {} failed to spawn {}: {err}",
-                "✗".red(),
-                args.bin
-            );
+            eprintln!("  {} failed to spawn {}: {err}", "✗".red(), args.bin);
             eprintln!(
                 "    (build it first: cargo build --release -p uffs-broker -p uffs-vss-requestor)"
             );
@@ -167,9 +228,7 @@ fn main() {
     print!("{}", String::from_utf8_lossy(&output.stdout));
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
 
-    eprintln!(
-        "  ─────────────────────────────────────────────────────────────────"
-    );
+    eprintln!("  ─────────────────────────────────────────────────────────────────");
     if output.status.success() {
         eprintln!(
             "  {} VSS create/read/delete round trip passed ({elapsed_ms}ms)",

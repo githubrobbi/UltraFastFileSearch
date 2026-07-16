@@ -59,11 +59,18 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [build-dependencies]
+# Stamps the git-sha/commit-date/rustc/target/profile fields
+# `uffs_version::handle_version!` prints for `--version` — the same
+# machinery every other UFFS binary uses (`uffs-broker`, `uffs-mft`,
+# etc.), so `uffs-vss-requestor.exe --version` doesn't shortchange the
+# operator with a bare `(unknown)` when they run it standalone to
+# diagnose a spawn failure (see `run.rs`'s `--version` handling).
+uffs-version = { workspace = true, features = ["build"] }
 # Compiles `native/vss_shim.cpp` into a static library linked into this
 # binary — see `build.rs`. No PE resource embedding (icon/version info)
 # for this internal helper — it's spawned by the Broker, never invoked
-# directly by a user, so it skips the `winresource` step
-# `uffs-broker`/`uffs-content` use.
+# directly by a user in normal operation, so it skips the `winresource`
+# step `uffs-broker` uses.
 cc = "1.2.63"
 
 [lints]

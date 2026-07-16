@@ -526,7 +526,7 @@ fn spawn_helper(pipe_name: &str, volume_path: &str) -> anyhow::Result<PendingSpa
     })
 }
 
-/// Build the helper's command line: `"<exe>" --pipe-name <name>
+/// Build the helper's command line: `"<exe>" --pipe-name "<name>"
 /// --volume-path "<path>" --parent-pid <pid>`, NUL-terminated UTF-16.
 fn build_command_line(
     exe_path: &Path,
@@ -535,10 +535,52 @@ fn build_command_line(
     parent_pid: u32,
 ) -> Vec<u16> {
     let command = format!(
-        "\"{}\" --pipe-name {pipe_name} --volume-path \"{volume_path}\" --parent-pid {parent_pid}",
-        exe_path.display(),
+        "{} --pipe-name {} --volume-path {} --parent-pid {parent_pid}",
+        quote_windows_arg(&exe_path.display().to_string()),
+        quote_windows_arg(pipe_name),
+        quote_windows_arg(volume_path),
     );
     command.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Quote `arg` for a `CreateProcessW` command line, following the
+/// escaping rules `CommandLineToArgvW` (and the C-runtime argv parser
+/// `std::env::args()` also uses) expect: a run of backslashes is only
+/// literal if followed by something other than a quote, so any run
+/// immediately preceding an embedded or closing quote must be doubled.
+///
+/// This matters here because a volume root (e.g. `C:\`) always ends in
+/// exactly one backslash — naively wrapping it as `"C:\"` makes that
+/// single trailing backslash escape the closing quote instead of
+/// terminating the argument, silently merging every argument after it
+/// (`--parent-pid <pid>`) into this one. The helper then never receives
+/// a `--parent-pid`, fails to parse its own arguments, and exits before
+/// ever connecting to the control pipe — which left `create_snapshot`
+/// blocked in `connect_pipe` forever, waiting on a process that had
+/// already exited.
+fn quote_windows_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut pending_backslashes = 0_usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            pending_backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.extend(core::iter::repeat_n('\\', pending_backslashes * 2 + 1));
+            quoted.push('"');
+        } else {
+            quoted.extend(core::iter::repeat_n('\\', pending_backslashes));
+            quoted.push(ch);
+        }
+        pending_backslashes = 0;
+    }
+    // Any backslashes still pending are immediately followed by the
+    // closing quote we're about to append, so they must be doubled too.
+    quoted.extend(core::iter::repeat_n('\\', pending_backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 /// Encode `path` as the lossless UTF-16LE `requested_root` wire format
@@ -683,5 +725,43 @@ mod tests {
     fn create_read_delete_snapshot_round_trip() {
         let test_dir = std::env::temp_dir().join("uffs-vss-self-test");
         super::self_test_round_trip(&test_dir).expect("VSS round trip self-test failed");
+    }
+
+    /// A drive root's trailing backslash must be doubled, not passed
+    /// through as-is — a single backslash immediately before the
+    /// closing quote escapes the quote instead of terminating the
+    /// argument, which is exactly the bug that let `--parent-pid`
+    /// silently vanish (see `quote_windows_arg`'s doc comment).
+    #[test]
+    fn quote_windows_arg_doubles_a_trailing_backslash() {
+        assert_eq!(super::quote_windows_arg(r"C:\"), r#""C:\\""#);
+    }
+
+    #[test]
+    fn quote_windows_arg_passes_plain_text_through() {
+        assert_eq!(super::quote_windows_arg("plain"), r#""plain""#);
+    }
+
+    #[test]
+    fn quote_windows_arg_escapes_embedded_quotes() {
+        assert_eq!(super::quote_windows_arg(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn quote_windows_arg_doubles_backslashes_before_an_embedded_quote() {
+        assert_eq!(super::quote_windows_arg(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    #[test]
+    fn quote_windows_arg_leaves_interior_backslashes_alone() {
+        assert_eq!(
+            super::quote_windows_arg(r"C:\Users\rnio\bin\uffs-vss-requestor.exe"),
+            r#""C:\Users\rnio\bin\uffs-vss-requestor.exe""#
+        );
+    }
+
+    #[test]
+    fn quote_windows_arg_handles_empty_string() {
+        assert_eq!(super::quote_windows_arg(""), r#""""#);
     }
 }

@@ -10,13 +10,16 @@
 
 //! Build script for `uffs-vss-requestor`.
 //!
-//! Compiles `native/vss_shim.cpp` — the narrow VSS requestor shim
-//! against the official Windows SDK's `vsbackup.h` (see
+//! Stamps the git-sha/commit-date/rustc/target/profile build-metadata
+//! env vars `uffs_version::handle_version!` reads (matching every other
+//! UFFS binary), then compiles `native/vss_shim.cpp` — the narrow VSS
+//! requestor shim against the official Windows SDK's `vsbackup.h` (see
 //! `docs/dev/architecture/uffs-vss-rust-cpp-shim-implementation-guide.md`)
-//! — into a static library and links it into this crate's binary. A
-//! no-op on every non-Windows build target.
+//! — into a static library and links it into this crate's binary. The
+//! native-shim compile is a no-op on every non-Windows build target.
 
 fn main() {
+    uffs_version::emit_build_env();
     println!("cargo:rerun-if-changed=native/vss_shim.cpp");
     println!("cargo:rerun-if-changed=native/vss_shim.h");
 

@@ -40,7 +40,7 @@
 // scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use colored::Colorize;
@@ -205,15 +205,25 @@ fn main() {
     eprintln!("  Running: {} --self-test-vss {}", args.bin, args.test_dir);
     eprintln!("  ─────────────────────────────────────────────────────────────────");
 
-    let output = Command::new(&args.bin)
+    // `Stdio::inherit()` + `.status()` — deliberately NOT `.output()`.
+    // `.output()` buffers the child's entire stdout/stderr and only
+    // hands it back once the process exits, which silently swallowed
+    // every `tracing::info!` progress line the Broker prints while a
+    // snapshot is being created: the whole point of that instrumentation
+    // is to show which step a hang is stuck on *while it's stuck*, not
+    // after the fact. Inheriting stdio streams the Broker's own output
+    // straight to this terminal in real time instead.
+    let status = Command::new(&args.bin)
         .arg("--self-test-vss")
         .arg(&args.test_dir)
-        .output();
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
 
     let elapsed_ms = script_start.elapsed().as_millis();
 
-    let output = match output {
-        Ok(output) => output,
+    let status = match status {
+        Ok(status) => status,
         Err(err) => {
             eprintln!("  {} failed to spawn {}: {err}", "✗".red(), args.bin);
             eprintln!(
@@ -223,13 +233,8 @@ fn main() {
         }
     };
 
-    // Relay the broker's own PASS/FAIL line and any tracing output
-    // verbatim — it already carries the diagnosis on failure.
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
     eprintln!("  ─────────────────────────────────────────────────────────────────");
-    if output.status.success() {
+    if status.success() {
         eprintln!(
             "  {} VSS create/read/delete round trip passed ({elapsed_ms}ms)",
             "✓".green()
@@ -242,5 +247,5 @@ fn main() {
     }
     eprintln!();
 
-    std::process::exit(output.status.code().unwrap_or(1));
+    std::process::exit(status.code().unwrap_or(1));
 }

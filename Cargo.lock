@@ -4478,6 +4478,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "uffs-content"
+version = "0.6.27"
+dependencies = [
+ "uffs-content-protocol",
+ "uffs-version",
+]
+
+[[package]]
+name = "uffs-content-protocol"
+version = "0.6.27"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "uffs-core"
 version = "0.6.27"
 dependencies = [

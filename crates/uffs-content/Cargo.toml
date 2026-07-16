@@ -1,0 +1,62 @@
+# ============================================================================
+# uffs-content: UFFS Content Service
+# ============================================================================
+# Layer 4 App. Privileged, job-oriented process: for one volume/root, it
+# creates a VSS snapshot, evaluates a UFFS candidate query against it,
+# writes an immutable candidate manifest, and streams the successful
+# candidates' logical file content to a downstream consumer (e.g. Docenta)
+# over the framed protocol defined by `uffs-content-protocol`.
+#
+# Invocation model: like `uffsd`, driven by a structured JSON job spec (the
+# query/filters/root/quotas), not interactive flags. `uffs-content` is the
+# unprivileged coordinator: read-mode planning, manifest handling, protocol
+# framing, and output live here; any privileged VSS-snapshot/raw-extent
+# capability stays a narrow internal helper (extends `uffs-broker`'s
+# pattern), never owned by this binary directly. Design references
+# (docs/dev/architecture/, local-only, not tracked): the original
+# `content-stream-tool-design.md` sketch, its
+# `uffs-content-stream-enterprise-design-review.md` replacement-design
+# review, and Docenta's `uffs-ingest-protocol-v2-vss.md`. Scaffold only;
+# no VSS/MFT/query logic is wired up yet.
+# ============================================================================
+
+[package]
+name = "uffs-content"
+description = "UFFS Content Service (uffs-content) — VSS-snapshot-scoped file content export for downstream consumers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Intentionally NOT published (yet). `uffs-content` is a privileged,
+# Windows-only content-export producer with no standalone-useful library
+# API outside the UFFS architecture. Reserve the name on crates.io to
+# prevent squatting, but never carry content. Mirrors `uffs-broker`'s
+# rationale in `crates/uffs-broker/Cargo.toml`.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-pc-windows-msvc"]
+default-target = "x86_64-pc-windows-msvc"
+
+[[bin]]
+name = "uffs-content"
+path = "src/main.rs"
+
+[lib]
+name = "uffs_content"
+path = "src/lib.rs"
+
+[dependencies]
+uffs-version.workspace = true
+# Shared wire-protocol types (manifest, frames, job/candidate states) — see
+# `crates/uffs-content-protocol/`.
+uffs-content-protocol.workspace = true
+
+[lints]
+workspace = true

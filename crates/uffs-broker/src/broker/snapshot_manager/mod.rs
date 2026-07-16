@@ -19,6 +19,9 @@
 //! request dispatch.
 
 mod vss_helper;
+// The `--self-test-vss` round trip: split into its own file purely to
+// keep `vss_helper.rs` under the workspace's 800-LOC file-size policy.
+mod vss_self_test;
 
 use alloc::sync::Arc;
 use core::time::Duration;
@@ -30,7 +33,7 @@ use uffs_broker_protocol::snapshot_manager::{
 use vss_helper::WindowsVssProvider;
 // Re-exported so `broker::run` can wire up `--self-test-vss` without
 // reaching past this module's own submodule privacy boundary.
-pub(super) use vss_helper::self_test_round_trip;
+pub(super) use vss_self_test::self_test_round_trip;
 use windows::Win32::Foundation::HANDLE;
 use windows::core::PCWSTR;
 

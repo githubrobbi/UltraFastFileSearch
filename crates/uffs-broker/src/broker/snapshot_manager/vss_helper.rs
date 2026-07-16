@@ -186,59 +186,28 @@ impl WindowsVssProvider {
     }
 }
 
-impl VssProvider for WindowsVssProvider {
-    #[expect(
-        unsafe_code,
-        reason = "wraps a freshly connected pipe HANDLE in a File; see the inline SAFETY comment"
-    )]
-    fn create_snapshot(
+impl WindowsVssProvider {
+    /// Register a newly-ready helper's session and build its
+    /// [`SnapshotHandle`], or translate a `Failed`/unexpected event into
+    /// a [`VssError`] — the tail half of [`Self::create_snapshot`],
+    /// split out to keep that function's cognitive complexity down.
+    fn finish_create_snapshot(
         &self,
-        _volume: &VolumeIdentity,
-        requested_root: &[u8],
+        pending: PendingSpawn,
+        reader: BufReader<File>,
+        writer: File,
+        event: HelperEvent,
     ) -> Result<SnapshotHandle, VssError> {
-        let volume_path = decode_utf16le(requested_root).ok_or_else(|| {
-            VssError::InvalidVolume("requested_root is not valid UTF-16LE".to_owned())
-        })?;
-
-        let pipe_id = self.next_pipe_id.fetch_add(1, Ordering::Relaxed);
-        let pipe_name = format!(r"\\.\pipe\uffs-vss-requestor-{pipe_id:016x}");
-
-        let pipe_handle = create_control_pipe(&pipe_name).map_err(|err| {
-            VssError::CreateFailed(format!("failed to create control pipe: {err}"))
-        })?;
-
-        let pending = spawn_helper(&pipe_name, &volume_path).map_err(|err| {
-            VssError::CreateFailed(format!("failed to spawn uffs-vss-requestor: {err}"))
-        })?;
-
-        if let Err(err) = connect_pipe(pipe_handle) {
-            close_pipe_handle(pipe_handle);
-            return Err(VssError::CreateFailed(format!(
-                "helper did not connect to control pipe: {err}"
-            )));
-        }
-
-        // SAFETY: `pipe_handle` is a valid, connected, exclusively owned
-        // duplex pipe HANDLE; `File` takes ownership and closes it on drop.
-        let pipe_file = unsafe { File::from_raw_handle(pipe_handle.0.cast::<core::ffi::c_void>()) };
-        let writer = pipe_file
-            .try_clone()
-            .map_err(|err| VssError::CreateFailed(format!("failed to clone pipe handle: {err}")))?;
-        let mut reader = BufReader::new(pipe_file);
-
-        let event = read_helper_event(&mut reader)
-            .map_err(|err| VssError::CreateFailed(format!("failed to read helper event: {err}")))?
-            .ok_or_else(|| {
-                VssError::CreateFailed(
-                    "helper closed the control pipe before reporting readiness".to_owned(),
-                )
-            })?;
-
         match event {
             HelperEvent::Ready {
                 snapshot_id,
                 snapshot_device_object,
             } => {
+                tracing::info!(
+                    snapshot_id = %snapshot_id,
+                    device = %snapshot_device_object.as_deref().unwrap_or("<none>"),
+                    "vss: snapshot ready"
+                );
                 let (process_handle, job_handle) = pending.into_handles();
                 let snapshot_id_bytes = snapshot_id.into_bytes();
                 let session = HelperSession {
@@ -266,8 +235,79 @@ impl VssProvider for WindowsVssProvider {
             )),
         }
     }
+}
+
+/// Block until the helper connects to `pipe_handle`, then read its
+/// first event — the middle third of `create_snapshot`, split out to
+/// keep that function's cognitive complexity down.
+#[expect(
+    unsafe_code,
+    reason = "wraps a freshly connected pipe HANDLE in a File; see the inline SAFETY comment"
+)]
+fn wait_for_helper_ready(
+    pipe_handle: HANDLE,
+) -> Result<(BufReader<File>, File, HelperEvent), VssError> {
+    tracing::info!("vss: waiting for helper to connect to the control pipe");
+    if let Err(err) = connect_pipe(pipe_handle) {
+        close_pipe_handle(pipe_handle);
+        return Err(VssError::CreateFailed(format!(
+            "helper did not connect to control pipe: {err}"
+        )));
+    }
+    tracing::info!("vss: helper connected");
+
+    // SAFETY: `pipe_handle` is a valid, connected, exclusively owned
+    // duplex pipe HANDLE; `File` takes ownership and closes it on drop.
+    let pipe_file = unsafe { File::from_raw_handle(pipe_handle.0.cast::<core::ffi::c_void>()) };
+    let writer = pipe_file
+        .try_clone()
+        .map_err(|err| VssError::CreateFailed(format!("failed to clone pipe handle: {err}")))?;
+    let mut reader = BufReader::new(pipe_file);
+
+    tracing::info!("vss: waiting for Ready/Failed from helper");
+    let event = read_helper_event(&mut reader)
+        .map_err(|err| VssError::CreateFailed(format!("failed to read helper event: {err}")))?
+        .ok_or_else(|| {
+            VssError::CreateFailed(
+                "helper closed the control pipe before reporting readiness".to_owned(),
+            )
+        })?;
+
+    Ok((reader, writer, event))
+}
+
+impl VssProvider for WindowsVssProvider {
+    fn create_snapshot(
+        &self,
+        _volume: &VolumeIdentity,
+        requested_root: &[u8],
+    ) -> Result<SnapshotHandle, VssError> {
+        let volume_path = decode_utf16le(requested_root).ok_or_else(|| {
+            VssError::InvalidVolume("requested_root is not valid UTF-16LE".to_owned())
+        })?;
+
+        let pipe_id = self.next_pipe_id.fetch_add(1, Ordering::Relaxed);
+        let pipe_name = format!(r"\\.\pipe\uffs-vss-requestor-{pipe_id:016x}");
+        tracing::info!(volume = %volume_path, pipe = %pipe_name, "vss: creating control pipe");
+
+        let pipe_handle = create_control_pipe(&pipe_name).map_err(|err| {
+            VssError::CreateFailed(format!("failed to create control pipe: {err}"))
+        })?;
+
+        tracing::info!(volume = %volume_path, "vss: spawning uffs-vss-requestor");
+        let pending = spawn_helper(&pipe_name, &volume_path).map_err(|err| {
+            VssError::CreateFailed(format!("failed to spawn uffs-vss-requestor: {err}"))
+        })?;
+
+        let (reader, writer, event) = wait_for_helper_ready(pipe_handle)?;
+        self.finish_create_snapshot(pending, reader, writer, event)
+    }
 
     fn delete_snapshot(&self, snapshot_id: &[u8]) -> Result<(), VssError> {
+        tracing::info!(
+            snapshot_id = %String::from_utf8_lossy(snapshot_id),
+            "vss: requesting snapshot deletion"
+        );
         let mut session = self.lock_sessions().remove(snapshot_id).ok_or_else(|| {
             VssError::DeleteFailed("no live session for this snapshot".to_owned())
         })?;
@@ -282,10 +322,11 @@ impl VssProvider for WindowsVssProvider {
             });
         write_result?;
 
+        tracing::info!("vss: waiting for Released confirmation");
         let event = read_helper_event(&mut session.reader).map_err(|err| {
             VssError::DeleteFailed(format!("failed to read helper response: {err}"))
         })?;
-        match event {
+        let result = match event {
             Some(HelperEvent::Released) | None => Ok(()),
             Some(HelperEvent::Failed {
                 stage,
@@ -297,7 +338,11 @@ impl VssProvider for WindowsVssProvider {
             Some(HelperEvent::Ready { .. } | HelperEvent::Pong) => Err(VssError::DeleteFailed(
                 "unexpected event from helper after Release".to_owned(),
             )),
+        };
+        if result.is_ok() {
+            tracing::info!("vss: snapshot released");
         }
+        result
         // `session` drops here regardless of outcome, closing the
         // process/job handles.
     }
@@ -442,6 +487,7 @@ fn helper_exe_path() -> anyhow::Result<PathBuf> {
 fn spawn_helper(pipe_name: &str, volume_path: &str) -> anyhow::Result<PendingSpawn> {
     let exe_path = helper_exe_path()?;
     let parent_pid = std::process::id();
+    tracing::info!(exe = %exe_path.display(), parent_pid, "vss: launching helper process");
     let mut command_line = build_command_line(&exe_path, pipe_name, volume_path, parent_pid);
 
     let startup_info = STARTUPINFOW {
@@ -472,6 +518,10 @@ fn spawn_helper(pipe_name: &str, volume_path: &str) -> anyhow::Result<PendingSpa
 
     let process_handle = process_information.hProcess;
     let thread_handle = process_information.hThread;
+    tracing::info!(
+        helper_pid = process_information.dwProcessId,
+        "vss: helper process created (suspended)"
+    );
 
     // SAFETY: `None` name creates an anonymous Job Object; the returned
     // handle is owned by this function until transferred via
@@ -519,6 +569,7 @@ fn spawn_helper(pipe_name: &str, volume_path: &str) -> anyhow::Result<PendingSpa
         close_pipe_handle(process_handle);
         anyhow::bail!("ResumeThread failed: {}", std::io::Error::last_os_error());
     }
+    tracing::info!("vss: helper process resumed");
 
     Ok(PendingSpawn {
         process_handle,
@@ -584,149 +635,14 @@ fn quote_windows_arg(arg: &str) -> String {
 }
 
 /// Encode `path` as the lossless UTF-16LE `requested_root` wire format
-/// [`WindowsVssProvider::create_snapshot`] expects.
-fn utf16le_bytes(path: &str) -> Vec<u8> {
+/// [`WindowsVssProvider::create_snapshot`] expects. `pub(crate)` since
+/// `vss_self_test` (the `--self-test-vss` implementation) also needs it.
+pub(crate) fn utf16le_bytes(path: &str) -> Vec<u8> {
     path.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-/// Content written to, and verified against, the marker file
-/// [`self_test_round_trip`] snapshots.
-const SELF_TEST_MARKER_CONTENT: &[u8] = b"uffs-broker --self-test-vss marker";
-
-/// Real, runnable, elevated end-to-end proof that the whole VSS pipeline
-/// (native shim → `uffs-vss-requestor` helper process → Broker
-/// lease/session bookkeeping → Job Object cleanup) actually works at
-/// runtime, not just compiles and links.
-///
-/// Creates a marker file under `test_dir`, snapshots that file's volume,
-/// reads the marker back through the resulting snapshot device path,
-/// verifies the content matches, then deletes the snapshot and the
-/// marker file. Backs `uffs-broker --self-test-vss <dir>` (see
-/// `broker::run`); also exercised directly by this module's own
-/// `#[ignore]`d test so the CLI path and the test path can never drift
-/// apart.
-///
-/// `test_dir` must be an absolute, plain (non `\\?\`-prefixed) path —
-/// e.g. `C:\Users\me\AppData\Local\Temp\uffs-vss-self-test` — since its
-/// drive root is passed directly to `IVssBackupComponents::
-/// AddToSnapshotSet`, which expects that exact form.
-///
-/// # Errors
-/// Returns an error if `test_dir` can't be created, has no root
-/// component, the marker file can't be written, snapshot creation
-/// fails, the marker can't be read back from the snapshot device path,
-/// its content doesn't match, or snapshot deletion fails.
-pub(crate) fn self_test_round_trip(test_dir: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(test_dir)
-        .map_err(|err| anyhow::anyhow!("failed to create {}: {err}", test_dir.display()))?;
-    // `Path::ancestors()` walks from the path itself up to the root, so
-    // the last ancestor is the drive root (e.g. `C:\`) — exactly the
-    // form `AddToSnapshotSet` requires.
-    let drive_root = test_dir
-        .ancestors()
-        .last()
-        .ok_or_else(|| anyhow::anyhow!("{} has no root component", test_dir.display()))?
-        .to_path_buf();
-
-    let marker_path = test_dir.join("uffs-vss-self-test-marker.txt");
-    std::fs::write(&marker_path, SELF_TEST_MARKER_CONTENT)
-        .map_err(|err| anyhow::anyhow!("failed to write {}: {err}", marker_path.display()))?;
-
-    let test_result = run_self_test_round_trip(&marker_path, &drive_root);
-
-    if let Err(err) = std::fs::remove_file(&marker_path) {
-        tracing::warn!(
-            error = %err,
-            path = %marker_path.display(),
-            "self-test: failed to remove marker file"
-        );
-    }
-    test_result
-}
-
-/// Create the real snapshot, verify `marker_path` round-trips through
-/// it, and delete it — the body of [`self_test_round_trip`], split out
-/// so the marker-file cleanup above always runs regardless of outcome.
-fn run_self_test_round_trip(marker_path: &Path, drive_root: &Path) -> anyhow::Result<()> {
-    let provider = WindowsVssProvider::new();
-    let volume = VolumeIdentity {
-        volume_serial: 0,
-        volume_guid: Vec::new(),
-    };
-    let requested_root = utf16le_bytes(&drive_root.to_string_lossy());
-
-    let handle = provider
-        .create_snapshot(&volume, &requested_root)
-        .map_err(|err| anyhow::anyhow!("create_snapshot failed: {err}"))?;
-
-    let verify_result = verify_marker_round_trip(marker_path, drive_root, &handle);
-
-    if let Err(err) = provider.delete_snapshot(&handle.snapshot_id) {
-        tracing::warn!(error = %err, "self-test: delete_snapshot failed");
-        if verify_result.is_ok() {
-            return Err(anyhow::anyhow!("delete_snapshot failed: {err}"));
-        }
-    }
-    verify_result
-}
-
-/// Read `marker_path` back through `handle`'s snapshot device path and
-/// confirm it matches [`SELF_TEST_MARKER_CONTENT`].
-fn verify_marker_round_trip(
-    marker_path: &Path,
-    drive_root: &Path,
-    handle: &SnapshotHandle,
-) -> anyhow::Result<()> {
-    if handle.device_identity.is_empty() {
-        anyhow::bail!("helper reported no snapshot device path");
-    }
-    let relative_path = marker_path.strip_prefix(drive_root).map_err(|err| {
-        anyhow::anyhow!(
-            "{} is not under {}: {err}",
-            marker_path.display(),
-            drive_root.display()
-        )
-    })?;
-    let snapshot_path = Path::new(&handle.device_identity).join(relative_path);
-
-    let read_back = std::fs::read(&snapshot_path)
-        .map_err(|err| anyhow::anyhow!("failed to read {}: {err}", snapshot_path.display()))?;
-    if read_back != SELF_TEST_MARKER_CONTENT {
-        anyhow::bail!(
-            "content mismatch: snapshot read back {} bytes, expected {} bytes matching the marker",
-            read_back.len(),
-            SELF_TEST_MARKER_CONTENT.len()
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    /// Real, runnable, elevated end-to-end proof that the whole VSS
-    /// pipeline actually works at runtime, not just compiles and links.
-    /// Everything built for the Snapshot Manager across Phases 4-6 of
-    /// `uffs-ingest-implementation-plan.md` had, until this test, never
-    /// been executed. Delegates directly to [`super::self_test_round_trip`]
-    /// — the exact same function `uffs-broker --self-test-vss` runs —
-    /// so this test and the CLI path can never drift apart.
-    ///
-    /// Requires a real Windows host, Administrator elevation (creating a
-    /// `VSS_CTX_FILE_SHARE_BACKUP` snapshot needs it, and reading a
-    /// shadow-copy device path back needs it too), and
-    /// `uffs-vss-requestor.exe` already built in the same profile
-    /// directory `super::helper_exe_path` searches (it cannot be a
-    /// Cargo dependency of any kind — see that function's doc comment —
-    /// so nothing builds it automatically here): run
-    /// `cargo build -p uffs-vss-requestor` once, then run this test
-    /// elevated with `cargo test -p uffs-broker -- --ignored`.
-    #[test]
-    #[ignore = "requires a real Windows host, Administrator elevation, and live VSS"]
-    fn create_read_delete_snapshot_round_trip() {
-        let test_dir = std::env::temp_dir().join("uffs-vss-self-test");
-        super::self_test_round_trip(&test_dir).expect("VSS round trip self-test failed");
-    }
-
     /// A drive root's trailing backslash must be doubled, not passed
     /// through as-is — a single backslash immediately before the
     /// closing quote escapes the quote instead of terminating the

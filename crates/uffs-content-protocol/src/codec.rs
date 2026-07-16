@@ -335,7 +335,7 @@ pub fn write_bytes_u16_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
 /// content-integrity digest (§15.1), so truncating it to 32 bits for the
 /// cheaper structural checksums keeps this crate to one hash primitive.
 /// This is explicitly *not* used for content integrity — see
-/// [`digest32`] for the full 256-bit digest used there.
+/// [`digest`] for the full 256-bit digest used there.
 #[must_use]
 pub fn checksum32(bytes: &[u8]) -> u32 {
     let hash = blake3::hash(bytes);

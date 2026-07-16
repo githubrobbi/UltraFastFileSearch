@@ -359,7 +359,7 @@ impl SnapshotLeaseStatus {
     }
 }
 
-/// Stable error codes for a [`SnapshotManagerResponse::Error`].
+/// Stable error codes for a [`super::SnapshotManagerResponse::Error`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 #[non_exhaustive]

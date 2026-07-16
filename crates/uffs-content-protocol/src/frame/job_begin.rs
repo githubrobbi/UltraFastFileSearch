@@ -45,7 +45,7 @@ pub struct JobBegin {
     /// candidates. `None` means no ceiling: every matched candidate gets
     /// its content delivered. This is independent of the query's own
     /// candidate-match filters (ext/date/etc.) — see
-    /// [`ReadMode::MetadataOnly`].
+    /// [`super::ReadMode::MetadataOnly`].
     pub max_content_delivery_bytes: Option<u64>,
 }
 

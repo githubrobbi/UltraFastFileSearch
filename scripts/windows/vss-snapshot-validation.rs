@@ -34,24 +34,34 @@
 //     both land in target/release/)
 //
 // Usage:
+
 //   rust-script scripts/windows/vss-snapshot-validation.rs
-//   rust-script scripts/windows/vss-snapshot-validation.rs C:\Temp\uffs-vss-test
-//   rust-script scripts/windows/vss-snapshot-validation.rs --bin path\to\uffs-broker.exe
-//   rust-script scripts/windows/vss-snapshot-validation.rs --timeout-secs 300
+
+//   rust-script scripts/windows/vss-snapshot-validation.rs
+// C:\Temp\uffs-vss-test
+
+//   rust-script scripts/windows/vss-snapshot-validation.rs --bin
+// path\to\uffs-broker.exe
+
+//   rust-script scripts/windows/vss-snapshot-validation.rs --timeout-secs 10
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use colored::Colorize;
 
 /// How long to wait for `--self-test-vss` before killing it and
-/// reporting a timeout, absent a `--timeout-secs` override. VSS_CTX_
-/// FILE_SHARE_BACKUP snapshot creation with no writer participation is
-/// normally a few seconds; 120s gives real disk activity plenty of
-/// room without hanging forever the way a stuck helper connection did
-/// before this timeout existed.
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
+/// reporting a timeout, absent a `--timeout-secs` override. Both halves
+/// of the round trip observed so far (snapshot creation, deletion) take
+/// low single-digit seconds; 30s is generous headroom without leaving
+/// a genuine hang sitting unreported for minutes.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// How often the helper-process watchdog re-checks `tasklist`.
+const WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Parsed script arguments.
 struct ScriptArgs {
@@ -197,6 +207,48 @@ fn print_binary_version(label: &str, path: &std::path::Path) {
     }
 }
 
+/// Whether any `uffs-vss-requestor.exe` process currently exists,
+/// checked via `tasklist` (the same manual check we kept asking for by
+/// hand while diagnosing a hang) — folded into the script itself so a
+/// hang shows *live* whether the helper is still alive or already gone,
+/// without a second terminal.
+fn helper_process_running() -> bool {
+    Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq uffs-vss-requestor.exe", "/NH"])
+        .output()
+        .is_ok_and(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .to_lowercase()
+                .contains("uffs-vss-requestor.exe")
+        })
+}
+
+/// Spawn a background thread that logs `uffs-vss-requestor.exe: RUNNING`
+/// / `NOT RUNNING` to the terminal every time its liveness changes,
+/// until `stop` is set. Returns the thread's `JoinHandle` so the caller
+/// can `stop` then `join` it once the round trip finishes.
+fn spawn_helper_watchdog(stop: &Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+    let stop = Arc::clone(stop);
+    std::thread::spawn(move || {
+        let mut last_seen_running: Option<bool> = None;
+        while !stop.load(Ordering::Relaxed) {
+            let running = helper_process_running();
+            if last_seen_running != Some(running) {
+                if running {
+                    eprintln!("  [watchdog] {} uffs-vss-requestor.exe", "RUNNING".green());
+                } else {
+                    eprintln!(
+                        "  [watchdog] {} uffs-vss-requestor.exe",
+                        "NOT RUNNING".yellow()
+                    );
+                }
+                last_seen_running = Some(running);
+            }
+            std::thread::sleep(WATCHDOG_POLL_INTERVAL);
+        }
+    })
+}
+
 fn main() {
     let script_start = Instant::now();
     let args = parse_script_args();
@@ -256,6 +308,9 @@ fn main() {
         }
     };
 
+    let watchdog_stop = Arc::new(AtomicBool::new(false));
+    let watchdog = spawn_helper_watchdog(&watchdog_stop);
+
     let deadline = Instant::now() + args.timeout;
     let status = loop {
         match child.try_wait() {
@@ -280,6 +335,9 @@ fn main() {
         }
         std::thread::sleep(Duration::from_millis(200));
     };
+
+    watchdog_stop.store(true, Ordering::Relaxed);
+    let _ = watchdog.join();
 
     let elapsed_ms = script_start.elapsed().as_millis();
 

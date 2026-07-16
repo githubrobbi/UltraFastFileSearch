@@ -21,9 +21,11 @@
 
 // Reserved for the wire types the bin will emit once job intake is wired
 // up; not yet used from this thin entry point.
-// Used by `uffs_content::db`, not by this thin entry point directly.
-use rusqlite as _;
-// Dev-dependency used by `uffs_content::db`'s tests, not by this bin.
+// Dev-dependency used by `uffs_content::run`'s tests, not by this bin.
+// Used by `uffs_content::run` (failure log + summary serialization), not
+// by this thin entry point directly.
+use serde as _;
+use serde_json as _;
 #[cfg(test)]
 use tempfile as _;
 use uffs_content_protocol as _;

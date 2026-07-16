@@ -370,15 +370,6 @@ security-framework = "3.7.0"
 # ───── Compression ─────
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 
-# ───── Embedded storage ─────
-# `uffs-content`'s durable job/failure-bucket ledger (addendum S6.1: "a
-# dedicated local SQLite database owned by the UFFS content subsystem").
-# `bundled` statically compiles SQLite from source via libsqlite3-sys —
-# required so the Windows cross-compile (cargo xwin) doesn't need a
-# system sqlite3 import library, matching how this workspace already
-# avoids other system-library link dependencies.
-rusqlite = { version = "0.40.1", features = ["bundled"] }
-
 # ───── Testing & Benchmarking ─────
 criterion = "0.8.2"
 proptest = "1.11.0"

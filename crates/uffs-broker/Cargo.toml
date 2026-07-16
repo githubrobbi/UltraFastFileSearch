@@ -82,6 +82,12 @@ uffs-security.workspace = true
 # Native SCM control for the operator-facing `--status` / `--start` /
 # `--stop` commands — the same locale-proof primitive the updater uses.
 uffs-winsvc.workspace = true
+# The private Broker<->uffs-vss-requestor control protocol
+# (`broker/snapshot_manager/vss_helper.rs`) is JSON-lines — a tiny,
+# internal-only wire format that doesn't warrant a hand-rolled binary
+# codec the way the public/Coordinator-facing protocols do.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 # Embeds the UFFS icon + version info + shared app.manifest into
 # `uffs-broker.exe` (see build.rs). A metadata-less binary is both unbranded

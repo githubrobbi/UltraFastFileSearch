@@ -220,13 +220,14 @@ windows = { version = "0.62.2", features = [
   "Win32_Security_WinTrust",
   "Win32_Storage",
   "Win32_Storage_FileSystem",
-  # VSS requestor COM interfaces (`IVssBackupComponents`, `IVssAsync`) for
-  # `uffs-broker`'s Snapshot Manager (`broker/snapshot_manager/vss.rs`).
-  "Win32_Storage_Vss",
   "Win32_System_Com",
   "Win32_System_Console",
   "Win32_System_IO",
   "Win32_System_Ioctl",
+  # Job Object kill-on-close (`uffs-broker`'s Snapshot Manager spawns
+  # `uffs-vss-requestor` per lease, assigned to a Job Object so it's
+  # killed if the Broker dies — `broker/snapshot_manager/vss_helper.rs`).
+  "Win32_System_JobObjects",
   "Win32_System_Memory",
   "Win32_System_Pipes",
   "Win32_System_ProcessStatus",

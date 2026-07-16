@@ -63,6 +63,13 @@ mod pipe;
 #[cfg(windows)]
 use pipe::create_broker_pipe;
 
+// Snapshot Manager: the Coordinator-facing VSS-lease API (a separate pipe
+// from the daemon's MFT-handle channel above), spawned from
+// `serve_pipe_requests` so it runs under both `--run` (foreground) and the
+// SCM-dispatched service path. See `broker/snapshot_manager/mod.rs`.
+#[path = "broker/snapshot_manager/mod.rs"]
+mod snapshot_manager;
+
 /// Per-drive rate-limit state (`drive → last grant time`), shared across the
 /// FU-5 per-connection worker threads behind a `Mutex`.
 #[cfg(windows)]
@@ -191,6 +198,16 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
         max_instances = MAX_PIPE_INSTANCES,
         "Listening for handle requests"
     );
+
+    // Snapshot Manager (Coordinator-facing VSS-lease API) runs on its own
+    // pipe, in its own accept loop, on a dedicated thread — independent of
+    // the MFT-handle serve loop below. A failure here is logged, not fatal
+    // to the daemon-facing handle service.
+    std::thread::spawn(|| {
+        if let Err(err) = snapshot_manager::run() {
+            tracing::error!(error = %err, "Snapshot Manager stopped unexpectedly");
+        }
+    });
 
     // S5.4: rate-limit state, shared across per-connection workers.
     let rate_limit: Arc<RateLimit> =

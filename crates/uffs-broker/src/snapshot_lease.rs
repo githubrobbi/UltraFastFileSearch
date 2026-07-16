@@ -60,19 +60,13 @@ pub(crate) struct SnapshotHandle {
 pub(crate) enum VssError {
     /// The requested volume could not be validated.
     #[error("volume validation failed: {0}")]
-    VolumeValidationFailed(String),
+    InvalidVolume(String),
     /// Snapshot creation failed.
     #[error("snapshot creation failed: {0}")]
     CreateFailed(String),
     /// Snapshot deletion failed.
     #[error("snapshot deletion failed: {0}")]
     DeleteFailed(String),
-    /// Copy-on-write storage pressure prevents further retention.
-    #[error("copy-on-write storage exhausted: {0}")]
-    StorageExhausted(String),
-    /// Enumerating existing snapshots (for startup reconciliation) failed.
-    #[error("enumerating existing snapshots failed: {0}")]
-    EnumerationFailed(String),
 }
 
 /// A real or fake VSS snapshot creation/deletion/enumeration backend.

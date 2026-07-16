@@ -398,15 +398,38 @@ fn connect_pipe(pipe_handle: HANDLE) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Locate `uffs-vss-requestor.exe`, assumed to live alongside this
-/// Broker binary (the same install directory).
+/// Locate `uffs-vss-requestor.exe`.
+///
+/// In production this lives alongside the Broker binary (same install
+/// directory) — `current_exe()`'s parent. `uffs-vss-requestor` is a
+/// bin-only crate (Cargo refuses to add it as a dependency of any kind:
+/// "ignoring invalid dependency ... missing a lib target", the same
+/// restriction the root `Cargo.toml` documents for why bin-only crates
+/// get no workspace-dependency alias), so there is no
+/// `CARGO_BIN_EXE_*` env var to fall back on under `cargo test` either.
+/// Test binaries run one directory deeper than production binaries
+/// (`target/<triple>/<profile>/deps/`, not
+/// `target/<triple>/<profile>/`), so also check the parent's parent —
+/// where `cargo build -p uffs-vss-requestor` actually places the `.exe`
+/// — before giving up and returning the production guess for the caller
+/// to fail against with a clear `CreateProcessW` error.
 fn helper_exe_path() -> anyhow::Result<PathBuf> {
     let current_exe = std::env::current_exe()
         .map_err(|err| anyhow::anyhow!("failed to resolve current_exe: {err}"))?;
     let parent = current_exe
         .parent()
         .ok_or_else(|| anyhow::anyhow!("current_exe has no parent directory"))?;
-    Ok(parent.join("uffs-vss-requestor.exe"))
+    let sibling = parent.join("uffs-vss-requestor.exe");
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+    if let Some(profile_dir) = parent.parent() {
+        let candidate = profile_dir.join("uffs-vss-requestor.exe");
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Ok(sibling)
 }
 
 /// Spawn `uffs-vss-requestor.exe`, suspended, assign it to a fresh
@@ -516,4 +539,95 @@ fn build_command_line(
         exe_path.display(),
     );
     command.encode_utf16().chain(Some(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use uffs_broker_protocol::snapshot_manager::VolumeIdentity;
+
+    use super::WindowsVssProvider;
+    use crate::snapshot_lease::VssProvider as _;
+
+    /// Encode `path` as the lossless UTF-16LE `requested_root` wire
+    /// format [`WindowsVssProvider::create_snapshot`] expects.
+    fn utf16le_bytes(path: &str) -> Vec<u8> {
+        path.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    /// Real, runnable, elevated end-to-end proof that the whole VSS
+    /// pipeline (native shim → `uffs-vss-requestor` helper process →
+    /// Broker lease/session bookkeeping → Job Object cleanup) actually
+    /// works at runtime, not just compiles and links. Everything built
+    /// for the Snapshot Manager across Phases 4-6 of
+    /// `uffs-ingest-implementation-plan.md` had, until this test, never
+    /// been executed.
+    ///
+    /// Requires a real Windows host, Administrator elevation (creating a
+    /// `VSS_CTX_FILE_SHARE_BACKUP` snapshot needs it, and reading a
+    /// shadow-copy device path back needs it too), and
+    /// `uffs-vss-requestor.exe` already built in the same profile
+    /// directory `super::helper_exe_path` searches (it cannot be a
+    /// Cargo dependency of any kind — see that function's doc comment —
+    /// so nothing builds it automatically here): run
+    /// `cargo build -p uffs-vss-requestor` once, then run this test
+    /// elevated with `cargo test -p uffs-broker -- --ignored`.
+    #[test]
+    #[ignore = "requires a real Windows host, Administrator elevation, and live VSS"]
+    fn create_read_delete_snapshot_round_trip() {
+        let temp_dir = std::env::temp_dir();
+        // `Path::ancestors()` walks from the path itself up to the root,
+        // so the last ancestor is the drive root (e.g. `C:\`) — exactly
+        // the form `IVssBackupComponents::AddToSnapshotSet` requires.
+        let drive_root = temp_dir
+            .ancestors()
+            .last()
+            .expect("temp_dir has at least one ancestor")
+            .to_path_buf();
+
+        let marker_name = format!(
+            "uffs-vss-e2e-{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the epoch")
+                .as_nanos()
+        );
+        let marker_path = temp_dir.join(&marker_name);
+        let marker_content = b"uffs vss round-trip marker";
+        std::fs::write(&marker_path, marker_content).expect("failed to write marker file");
+
+        let provider = WindowsVssProvider::new();
+        let volume = VolumeIdentity {
+            volume_serial: 0,
+            volume_guid: Vec::new(),
+        };
+        let requested_root = utf16le_bytes(&drive_root.to_string_lossy());
+
+        let handle = provider
+            .create_snapshot(&volume, &requested_root)
+            .expect("create_snapshot failed");
+        assert!(
+            !handle.device_identity.is_empty(),
+            "helper reported no snapshot device path"
+        );
+
+        let relative_path = marker_path
+            .strip_prefix(&drive_root)
+            .expect("marker_path is under drive_root");
+        let snapshot_path = std::path::Path::new(&handle.device_identity).join(relative_path);
+
+        let read_back = std::fs::read(&snapshot_path)
+            .expect("failed to read marker file back from the snapshot device path");
+        assert_eq!(read_back, marker_content);
+
+        provider
+            .delete_snapshot(&handle.snapshot_id)
+            .expect("delete_snapshot failed");
+
+        if let Err(err) = std::fs::remove_file(&marker_path) {
+            eprintln!(
+                "warning: failed to clean up {}: {err}",
+                marker_path.display()
+            );
+        }
+    }
 }

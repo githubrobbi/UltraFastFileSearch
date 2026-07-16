@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
+// `MetadataExt::file_index` (the Windows analogue of a Unix inode,
+// used by `job::candidate_source::file_identity` for hard-link
+// detection) is still gated behind this unstable std feature
+// (rust-lang/rust#63010) with no stable alternative. Sound to rely on
+// here: `rust-toolchain.toml` pins the exact same nightly across every
+// environment (host, Windows, Linux) workspace-wide, not just for this
+// crate, and `just toolchain-sync` re-validates every bump attempt
+// against it before the pin moves.
+#![cfg_attr(windows, feature(windows_by_handle))]
+
 //! UFFS Content Service — library crate.
 //!
 //! `uffs-content` is the unprivileged content **coordinator**: read-mode

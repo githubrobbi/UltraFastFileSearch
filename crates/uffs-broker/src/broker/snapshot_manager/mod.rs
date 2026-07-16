@@ -133,28 +133,31 @@ fn serve_snapshot_pipe(
     }
 }
 
-/// Handle one connected client: verify it is the Content Coordinator
-/// (`uffs-content`), then read, dispatch, and respond to exactly one
-/// framed request.
-fn handle_connection(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssProvider>) {
+/// Verify the client connected to `pipe` is the Content Coordinator
+/// (`uffs-content`), logging and returning `false` if not.
+fn verify_connected_coordinator(pipe: HANDLE) -> bool {
     let Some(pid) = super::get_pipe_client_pid(pipe) else {
         tracing::warn!("snapshot pipe: could not determine client PID — rejecting");
-        return;
+        return false;
     };
     let Some(client_process) = OwnedProcessHandle::open_client(pid) else {
         tracing::warn!(
             pid,
             "snapshot pipe: could not open client process — rejecting"
         );
-        return;
+        return false;
     };
     let exe_path = query_process_image_name(client_process.raw());
     if !verify_coordinator_identity(exe_path.as_deref()) {
         tracing::warn!(pid, "snapshot pipe: rejected client — not uffs-content");
-        return;
+        return false;
     }
-    drop(client_process);
+    true
+}
 
+/// Read one framed request from `pipe`, dispatch it against `manager`,
+/// and write the framed response back.
+fn handle_one_request(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssProvider>) {
     let request_bytes = match read_framed_message(pipe) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -172,6 +175,16 @@ fn handle_connection(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssProv
     if let Err(err) = write_framed_message(pipe, &response.encode()) {
         tracing::debug!(error = %err, "snapshot pipe: failed to write response");
     }
+}
+
+/// Handle one connected client: verify it is the Content Coordinator
+/// (`uffs-content`), then read, dispatch, and respond to exactly one
+/// framed request.
+fn handle_connection(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssProvider>) {
+    if !verify_connected_coordinator(pipe) {
+        return;
+    }
+    handle_one_request(pipe, manager);
 }
 
 /// Dispatch one decoded request against `manager`, returning the wire

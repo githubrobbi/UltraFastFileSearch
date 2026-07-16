@@ -69,8 +69,12 @@ pub(crate) fn write_event(
 ) -> std::io::Result<()> {
     let line = serde_json::to_string(event)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    crate::run::debug_log(&format!("write_event: about to writeln! {line:?}"));
     writeln!(writer, "{line}")?;
-    writer.flush()
+    crate::run::debug_log("write_event: writeln! returned; about to flush");
+    let flush_result = writer.flush();
+    crate::run::debug_log("write_event: flush returned");
+    flush_result
 }
 
 /// Read one [`BrokerCommand`] line, or `Ok(None)` at EOF — the pipe

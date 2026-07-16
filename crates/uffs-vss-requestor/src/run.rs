@@ -93,7 +93,7 @@ enum MainEvent {
 /// this is diagnostic infrastructure for a hang that survived multiple
 /// hypotheses (command-line quoting, `DeleteSnapshots` vs. auto-release,
 /// stuck VSS writers), not a permanent feature.
-fn debug_log(message: &str) {
+pub(crate) fn debug_log(message: &str) {
     use std::io::Write as _;
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)

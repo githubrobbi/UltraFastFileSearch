@@ -84,21 +84,45 @@ enum MainEvent {
     ParentDied,
 }
 
+/// Env var gating [`debug_log`] — unset by default. A real deployment
+/// spawns one helper per content-scan job; without this gate, millions
+/// of runs over time would grow an unbounded log file. Set to any value
+/// (e.g. `UFFS_VSS_DEBUG_LOG=1`) while troubleshooting; the Broker
+/// inherits its environment to this helper automatically (`spawn_helper`
+/// passes `None` for `CreateProcessW`'s environment block), so setting
+/// it on the Broker process before it spawns a helper is enough.
+const DEBUG_LOG_ENV_VAR: &str = "UFFS_VSS_DEBUG_LOG";
+
+/// Once the debug log exceeds this size, it's truncated before the next
+/// append — a safety net in case [`DEBUG_LOG_ENV_VAR`] is left set for
+/// an extended troubleshooting session rather than a single repro.
+const DEBUG_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Append a timestamped line to `%TEMP%\uffs-vss-requestor-debug.log`,
-/// silently doing nothing on failure.
+/// silently doing nothing on failure or when [`DEBUG_LOG_ENV_VAR`]
+/// isn't set.
 ///
 /// Exists purely for troubleshooting: the Broker's own tracing has
 /// visibility only up to "helper connected"/"waiting for Released
 /// confirmation" — nothing inside this process. Never load-bearing;
 /// this is diagnostic infrastructure for a hang that survived multiple
 /// hypotheses (command-line quoting, `DeleteSnapshots` vs. auto-release,
-/// stuck VSS writers), not a permanent feature.
+/// stuck VSS writers) before finding the real one, not a permanent
+/// feature that runs unconditionally.
 pub(crate) fn debug_log(message: &str) {
     use std::io::Write as _;
+
+    if std::env::var_os(DEBUG_LOG_ENV_VAR).is_none() {
+        return;
+    }
+    let path = std::env::temp_dir().join("uffs-vss-requestor-debug.log");
+    if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() > DEBUG_LOG_MAX_BYTES) {
+        drop(std::fs::remove_file(&path));
+    }
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(std::env::temp_dir().join("uffs-vss-requestor-debug.log"))
+        .open(&path)
     else {
         return;
     };

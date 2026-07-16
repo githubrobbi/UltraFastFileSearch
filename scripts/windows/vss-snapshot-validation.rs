@@ -291,9 +291,14 @@ fn main() {
     // straight to this terminal in real time instead. `.spawn()` (not
     // `.status()`) so the loop below can poll and kill on timeout — a
     // hung helper connection previously blocked this script forever.
+    // This script only ever runs for diagnostics — the Broker inherits
+    // this env var to the uffs-vss-requestor.exe it spawns, enabling its
+    // otherwise-off-by-default debug log (see run.rs's DEBUG_LOG_ENV_VAR
+    // doc comment) automatically, with no manual step needed.
     let mut child = match Command::new(&args.bin)
         .arg("--self-test-vss")
         .arg(&args.test_dir)
+        .env("UFFS_VSS_DEBUG_LOG", "1")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()

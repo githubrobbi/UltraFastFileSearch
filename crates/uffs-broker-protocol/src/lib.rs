@@ -48,6 +48,8 @@
 
 use thiserror::Error;
 
+pub mod snapshot_manager;
+
 /// Named-pipe path the broker listens on.
 ///
 /// Both the broker server (`uffs-broker::broker`) and the daemon client

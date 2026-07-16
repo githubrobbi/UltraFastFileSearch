@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! Content reading: turns a candidate + byte range into logical bytes.
+
+use std::fs::File;
+use std::io::{self, Read as _, Seek as _, SeekFrom};
+
+use super::candidate_source::CandidateEntry;
+
+/// Reads a bounded range of a candidate's logical content.
+///
+/// The production implementation (not yet built — UFI.2) is
+/// `uffs-content`'s IPC client to `uffs-content-reader`, which resolves
+/// and reads against a VSS snapshot device, never the live volume.
+/// [`FsContentSource`] is a real, correct, but unprivileged stand-in: it
+/// reads the live file directly with `std::fs`. See
+/// [`super::candidate_source::CandidateSource`] for why that's the right
+/// trade-off for this crate's own fast, cross-platform test harness.
+pub trait ContentSource {
+    /// Read up to `max_len` bytes starting at `offset` from `candidate`.
+    ///
+    /// Returns fewer than `max_len` bytes only at EOF (matching a normal
+    /// [`std::io::Read::read`] short-read contract at end of file); an
+    /// empty result means `offset` was at or past EOF.
+    ///
+    /// # Errors
+    /// Propagates the underlying [`io::Error`] from opening/seeking/
+    /// reading the file.
+    fn read_at(&self, candidate: &CandidateEntry, offset: u64, max_len: u32)
+    -> io::Result<Vec<u8>>;
+}
+
+/// Reads content directly from the live filesystem.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FsContentSource;
+
+impl ContentSource for FsContentSource {
+    fn read_at(
+        &self,
+        candidate: &CandidateEntry,
+        offset: u64,
+        max_len: u32,
+    ) -> io::Result<Vec<u8>> {
+        let mut file = File::open(&candidate.absolute_path)?;
+        file.seek(SeekFrom::Start(offset))?;
+
+        let capacity = usize::try_from(max_len).unwrap_or(usize::MAX);
+        let mut buffer = vec![0_u8; capacity];
+        let mut total_read = 0_usize;
+        while total_read < buffer.len() {
+            let remaining = buffer.get_mut(total_read..).unwrap_or(&mut []);
+            let read = file.read(remaining)?;
+            if read == 0 {
+                break;
+            }
+            total_read += read;
+        }
+        buffer.truncate(total_read);
+        Ok(buffer)
+    }
+}

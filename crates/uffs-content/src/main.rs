@@ -6,12 +6,15 @@
 //!
 //! # Status
 //!
-//! Scaffold only. Job intake (structured JSON job spec), VSS snapshot
-//! orchestration, candidate evaluation, and framed content streaming are
-//! not yet implemented. See Docenta's `uffs-ingest-protocol-v2-vss.md` for
-//! the target contract (the authoritative spec this tool is built
-//! against) and `docs/dev/architecture/` (local-only) for the surrounding
-//! design review.
+//! Job intake, manifest construction, and protocol framing are
+//! implemented (`uffs_content::job`), but only against the cross-platform
+//! `std::fs`-based candidate/content sources, not real VSS snapshots yet.
+//! This bin is still a thin `--version`-only entry point — it does not
+//! yet parse a job spec off the command line and dispatch it. See
+//! Docenta's `uffs-ingest-protocol-v2-vss.md` for the target contract
+//! (the authoritative spec this tool is built against) and
+//! `docs/dev/architecture/` (local-only) for the surrounding design
+//! review.
 //!
 //! # Usage (planned)
 //!
@@ -20,8 +23,10 @@
 //! ```
 
 // Reserved for the wire types the bin will emit once job intake is wired
-// up; not yet used from this thin entry point.
-// Dev-dependency used by `uffs_content::run`'s tests, not by this bin.
+// up as a real CLI entry point; not yet used from this thin bin.
+// Dev-dependencies used by `uffs_content`'s tests, not by this bin.
+#[cfg(test)]
+use blake3 as _;
 // Used by `uffs_content::run` (failure log + summary serialization), not
 // by this thin entry point directly.
 use serde as _;
@@ -29,6 +34,9 @@ use serde_json as _;
 #[cfg(test)]
 use tempfile as _;
 use uffs_content_protocol as _;
+// Used by `uffs_content::job::workflow`, not by this thin entry point
+// directly.
+use uuid as _;
 
 #[expect(
     clippy::print_stderr,

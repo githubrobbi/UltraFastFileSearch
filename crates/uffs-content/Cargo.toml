@@ -63,9 +63,16 @@ uffs-content-protocol.workspace = true
 # the only serialization this crate needs.
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# Job/run identifiers (`ManifestHeader::job_id`, etc.) — see `src/job/`.
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Independent oracle digest for the E2E dir-walk parity harness
+# (`tests/support/plain_walk.rs`) — deliberately calls the `blake3` crate
+# directly rather than going through `uffs-content-protocol::codec::digest`,
+# so a bug in that wrapper can't hide from the parity test.
+blake3.workspace = true
 
 [lints]
 workspace = true

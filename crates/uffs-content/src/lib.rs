@@ -17,22 +17,32 @@
 //!
 //! # Status
 //!
-//! Job intake, VSS, MFT, and streaming logic are not implemented yet.
-//! [`run`] (the ephemeral per-run manifest/failure-log/summary model) is
-//! real.
+//! [`run`] (the ephemeral per-run manifest/failure-log/summary model) and
+//! [`job`] (job intake, candidate enumeration, manifest construction, and
+//! protocol framing) are real — but [`job`]'s [`job::candidate_source`]
+//! and [`job::content_source`] backends are currently the cross-platform
+//! `std::fs`-based stand-ins described in
+//! `uffs-ingest-implementation-plan.md` §9.5, not the real VSS-snapshot
+//! and privileged-Reader-backed ones (UFI.1/UFI.2). [`is_implemented`]
+//! tracks the latter, not this crate's own workflow logic.
 
+pub mod job;
 pub mod run;
 
-// Not yet wired into this library's logic — reserved for the manifest /
-// frame types this crate will produce and consume once job intake lands.
 // `uffs_version::handle_version!` is invoked from `main.rs` only.
-use uffs_content_protocol as _;
+// Dev-dependency used by `tests/support/plain_walk.rs` (the independent
+// oracle for the E2E dir-walk parity harness), not by this crate's own
+// unit tests.
+#[cfg(test)]
+use blake3 as _;
 use uffs_version as _;
 
-/// Placeholder for the not-yet-implemented job entry point.
+/// Whether the production, VSS-snapshot-backed pipeline is wired up.
 ///
-/// Returns `false` until job intake (job-spec parsing, VSS snapshot
-/// creation, candidate evaluation, and streaming) is implemented.
+/// Returns `false` until [`job::candidate_source`] and
+/// [`job::content_source`] have real Broker/Reader-backed implementations
+/// (UFI.1/UFI.2) — the workflow itself ([`job::workflow::run_job`]) is
+/// already real, just not yet running against NTFS.
 #[must_use]
 pub const fn is_implemented() -> bool {
     false

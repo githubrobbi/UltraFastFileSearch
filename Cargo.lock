@@ -4481,11 +4481,13 @@ dependencies = [
 name = "uffs-content"
 version = "0.6.27"
 dependencies = [
+ "blake3",
  "serde",
  "serde_json",
  "tempfile",
  "uffs-content-protocol",
  "uffs-version",
+ "uuid",
 ]
 
 [[package]]

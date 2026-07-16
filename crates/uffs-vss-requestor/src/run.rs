@@ -96,7 +96,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .try_clone()
         .map_err(|err| anyhow::anyhow!("failed to clone pipe handle for reading: {err}"))?;
 
-    let mut session = match VssSnapshotSession::create(&args.volume_path) {
+    let session = match VssSnapshotSession::create(&args.volume_path) {
         Ok((session, descriptor)) => {
             protocol::write_event(&mut writer, &HelperEvent::Ready {
                 snapshot_set_id: descriptor.snapshot_set_id,
@@ -150,30 +150,24 @@ pub(crate) fn run() -> anyhow::Result<()> {
             MainEvent::Command(BrokerCommand::Ping) => {
                 drop(protocol::write_event(&mut writer, &HelperEvent::Pong));
             }
-            MainEvent::Command(BrokerCommand::Release) => {
-                match session.delete_snapshot_set() {
-                    Ok(()) => {
-                        drop(protocol::write_event(&mut writer, &HelperEvent::Released));
-                    }
-                    Err(err) => {
-                        drop(protocol::write_event(&mut writer, &HelperEvent::Failed {
-                            stage: err.stage,
-                            hresult: err.hresult,
-                            message: err.message,
-                        }));
-                    }
-                }
-                drop(session);
-                return Ok(());
-            }
-            MainEvent::Command(BrokerCommand::Cancel)
+            MainEvent::Command(BrokerCommand::Release | BrokerCommand::Cancel)
             | MainEvent::PipeClosed
             | MainEvent::ParentDied => {
-                // Auto-release path: dropping `session` releases the
-                // last `IVssBackupComponents` reference, which is where
-                // `VSS_CTX_FILE_SHARE_BACKUP`'s auto-delete happens if
-                // the snapshot set was never explicitly deleted.
+                // `VSS_CTX_FILE_SHARE_BACKUP` is an auto-release context:
+                // dropping `session` releases the last
+                // `IVssBackupComponents` reference, which is where the
+                // actual deletion happens. This used to be a separate
+                // path (explicit `DeleteSnapshots` on `Release`, drop-only
+                // on every other exit) — `DeleteSnapshots` was observed
+                // to hang indefinitely on real hardware when called on a
+                // `VSS_CTX_FILE_SHARE_BACKUP` snapshot set, so `Release`
+                // now uses the exact same drop-based teardown the other
+                // three paths already relied on.
+                let is_release = matches!(event, MainEvent::Command(BrokerCommand::Release));
                 drop(session);
+                if is_release {
+                    drop(protocol::write_event(&mut writer, &HelperEvent::Released));
+                }
                 return Ok(());
             }
         }

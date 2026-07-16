@@ -141,11 +141,6 @@ unsafe extern "C" {
         out_error: *mut VssError,
     ) -> i32;
 
-    pub(crate) fn uffs_vss_delete_snapshot_set(
-        session: *mut Session,
-        out_error: *mut VssError,
-    ) -> i32;
-
     pub(crate) fn uffs_vss_session_release(session: *mut Session);
     pub(crate) fn uffs_vss_snapshot_info_free(info: *mut SnapshotInfo);
     pub(crate) fn uffs_vss_error_free(error: *mut VssError);

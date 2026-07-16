@@ -13,6 +13,15 @@
 // an application-consistent backup, so no writer coordination
 // (`GatherWriterMetadata`, `PrepareForBackup`, `BackupComplete`) is
 // performed; the guide notes these are not valid in the no-writer flow.
+//
+// Deletion is release-only (`uffs_vss_session_release`), never
+// `IVssBackupComponents::DeleteSnapshots`: an earlier version of this
+// shim called `DeleteSnapshots` explicitly for deterministic
+// normal-completion cleanup, but that call was observed to hang
+// indefinitely on real Windows hardware when used on a
+// `VSS_CTX_FILE_SHARE_BACKUP` snapshot set. Releasing the last
+// `IVssBackupComponents` reference is this context's documented
+// auto-release mechanism and is the only deletion path left.
 
 #include "vss_shim.h"
 
@@ -28,7 +37,6 @@
 // backup/restore/query operation.
 struct UffsVssSession {
     IVssBackupComponents *backup_components = nullptr;
-    GUID snapshot_set_id = GUID_NULL;
     bool com_initialized = false;
 };
 
@@ -173,7 +181,6 @@ int32_t uffs_vss_create_file_share_snapshot(
         destroy_session(session);
         return hr;
     }
-    session->snapshot_set_id = snapshot_set_id;
 
     VSS_ID snapshot_id = GUID_NULL;
     hr = backup_components->AddToSnapshotSet(const_cast<wchar_t *>(volume_path), GUID_NULL, &snapshot_id);
@@ -233,27 +240,6 @@ int32_t uffs_vss_create_file_share_snapshot(
     VssFreeSnapshotProperties(&properties);
 
     *out_session = session;
-    return S_OK;
-}
-
-int32_t uffs_vss_delete_snapshot_set(UffsVssSession *session, UffsVssError *out_error) {
-    if (session == nullptr || session->backup_components == nullptr) {
-        set_error(out_error, E_INVALIDARG, UFFS_VSS_STAGE_INVALID_ARGUMENT, L"null or already-torn-down session");
-        return E_INVALIDARG;
-    }
-
-    LONG deleted_count = 0;
-    VSS_ID first_non_deleted = GUID_NULL;
-    HRESULT hr = session->backup_components->DeleteSnapshots(
-        session->snapshot_set_id,
-        VSS_OBJECT_SNAPSHOT_SET,
-        TRUE,
-        &deleted_count,
-        &first_non_deleted);
-    if (FAILED(hr)) {
-        set_error(out_error, hr, UFFS_VSS_STAGE_DELETE_SET, L"DeleteSnapshots failed");
-        return hr;
-    }
     return S_OK;
 }
 

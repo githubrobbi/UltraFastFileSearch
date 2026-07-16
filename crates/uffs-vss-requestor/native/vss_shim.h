@@ -37,8 +37,7 @@ typedef enum UffsVssStage {
     UFFS_VSS_STAGE_DO_SET_WAIT = 8,
     UFFS_VSS_STAGE_DO_SET_STATUS = 9,
     UFFS_VSS_STAGE_GET_PROPERTIES = 10,
-    UFFS_VSS_STAGE_DELETE_SET = 11,
-    UFFS_VSS_STAGE_INVALID_ARGUMENT = 12,
+    UFFS_VSS_STAGE_INVALID_ARGUMENT = 11,
 } UffsVssStage;
 
 typedef struct UffsVssSnapshotInfo {
@@ -68,11 +67,15 @@ typedef struct UffsVssError {
 // `IVssBackupComponents`, kept alive until `uffs_vss_session_release`;
 // `*out_info` is populated and must be released via
 // `uffs_vss_snapshot_info_free`. Because the context is auto-release,
-// the underlying snapshot is deleted the moment the session is released
-// without an explicit `uffs_vss_delete_snapshot_set` call — that is the
-// crash-safety net; normal completion should still call
-// `uffs_vss_delete_snapshot_set` first for deterministic, observable
-// cleanup.
+// the underlying snapshot is deleted the moment `uffs_vss_session_release`
+// drops the last reference to `IVssBackupComponents` — that is the
+// *only* deletion path this shim exposes. There used to be a separate
+// `uffs_vss_delete_snapshot_set` (calling `IVssBackupComponents::
+// DeleteSnapshots`) for deterministic cleanup on normal completion, but
+// that call was observed to hang indefinitely on real hardware when
+// used on a `VSS_CTX_FILE_SHARE_BACKUP` snapshot set, so it was removed
+// entirely rather than left as a landmine — `uffs_vss_session_release`
+// is both the crash-safety net and the normal-completion path now.
 //
 // On failure: `*out_session` and `*out_info` are zeroed; `*out_error` is
 // populated and must be released via `uffs_vss_error_free`.
@@ -82,17 +85,9 @@ int32_t uffs_vss_create_file_share_snapshot(
     UffsVssSnapshotInfo *out_info,
     UffsVssError *out_error);
 
-// Explicitly delete the snapshot set owned by `session`. Does not
-// release the session itself — call `uffs_vss_session_release`
-// afterward regardless of the outcome here.
-int32_t uffs_vss_delete_snapshot_set(
-    UffsVssSession *session,
-    UffsVssError *out_error);
-
-// Release `session` (a no-op if `session` is `NULL`). If the snapshot
-// set was never explicitly deleted, this is where the auto-release
-// context's actual cleanup happens (releasing the last reference to
-// `IVssBackupComponents`).
+// Release `session` (a no-op if `session` is `NULL`) — the only
+// deletion path; see `uffs_vss_create_file_share_snapshot`'s doc
+// comment above for why.
 void uffs_vss_session_release(UffsVssSession *session);
 
 void uffs_vss_snapshot_info_free(UffsVssSnapshotInfo *info);

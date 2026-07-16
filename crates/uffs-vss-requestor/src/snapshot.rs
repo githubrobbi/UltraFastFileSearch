@@ -97,28 +97,6 @@ impl VssSnapshotSession {
 
         Ok((Self { raw: raw_session }, descriptor))
     }
-
-    /// Explicitly delete this session's snapshot set (deterministic
-    /// cleanup on normal completion — see [`Drop`] for the crash-safety
-    /// net).
-    ///
-    /// # Errors
-    /// Returns [`VssRequestError`] if `DeleteSnapshots` fails.
-    #[expect(
-        unsafe_code,
-        reason = "calls into the native VSS shim; see the inline SAFETY comment"
-    )]
-    pub(crate) fn delete_snapshot_set(&mut self) -> Result<(), VssRequestError> {
-        let mut error = ffi::VssError::zeroed();
-        // SAFETY: `self.raw` is a valid session handle for `self`'s
-        // entire lifetime (released exactly once, in `Drop`); `error` is
-        // a stack-owned out-parameter.
-        let hresult = unsafe { ffi::uffs_vss_delete_snapshot_set(self.raw, &raw mut error) };
-        if hresult < 0_i32 {
-            return Err(take_error(&mut error));
-        }
-        Ok(())
-    }
 }
 
 impl Drop for VssSnapshotSession {

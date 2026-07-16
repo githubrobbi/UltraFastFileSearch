@@ -116,6 +116,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
     if args.iter().any(|arg| arg == "--run") {
         return run_foreground();
     }
+    if let Some(test_dir) = self_test_vss_dir(&args) {
+        return self_test_vss(&test_dir);
+    }
 
     // No recognised flag: this is how the Service Control Manager launches the
     // service at boot.  Hand control to the dispatcher; when run interactively
@@ -140,7 +143,47 @@ fn print_usage() {
     eprintln!("  --start       Start the service (waits for RUNNING)");
     eprintln!("  --stop        Stop the service (waits for STOPPED)");
     eprintln!("  --run         Run in foreground (debugging)");
+    eprintln!("  --self-test-vss <dir>  Elevated smoke test: real VSS snapshot create/read/delete");
     eprintln!("  --version     Print version (also -V)");
+}
+
+/// Return the directory argument following `--self-test-vss`, if present.
+#[cfg(windows)]
+fn self_test_vss_dir(args: &[String]) -> Option<std::path::PathBuf> {
+    let flag_index = args.iter().position(|arg| arg == "--self-test-vss")?;
+    args.get(flag_index + 1).map(std::path::PathBuf::from)
+}
+
+/// Run `snapshot_manager::self_test_round_trip` standalone (no service,
+/// no pipe server) and print a PASS/FAIL result — a manual, elevated
+/// smoke test proving the real VSS snapshot pipeline (native shim →
+/// `uffs-vss-requestor` helper → Broker lease bookkeeping) works at
+/// runtime on this machine.
+///
+/// # Errors
+/// Returns an error (and prints "FAIL: <cause>") if any stage of the
+/// round trip fails.
+#[cfg(windows)]
+#[expect(
+    clippy::print_stderr,
+    reason = "one-shot CLI diagnostic invoked before any tracing subscriber exists"
+)]
+fn self_test_vss(test_dir: &std::path::Path) -> anyhow::Result<()> {
+    init_tracing();
+    warn_if_not_elevated();
+    match snapshot_manager::self_test_round_trip(test_dir) {
+        Ok(()) => {
+            eprintln!(
+                "PASS: VSS create/read/delete round trip succeeded ({})",
+                test_dir.display()
+            );
+            Ok(())
+        }
+        Err(err) => {
+            eprintln!("FAIL: {err:#}");
+            Err(err)
+        }
+    }
 }
 
 /// Run the broker in foreground mode.

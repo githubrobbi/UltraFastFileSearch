@@ -28,6 +28,9 @@ use uffs_broker_protocol::snapshot_manager::{
     SnapshotLeaseStatus, SnapshotManagerErrorCode, SnapshotManagerRequest, SnapshotManagerResponse,
 };
 use vss_helper::WindowsVssProvider;
+// Re-exported so `broker::run` can wire up `--self-test-vss` without
+// reaching past this module's own submodule privacy boundary.
+pub(super) use vss_helper::self_test_round_trip;
 use windows::Win32::Foundation::HANDLE;
 use windows::core::PCWSTR;
 

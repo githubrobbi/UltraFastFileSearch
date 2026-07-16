@@ -36,6 +36,7 @@
 
 pub mod codec;
 pub mod error;
+pub mod frame;
 pub mod manifest;
 pub mod path_encoding;
 pub mod state;

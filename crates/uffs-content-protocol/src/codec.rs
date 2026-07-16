@@ -253,6 +253,22 @@ impl<'a> Reader<'a> {
         let bytes = self.take(len as usize)?;
         Ok(bytes.to_vec())
     }
+
+    /// Read exactly `len` raw bytes with **no** length prefix on the
+    /// wire — for callers whose length already came from elsewhere (e.g.
+    /// [`crate::frame::FrameEnvelope`]'s separately-encoded
+    /// `payload_length` field). The caller is responsible for having
+    /// already bounds-checked `len` against its own maximum; this method
+    /// only guarantees `len` does not exceed the bytes actually
+    /// remaining.
+    ///
+    /// # Errors
+    ///
+    /// [`DecodeError::Truncated`] if fewer than `len` bytes remain.
+    pub fn read_bytes_exact(&mut self, len: usize) -> Result<Vec<u8>, DecodeError> {
+        let bytes = self.take(len)?;
+        Ok(bytes.to_vec())
+    }
 }
 
 /// Append a little-endian `u16` to `out`.

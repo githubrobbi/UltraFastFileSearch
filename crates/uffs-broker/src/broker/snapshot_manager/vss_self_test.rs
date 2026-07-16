@@ -97,13 +97,34 @@ fn run_self_test_round_trip(marker_path: &Path, drive_root: &Path) -> anyhow::Re
         tracing::info!("self-test: marker verified");
     }
 
+    let ping_result = ping_lease_and_log(&provider, &handle.snapshot_id);
+
     if let Err(err) = provider.delete_snapshot(&handle.snapshot_id) {
         tracing::warn!(error = %err, "self-test: delete_snapshot failed");
-        if verify_result.is_ok() {
+        if verify_result.is_ok() && ping_result.is_ok() {
             return Err(anyhow::anyhow!("delete_snapshot failed: {err}"));
         }
     }
-    verify_result
+    verify_result.and(ping_result)
+}
+
+/// Real, wire-level proof the Ping/Pong path works — `Ping` has no
+/// production caller yet, so this is the only place it's ever
+/// exercised. Split out of [`run_self_test_round_trip`] to keep that
+/// function's cognitive complexity down.
+///
+/// Failure here doesn't abort the round trip (Release still needs to
+/// run to clean up the snapshot either way), but does turn the overall
+/// self-test result into an error so a regression can't hide behind an
+/// otherwise-green create/delete run.
+fn ping_lease_and_log(provider: &WindowsVssProvider, snapshot_id: &[u8]) -> anyhow::Result<()> {
+    let ping_result = provider
+        .ping_lease(snapshot_id)
+        .map_err(|err| anyhow::anyhow!("ping_lease failed: {err}"));
+    if let Err(err) = &ping_result {
+        tracing::warn!(error = %err, "self-test: ping_lease failed");
+    }
+    ping_result
 }
 
 /// Read `marker_path` back through `handle`'s snapshot device path and

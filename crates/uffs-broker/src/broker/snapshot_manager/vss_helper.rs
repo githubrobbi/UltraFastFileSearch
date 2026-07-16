@@ -80,6 +80,8 @@ enum HelperEvent {
 enum BrokerCommand {
     /// Delete the snapshot set and exit.
     Release,
+    /// Liveness check; expects a [`HelperEvent::Pong`] reply.
+    Ping,
 }
 
 /// One live helper-process session.
@@ -183,6 +185,71 @@ impl WindowsVssProvider {
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Send [`BrokerCommand::Ping`] to the live helper session for
+    /// `snapshot_id` and wait for its [`HelperEvent::Pong`] reply — a
+    /// real, wire-level round trip, not a bookkeeping-only check.
+    ///
+    /// `Ping` has no production caller yet (no periodic liveness check
+    /// is wired up to a lease's lifetime); this exists purely so
+    /// `--self-test-vss` can prove the Ping/Pong path actually works end
+    /// to end the same way it already proves Ready/Release do —
+    /// catching the exact class of named-pipe deadlock bug that hit
+    /// `Release` before this path existed to exercise `Ping` too. Not
+    /// part of the [`VssProvider`] trait: it has no cross-platform
+    /// meaning for the `FakeVssProvider` unit tests, so it stays a
+    /// `WindowsVssProvider`-only capability until something real needs
+    /// it on the trait.
+    ///
+    /// # Errors
+    /// Returns an error if there's no live session for `snapshot_id`,
+    /// the write fails, or the helper doesn't reply with `Pong`.
+    pub(crate) fn ping_lease(&self, snapshot_id: &[u8]) -> anyhow::Result<()> {
+        let mut session = self
+            .lock_sessions()
+            .remove(snapshot_id)
+            .ok_or_else(|| anyhow::anyhow!("no live session for this snapshot"))?;
+
+        tracing::info!("vss: sending Ping to helper");
+        let ping_result = send_ping_and_await_pong(&mut session);
+        if ping_result.is_ok() {
+            tracing::info!("vss: received Pong");
+        }
+
+        self.lock_sessions().insert(snapshot_id.to_vec(), session);
+        ping_result
+    }
+}
+
+/// Write [`BrokerCommand::Ping`] on `session`'s writer and block until
+/// its [`HelperEvent::Pong`] reply — the body of
+/// [`WindowsVssProvider::ping_lease`], split out so that function can
+/// always reinsert `session` regardless of outcome.
+fn send_ping_and_await_pong(session: &mut HelperSession) -> anyhow::Result<()> {
+    let line = serde_json::to_string(&BrokerCommand::Ping)
+        .map_err(|err| anyhow::anyhow!("failed to encode Ping: {err}"))?;
+    writeln!(session.writer, "{line}")
+        .and_then(|()| session.writer.flush())
+        .map_err(|err| anyhow::anyhow!("failed to send Ping: {err}"))?;
+
+    let event = read_helper_event(&mut session.reader)
+        .map_err(|err| anyhow::anyhow!("failed to read helper response: {err}"))?;
+    match event {
+        Some(HelperEvent::Pong) => Ok(()),
+        Some(HelperEvent::Failed {
+            stage,
+            hresult,
+            message,
+        }) => Err(anyhow::anyhow!(
+            "stage={stage} hresult={hresult:#x}: {message}"
+        )),
+        Some(HelperEvent::Ready { .. } | HelperEvent::Released) => {
+            Err(anyhow::anyhow!("unexpected event from helper after Ping"))
+        }
+        None => Err(anyhow::anyhow!(
+            "helper closed the control pipe before replying to Ping"
+        )),
     }
 }
 

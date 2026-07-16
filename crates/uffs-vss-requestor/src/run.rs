@@ -169,7 +169,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 // handle) avoids ever having two threads perform I/O on
                 // it at once. See below for why that matters: it was a
                 // real, 100%-reproducible hang on real hardware.
+                debug_log("received Ping; writing Pong");
                 drop(protocol::write_event(&mut ping_writer, &HelperEvent::Pong));
+                debug_log("wrote Pong");
                 continue;
             }
             // Only `Release`/`Cancel` reach here, and both are

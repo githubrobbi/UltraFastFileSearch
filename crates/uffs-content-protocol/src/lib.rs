@@ -28,10 +28,14 @@
 //!
 //! # Status
 //!
-//! Scaffold only. [`state::CandidateOutcome`] and [`error::ProtocolError`]
-//! are placeholders. The manifest header/record/trailer layout (design-doc
-//! §11), the frame envelope + frame types (§12), the failure record (§8),
-//! and the full error taxonomy (§16) are not yet implemented.
+//! Under active implementation per
+//! `docs/dev/architecture/uffs-ingest-implementation-plan.md` (local-only,
+//! UFI.0). [`codec`] (bounds-checked LE primitives + checksums) and
+//! [`state`] are implemented; the manifest header/record/trailer layout
+//! (design-doc §11) and the frame envelope + frame types (§12) are next.
 
+pub mod codec;
 pub mod error;
+pub mod manifest;
+pub mod path_encoding;
 pub mod state;

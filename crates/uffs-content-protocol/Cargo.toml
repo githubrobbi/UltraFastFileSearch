@@ -47,8 +47,19 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-# Structured error type for `ProtocolError`.
+# Structured error type for `codec::DecodeError`.
 thiserror.workspace = true
+# Content-integrity digest mandated by the protocol spec (manifest/frame
+# checksums + FILE_END content digest) — design-doc §15.1.
+blake3.workspace = true
+# `CandidateFlags` bitfield (design-doc §11.4: RESIDENT/SPARSE/COMPRESSED/...).
+bitflags.workspace = true
+
+[dev-dependencies]
+# Round-trip property tests for the manifest/frame codec (§21.6 of the
+# design doc: fuzz manifest lengths, frame lengths, offsets, sequence
+# numbers).
+proptest.workspace = true
 
 [lints]
 workspace = true

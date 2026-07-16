@@ -4489,6 +4489,9 @@ dependencies = [
 name = "uffs-content-protocol"
 version = "0.6.27"
 dependencies = [
+ "bitflags",
+ "blake3",
+ "proptest",
  "thiserror 2.0.18",
 ]
 

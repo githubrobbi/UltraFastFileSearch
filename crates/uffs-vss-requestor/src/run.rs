@@ -74,6 +74,7 @@ fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> anyhow::Re
 /// Broker, the pipe closing, or the parent process dying (a second,
 /// independent safety net alongside the Job Object the Broker assigns
 /// this process to).
+#[derive(Debug)]
 enum MainEvent {
     /// A decoded command arrived from the Broker.
     Command(BrokerCommand),
@@ -83,6 +84,30 @@ enum MainEvent {
     ParentDied,
 }
 
+/// Append a timestamped line to `%TEMP%\uffs-vss-requestor-debug.log`,
+/// silently doing nothing on failure.
+///
+/// Exists purely for troubleshooting: the Broker's own tracing has
+/// visibility only up to "helper connected"/"waiting for Released
+/// confirmation" — nothing inside this process. Never load-bearing;
+/// this is diagnostic infrastructure for a hang that survived multiple
+/// hypotheses (command-line quoting, `DeleteSnapshots` vs. auto-release,
+/// stuck VSS writers), not a permanent feature.
+fn debug_log(message: &str) {
+    use std::io::Write as _;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("uffs-vss-requestor-debug.log"))
+    else {
+        return;
+    };
+    let millis_since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let _write_result = writeln!(file, "[{millis_since_epoch}] {message}");
+}
+
 /// Run the helper end to end.
 ///
 /// # Errors
@@ -90,14 +115,17 @@ enum MainEvent {
 /// connected, or the initial snapshot creation fails (after reporting
 /// [`HelperEvent::Failed`] to the Broker).
 pub(crate) fn run() -> anyhow::Result<()> {
+    debug_log("run() started");
     let args = Args::parse()?;
     let mut writer = pipe::connect(&args.pipe_name)?;
+    debug_log("connected to control pipe");
     let reader_file = writer
         .try_clone()
         .map_err(|err| anyhow::anyhow!("failed to clone pipe handle for reading: {err}"))?;
 
     let session = match VssSnapshotSession::create(&args.volume_path) {
         Ok((session, descriptor)) => {
+            debug_log("snapshot created; writing Ready event");
             protocol::write_event(&mut writer, &HelperEvent::Ready {
                 snapshot_set_id: descriptor.snapshot_set_id,
                 snapshot_id: descriptor.snapshot_id,
@@ -145,7 +173,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
     });
     drop(event_tx);
 
+    debug_log("entering main event loop");
     for event in event_rx {
+        debug_log(&format!("received event: {event:?}"));
         match event {
             MainEvent::Command(BrokerCommand::Ping) => {
                 drop(protocol::write_event(&mut writer, &HelperEvent::Pong));
@@ -164,10 +194,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 // now uses the exact same drop-based teardown the other
                 // three paths already relied on.
                 let is_release = matches!(event, MainEvent::Command(BrokerCommand::Release));
+                debug_log("dropping session (releases IVssBackupComponents)");
                 drop(session);
+                debug_log("session dropped");
                 if is_release {
+                    debug_log("writing Released event");
                     drop(protocol::write_event(&mut writer, &HelperEvent::Released));
+                    debug_log("wrote Released event");
                 }
+                debug_log("run() returning Ok");
                 return Ok(());
             }
         }

@@ -150,18 +150,42 @@ pub(crate) fn run() -> anyhow::Result<()> {
 
     let (event_tx, event_rx) = mpsc::channel::<MainEvent>();
 
+    let mut ping_writer = writer
+        .try_clone()
+        .map_err(|err| anyhow::anyhow!("failed to clone pipe handle for Ping replies: {err}"))?;
     let reader_tx = event_tx.clone();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader_file);
         loop {
-            if let Ok(Some(command)) = protocol::read_command(&mut reader) {
-                if reader_tx.send(MainEvent::Command(command)).is_err() {
-                    return;
-                }
-            } else {
+            let Ok(Some(command)) = protocol::read_command(&mut reader) else {
                 drop(reader_tx.send(MainEvent::PipeClosed));
                 return;
+            };
+            if matches!(command, BrokerCommand::Ping) {
+                // Handled entirely on this thread — Ping/Pong needs no
+                // session access, and replying here (rather than
+                // routing through the main thread, which would write on
+                // a *different* clone of this same non-overlapped pipe
+                // handle) avoids ever having two threads perform I/O on
+                // it at once. See below for why that matters: it was a
+                // real, 100%-reproducible hang on real hardware.
+                drop(protocol::write_event(&mut ping_writer, &HelperEvent::Pong));
+                continue;
             }
+            // Only `Release`/`Cancel` reach here, and both are
+            // terminal: the main thread is about to tear down the
+            // session and write a final reply on its own clone of this
+            // same pipe handle. Windows serializes synchronous I/O
+            // across duplicate handles of one file object from
+            // different threads, so leaving this thread's read pending
+            // past this point would deadlock that final write against
+            // a read that will never be satisfied — the Broker never
+            // sends anything after Release/Cancel. Proved via
+            // `debug_log`: the write's `writeln!` call never returned
+            // while this thread's next read sat pending, independent of
+            // VSS/COM, AV, or VSS writer health, all ruled out first.
+            drop(reader_tx.send(MainEvent::Command(command)));
+            return;
         }
     });
 

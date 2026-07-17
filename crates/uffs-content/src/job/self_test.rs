@@ -146,7 +146,7 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
     let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
 
     if outcome.run_summary.candidate_count != ground_truth_count {
-        let pipeline_paths = decode_candidate_paths(&outcome.manifest_bytes)
+        let pipeline_paths = decode_candidate_paths(&outcome.manifest_bytes, root)
             .context("failed to decode candidate paths for mismatch diagnostics")?;
         anyhow::bail!(
             "candidate count mismatch: pipeline found {}, ground-truth disk walk found {}\n\
@@ -266,10 +266,16 @@ fn walk_tolerating_denied(
     }
 }
 
-/// Decode every `CandidateRecord::path` out of a manifest, for the
-/// candidate-count-mismatch diagnostic in
+/// Decode every `CandidateRecord::path` out of a manifest, re-joined onto
+/// `root` for the candidate-count-mismatch diagnostic in
 /// [`self_test_vss_query_metadata`].
-fn decode_candidate_paths(manifest_bytes: &[u8]) -> Result<Vec<std::path::PathBuf>> {
+///
+/// `CandidateRecord::path` is root-relative by design (see
+/// `CandidateEntry::relative_path`'s doc comment), while the ground-truth
+/// walker's paths are absolute — rejoining here puts both sides in the
+/// same representation so the diff isn't swamped by a spurious
+/// "every path differs" noise from the root prefix alone.
+fn decode_candidate_paths(manifest_bytes: &[u8], root: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut manifest_reader = WireReader::new(manifest_bytes);
     let header = ManifestHeader::decode(&mut manifest_reader)
         .map_err(|err| anyhow::anyhow!("decode manifest header: {err}"))?;
@@ -277,7 +283,7 @@ fn decode_candidate_paths(manifest_bytes: &[u8]) -> Result<Vec<std::path::PathBu
     for _ in 0..header.candidate_count {
         let record = CandidateRecord::decode(&mut manifest_reader)
             .map_err(|err| anyhow::anyhow!("decode candidate record: {err}"))?;
-        paths.push(std::path::PathBuf::from(record.path.display_lossy()));
+        paths.push(root.join(record.path.display_lossy()));
     }
     Ok(paths)
 }

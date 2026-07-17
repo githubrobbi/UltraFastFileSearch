@@ -376,10 +376,51 @@ pub fn digest(bytes: &[u8]) -> Digest {
     *blake3::hash(bytes).as_bytes()
 }
 
+/// Incremental variant of [`digest`]: the same plain, unkeyed BLAKE3-256
+/// contract, computed over bytes fed in one or more calls to
+/// [`IncrementalDigest::update`] instead of one contiguous buffer.
+///
+/// Exists so a caller streaming a file in bounded chunks (e.g. this
+/// crate's own `CONTENT_CHUNK` producer) can compute `FILE_END`'s
+/// `content_digest` without buffering the whole file's bytes just to
+/// call [`digest`] once at the end — for a large file, that buffering
+/// is the difference between bounded, chunk-sized memory use and memory
+/// proportional to the file's full size.
+#[derive(Debug, Default)]
+pub struct IncrementalDigest {
+    /// The running BLAKE3 state.
+    hasher: blake3::Hasher,
+}
+
+impl IncrementalDigest {
+    /// A fresh hasher with no bytes fed yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            hasher: blake3::Hasher::new(),
+        }
+    }
+
+    /// Feed more bytes into the running hash, in order.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.hasher.update(bytes);
+    }
+
+    /// Finalize and return the digest over every byte fed so far.
+    ///
+    /// Takes `&self`, not `self`, matching `blake3::Hasher::finalize`'s
+    /// own shape — finalizing does not consume the hasher, though this
+    /// crate's callers only ever finalize once per instance in practice.
+    #[must_use]
+    pub fn finalize(&self) -> Digest {
+        *self.hasher.finalize().as_bytes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodeError, Reader, checksum32, digest, write_bytes_u16_prefixed,
+        DecodeError, IncrementalDigest, Reader, checksum32, digest, write_bytes_u16_prefixed,
         write_bytes_u32_prefixed, write_i64_le, write_u16_le, write_u32_le, write_u64_le,
     };
 
@@ -554,6 +595,24 @@ mod tests {
         let via_this_crate = digest(content);
         let via_plain_blake3 = blake3::hash(content);
         assert_eq!(&via_this_crate, via_plain_blake3.as_bytes());
+    }
+
+    #[test]
+    fn incremental_digest_matches_one_shot_digest_over_the_same_bytes() {
+        let content = b"some file content, split across several chunks";
+        let one_shot = digest(content);
+
+        let mut incremental = IncrementalDigest::new();
+        for chunk in content.chunks(7) {
+            incremental.update(chunk);
+        }
+        assert_eq!(incremental.finalize(), one_shot);
+    }
+
+    #[test]
+    fn incremental_digest_of_no_bytes_matches_digest_of_empty_slice() {
+        let incremental = IncrementalDigest::new();
+        assert_eq!(incremental.finalize(), digest(b""));
     }
 
     #[test]

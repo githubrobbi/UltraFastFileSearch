@@ -142,11 +142,16 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         ..Default::default()
     };
 
+    let mut frames = Vec::new();
     let outcome = run_job(
         &request,
         &DirWalkCandidateSource,
         &FsContentSource,
         run_dir.path(),
+        |frame| {
+            frames.push(frame);
+            Ok(())
+        },
     )
     .expect("run_job must succeed");
 
@@ -161,7 +166,7 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
     // JOB_BEGIN, then (FILE_BEGIN, [CONTENT_CHUNK]*, FILE_END) per
     // candidate, then JOB_END.
     let mut decoded_types = Vec::new();
-    for frame_bytes in &outcome.frames {
+    for frame_bytes in &frames {
         let mut reader = Reader::new(frame_bytes);
         let (envelope, _payload) =
             FrameEnvelope::decode(&mut reader, u64::MAX).expect("decode frame envelope");

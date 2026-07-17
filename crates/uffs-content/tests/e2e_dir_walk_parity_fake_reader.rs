@@ -90,11 +90,16 @@ mod tests {
             query: "*".to_owned(),
             ..Default::default()
         };
+        let mut frames = Vec::new();
         let outcome = run_job(
             &request,
             &DirWalkCandidateSource,
             &FsContentSource,
             run_dir.path(),
+            |frame| {
+                frames.push(frame);
+                Ok(())
+            },
         )
         .expect("run_job must succeed");
 
@@ -104,7 +109,7 @@ mod tests {
         // 4. Decode the actual wire bytes as a real consumer would — this is what
         //    catches a framing bug a structure-passthrough shortcut would miss
         //    entirely.
-        let consumed = support::test_consumer::consume(&outcome.manifest_bytes, &outcome.frames);
+        let consumed = support::test_consumer::consume(&outcome.manifest_bytes, &frames);
         assert_eq!(
             consumed.candidate_count, outcome.run_summary.candidate_count,
             "manifest header's candidate_count must match the run summary's"

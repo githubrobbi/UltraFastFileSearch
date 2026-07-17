@@ -57,7 +57,12 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
         ..Default::default()
     };
 
-    let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
+    let mut frames = Vec::new();
+    let outcome = run_vss_job(&request, &run_dir, |frame| {
+        frames.push(frame);
+        Ok(())
+    })
+    .context("run_vss_job failed")?;
 
     anyhow::ensure!(
         outcome.run_summary.candidate_count == 1,
@@ -74,7 +79,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
         outcome.run_summary.deferred_manual_count
     );
 
-    let played_back = decode_single_file_content(&outcome.manifest_bytes, &outcome.frames)
+    let played_back = decode_single_file_content(&outcome.manifest_bytes, &frames)
         .context("failed to decode the job's own manifest/frame output")?;
     anyhow::ensure!(
         played_back == content,
@@ -143,7 +148,12 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
         ..Default::default()
     };
 
-    let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
+    let mut frames = Vec::new();
+    let outcome = run_vss_job(&request, &run_dir, |frame| {
+        frames.push(frame);
+        Ok(())
+    })
+    .context("run_vss_job failed")?;
 
     if outcome.run_summary.candidate_count != ground_truth_count {
         let pipeline_paths = decode_candidate_paths(&outcome.manifest_bytes, root)
@@ -167,7 +177,7 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
         outcome.run_summary.deferred_manual_count
     );
 
-    let summary = summarize_query_outcome(&outcome.manifest_bytes, &outcome.frames)
+    let summary = summarize_query_outcome(&outcome.manifest_bytes, &frames)
         .context("failed to decode the job's own manifest/frame output")?;
     anyhow::ensure!(
         summary.metadata_total_bytes == ground_truth_bytes,

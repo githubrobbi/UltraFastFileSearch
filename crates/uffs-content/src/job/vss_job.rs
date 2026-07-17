@@ -28,12 +28,19 @@ use super::workflow::{JobOutcome, run_job};
 
 /// Run `request` end to end against a real VSS snapshot.
 ///
+/// Every encoded frame is passed to `emit_frame` as soon as it's
+/// produced — see [`run_job`]'s own doc comment for why this is a
+/// callback rather than a returned `Vec`.
+///
 /// # Errors
 /// Returns an error if any VSS lease, ephemeral daemon spawn, or
 /// content Reader spawn step fails, or if the underlying `run_job` call
 /// fails. Every resource successfully acquired before a failure is
 /// released best-effort before returning.
-pub fn run_vss_job(request: &JobRequest, run_dir: &Path) -> Result<JobOutcome> {
+pub fn run_vss_job<F>(request: &JobRequest, run_dir: &Path, emit_frame: F) -> Result<JobOutcome>
+where
+    F: FnMut(Vec<u8>) -> std::io::Result<()>,
+{
     let job_id = *uuid::Uuid::new_v4().as_bytes();
     let ephemeral_id = uuid::Uuid::new_v4().simple().to_string();
 
@@ -60,8 +67,14 @@ pub fn run_vss_job(request: &JobRequest, run_dir: &Path) -> Result<JobOutcome> {
         .context("failed to spawn the content reader")?;
     let content_source = VssContentSource::new(content_reader);
 
-    let result =
-        run_job(request, &candidate_source, &content_source, run_dir).context("run_job failed");
+    let result = run_job(
+        request,
+        &candidate_source,
+        &content_source,
+        run_dir,
+        emit_frame,
+    )
+    .context("run_job failed");
 
     // Drop the candidate source first (releases its borrow of
     // `resources.daemon`, which `resources.teardown()` below needs to

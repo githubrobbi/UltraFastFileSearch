@@ -190,12 +190,6 @@ impl<'a> VssCandidateSource<'a> {
 
 #[cfg(windows)]
 impl CandidateSource for VssCandidateSource<'_> {
-    #[expect(
-        clippy::print_stderr,
-        reason = "TEMP DEBUG (2026-07-17): loud, unconditional dump of the query sent to \
-                  and result received from the ephemeral daemon while diagnosing the real- \
-                  hardware candidate-count mismatch. Remove once root-caused."
-    )]
     fn enumerate(&self, root: &Path) -> io::Result<Vec<CandidateEntry>> {
         let mut client = self
             .daemon
@@ -221,50 +215,12 @@ impl CandidateSource for VssCandidateSource<'_> {
             attr: self.attr.clone(),
             ..Default::default()
         };
-        // TEMP DEBUG (2026-07-17): dumping the exact query sent to, and
-        // result received from, the ephemeral target-selection daemon
-        // while diagnosing the real-hardware candidate-count mismatch
-        // (pipeline found 8 rows for 4 real files with `--ext ort` on
-        // C:\, ground-truth disk walk found 4). Remove once root-caused.
-        eprintln!(
-            "=== DEBUG VssCandidateSource: search query sent to daemon ===\n{}",
-            serde_json::to_string_pretty(&params)
-                .unwrap_or_else(|err| format!("<encode error: {err}>"))
-        );
-
         let response = client
             .search(&params)
             .map_err(|err| io::Error::other(err.to_string()))?;
 
-        // TEMP DEBUG (2026-07-17): see the comment above.
-        eprintln!(
-            "=== DEBUG VssCandidateSource: search response metadata ===\n\
-             total_count={} records_scanned={} duration_ms={} truncated={}",
-            response.total_count,
-            response.records_scanned,
-            response.duration_ms,
-            response.truncated
-        );
-
         let rows = resolve_rows(response.payload)?;
-
-        // TEMP DEBUG (2026-07-17): see the comment above — this is the
-        // fully resolved row list (post shmem-read if applicable), i.e.
-        // exactly what becomes this job's CandidateEntry list (pre-dedup).
-        eprintln!(
-            "=== DEBUG VssCandidateSource: resolved rows ({}) ===\n{}",
-            rows.len(),
-            serde_json::to_string_pretty(&rows)
-                .unwrap_or_else(|err| format!("<encode error: {err}>"))
-        );
-
         let deduped = dedup_rows_by_file_reference_and_path(rows);
-
-        // TEMP DEBUG (2026-07-17): see the comment above.
-        eprintln!(
-            "=== DEBUG VssCandidateSource: after dedup ({} rows) ===",
-            deduped.len()
-        );
 
         let mut entries = Vec::with_capacity(deduped.len());
         for row in deduped {

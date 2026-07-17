@@ -167,7 +167,12 @@ fn handle_one_request(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssPro
     let request_bytes = match read_framed_message(pipe) {
         Ok(bytes) => bytes,
         Err(err) => {
-            tracing::debug!(error = %err, "snapshot pipe: failed to read request");
+            // Kept at `warn!` (not `debug!`): a broken Coordinator request
+            // read is operationally significant — it's the only signal a
+            // production deployment (service, no console) gets that a
+            // client round trip silently died. Was invisible at the
+            // default `--run`/service INFO level until this fix.
+            tracing::warn!(error = %err, "snapshot pipe: failed to read request");
             return;
         }
     };
@@ -179,7 +184,7 @@ fn handle_one_request(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssPro
         },
     };
     if let Err(err) = write_framed_message(pipe, &response.encode()) {
-        tracing::debug!(error = %err, "snapshot pipe: failed to write response");
+        tracing::warn!(error = %err, "snapshot pipe: failed to write response");
     }
 }
 

@@ -24,6 +24,7 @@
 
 use std::io::{Read as _, Write as _};
 
+use anyhow::Context as _;
 use uffs_broker_protocol::snapshot_manager::{
     CreateSnapshotLease, CreateSnapshotLeaseResult, ReleaseSnapshotLease, SNAPSHOT_PIPE_NAME,
     SnapshotManagerRequest, SnapshotManagerResponse, VolumeIdentity,
@@ -137,8 +138,10 @@ fn round_trip(request: &SnapshotManagerRequest) -> anyhow::Result<SnapshotManage
         .open(std::path::Path::new(SNAPSHOT_PIPE_NAME))
         .map_err(|err| anyhow::anyhow!("opening Snapshot Manager pipe: {err}"))?;
 
-    write_framed_message(&mut pipe, &request.encode())?;
-    let response_bytes = read_framed_message(&mut pipe)?;
+    write_framed_message(&mut pipe, &request.encode())
+        .context("writing request to Snapshot Manager pipe")?;
+    let response_bytes =
+        read_framed_message(&mut pipe).context("reading response from Snapshot Manager pipe")?;
     SnapshotManagerResponse::decode(&response_bytes)
         .map_err(|err| anyhow::anyhow!("malformed Snapshot Manager response: {err}"))
 }
@@ -158,13 +161,15 @@ fn write_framed_message(pipe: &mut std::fs::File, payload: &[u8]) -> anyhow::Res
 /// client-side mirror of the Broker's `read_framed_message`.
 fn read_framed_message(pipe: &mut std::fs::File) -> anyhow::Result<Vec<u8>> {
     let mut length_bytes = [0_u8; 4];
-    pipe.read_exact(&mut length_bytes)?;
+    pipe.read_exact(&mut length_bytes)
+        .context("reading response length prefix")?;
     let length = u32::from_le_bytes(length_bytes);
     if length > MAX_RESPONSE_BYTES {
         anyhow::bail!("response length {length} exceeds maximum {MAX_RESPONSE_BYTES}");
     }
 
     let mut payload = vec![0_u8; usize::try_from(length).unwrap_or(0)];
-    pipe.read_exact(&mut payload)?;
+    pipe.read_exact(&mut payload)
+        .context("reading response payload")?;
     Ok(payload)
 }

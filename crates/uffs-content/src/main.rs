@@ -20,6 +20,9 @@
 //!
 //! ```bash
 //! uffs-content --version                        # Print version (also -V)
+//! uffs-content --serve                           # Run the two-pipe transport server
+//!                                                 # (the real entry point for a
+//!                                                 # downstream consumer, e.g. Docenta)
 //! uffs-content --self-test-vss-playback <dir>    # Elevated smoke test: real VSS
 //!                                                 # snapshot + real Reader playback
 //! uffs-content --self-test-vss-query <root> <ext> # Elevated smoke test: real
@@ -43,6 +46,10 @@ use serde as _;
 use serde_json as _;
 #[cfg(test)]
 use tempfile as _;
+// Used by `uffs_content::serve`'s two-pipe transport server, not by this
+// thin entry point directly.
+#[cfg(windows)]
+use tokio as _;
 // Used by `uffs_content::job::vss_orchestrator` (best-effort
 // lease-release warnings), not by this thin entry point directly.
 #[cfg(windows)]
@@ -58,6 +65,10 @@ use uffs_content_protocol as _;
 // not by this thin entry point directly.
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
+// Used by `uffs_content::serve`'s named-pipe owner-only DACL helpers,
+// not by this thin entry point directly.
+#[cfg(windows)]
+use uffs_security as _;
 // Used by `uffs_content::job::workflow`, not by this thin entry point
 // directly.
 use uuid as _;
@@ -81,12 +92,48 @@ fn main() {
     if let Some((root, extension)) = self_test_vss_query_args(&args) {
         std::process::exit(run_self_test_vss_query(&root, &extension));
     }
+    if args.iter().any(|arg| arg == "--serve") {
+        std::process::exit(run_serve());
+    }
 
     if uffs_content::is_implemented() {
         eprintln!("uffs-content: ready.");
     } else {
         eprintln!("uffs-content: scaffold only, job intake is not yet implemented.");
     }
+}
+
+/// Run [`uffs_content::serve`] and report a fatal startup error, if any.
+/// Does not return under normal operation — the server runs for the
+/// process's whole lifetime. Returns the process exit code (`1`) only
+/// if the server failed to start at all.
+#[cfg(windows)]
+#[expect(
+    clippy::print_stderr,
+    reason = "one-shot CLI diagnostic invoked before any tracing subscriber exists"
+)]
+fn run_serve() -> i32 {
+    match uffs_content::serve() {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("FAIL: {err:#}");
+            1
+        }
+    }
+}
+
+/// Non-Windows stub: the two-pipe transport server only ever serves
+/// VSS-backed jobs, which don't exist on this platform.
+#[cfg(not(windows))]
+#[expect(
+    clippy::print_stderr,
+    reason = "one-shot CLI diagnostic invoked before any tracing subscriber exists"
+)]
+fn run_serve() -> i32 {
+    eprintln!(
+        "uffs-content: --serve is Windows-only (VSS-backed jobs don't exist on this platform)"
+    );
+    1
 }
 
 /// Return the directory argument following `--self-test-vss-playback`,

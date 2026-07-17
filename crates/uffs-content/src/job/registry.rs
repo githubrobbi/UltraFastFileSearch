@@ -1,25 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-// Not wired into the streaming engine yet — that lands with the two-pipe
-// server and the window-enforcing streaming loop (same feature arc,
-// still in progress). Exercised today only by this module's own unit
-// tests.
-// Only expected outside `#[cfg(test)]` builds: this module's own unit
-// tests exercise every item, so a `--tests`/`cargo test` build sees no
-// dead code at all — the expectation would be unfulfilled there.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the not-yet-landed two-pipe server / \
-                  streaming engine; the type and its API are complete \
-                  and unit-tested ahead of that wiring landing, matching \
-                  this crate's existing build-ahead-of-the-consumer \
-                  precedent"
-    )
-)]
-
 //! In-memory, per-process job registry: the resume state a `JOB_RESUME`
 //! reconnect consults to skip candidates the consumer already
 //! acknowledged, instead of re-streaming the whole job.
@@ -50,6 +31,16 @@ use std::sync::Mutex;
 
 /// One job's resume-relevant state: which candidate ids exist, and
 /// which of them the consumer has already acknowledged.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(
+        dead_code,
+        reason = "only constructed by the Windows-only `serve` module's streaming \
+                  task in production; exercised cross-platform by this module's own \
+                  unit tests, which is why the type still lives here rather than \
+                  behind `#[cfg(windows)]`"
+    )
+)]
 struct ActiveJob {
     /// Every candidate id this job's manifest assigned, in enumeration
     /// order.
@@ -80,6 +71,10 @@ impl JobRegistry {
     /// Replaces any prior registration under the same `job_id` (there
     /// shouldn't be one — job ids are fresh UUIDs per job — but a
     /// pathological duplicate submission overwrites rather than panics).
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "see the `ActiveJob` doc comment above")
+    )]
     pub(crate) fn register(&self, job_id: [u8; 16], candidate_ids: Vec<u64>) {
         let mut jobs = self
             .jobs
@@ -97,6 +92,10 @@ impl JobRegistry {
     /// (regardless of whether `candidate_id` was already acked — acking
     /// twice is a harmless no-op, matching the wire protocol's own
     /// idempotency contract).
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "see the `ActiveJob` doc comment above")
+    )]
     pub(crate) fn ack(&self, job_id: [u8; 16], candidate_id: u64) -> bool {
         let mut jobs = self
             .jobs
@@ -115,6 +114,10 @@ impl JobRegistry {
     /// `JOB_RESUME` reconnect should stream. `None` if `job_id` isn't a
     /// currently-registered job (producer restarted, job finished and
     /// was removed, or it was never this producer's job).
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "see the `ActiveJob` doc comment above")
+    )]
     pub(crate) fn pending(&self, job_id: [u8; 16]) -> Option<Vec<u64>> {
         let jobs = self
             .jobs
@@ -133,6 +136,10 @@ impl JobRegistry {
 
     /// Whether every candidate registered for `job_id` has been acked.
     /// `None` if `job_id` isn't currently registered.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "see the `ActiveJob` doc comment above")
+    )]
     pub(crate) fn is_complete(&self, job_id: [u8; 16]) -> Option<bool> {
         let jobs = self
             .jobs
@@ -146,6 +153,10 @@ impl JobRegistry {
 
     /// Drop `job_id`'s state — once a job is fully acked (or explicitly
     /// cancelled), there is nothing left to resume.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "see the `ActiveJob` doc comment above")
+    )]
     pub(crate) fn remove(&self, job_id: [u8; 16]) {
         let mut jobs = self
             .jobs
@@ -156,6 +167,16 @@ impl JobRegistry {
 
     /// Whether `job_id` is currently registered (alive in this
     /// producer process).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "exercised by this module's own unit tests only; no production \
+                      call site needs it yet (JOB_RESUME handling keys off \
+                      `ServerState::active` instead) — kept because it is the natural \
+                      complement to `pending`/`is_complete` and cheap to maintain"
+        )
+    )]
     pub(crate) fn contains(&self, job_id: [u8; 16]) -> bool {
         let jobs = self
             .jobs

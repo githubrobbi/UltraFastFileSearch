@@ -27,19 +27,27 @@
 //!
 //! # Status
 //!
-//! [`run`] (the ephemeral per-run manifest/failure-log/summary model) and
-//! [`job`] (job intake, candidate enumeration, manifest construction, and
-//! protocol framing) are real — but [`job`]'s [`job::candidate_source`]
-//! and [`job::content_source`] backends are currently the cross-platform
-//! `std::fs`-based stand-ins described in
-//! `uffs-ingest-implementation-plan.md` §9.5, not the real VSS-snapshot
-//! and privileged-Reader-backed ones (UFI.1/UFI.2). [`is_implemented`]
-//! tracks the latter, not this crate's own workflow logic.
+//! [`run`] (the ephemeral per-run manifest/failure-log/summary model),
+//! [`job`] (job intake, candidate enumeration, manifest construction,
+//! and protocol framing — both the cross-platform `std::fs`-based
+//! stand-ins from `uffs-ingest-implementation-plan.md` §9.5 and the
+//! real VSS-snapshot/privileged-Reader-backed production path,
+//! `job::vss_job::run_vss_job`), and the two-pipe transport server
+//! (`serve`, Windows-only) that lets an external consumer actually reach
+//! that pipeline, are all real. [`is_implemented`] tracks the
+//! VSS-backed pipeline's platform availability, not this crate's own
+//! workflow logic.
 
 extern crate alloc;
 
 pub mod job;
 pub mod run;
+// Two-pipe (data + command) transport server: the real entry point an
+// external consumer (e.g. Docenta) connects to. Windows-only — named
+// pipes, and every job this serves is VSS-backed (`job::vss_job`,
+// itself Windows-only).
+#[cfg(windows)]
+pub(crate) mod serve;
 
 // `uffs_version::handle_version!` is invoked from `main.rs` only.
 // Dev-dependency used by `tests/support/plain_walk.rs` (the independent
@@ -47,23 +55,41 @@ pub mod run;
 // unit tests.
 #[cfg(test)]
 use blake3 as _;
-// Will spawn/query the ephemeral `uffsd` instance once the real,
-// VSS+MFT-query-backed `CandidateSource` is wired up (not yet — the
-// dead-code state on `job::snapshot_client` today is the same
-// deliberately-deferred state, see that module's doc comment).
-#[cfg(windows)]
-use uffs_client as _;
 use uffs_version as _;
 
 /// Whether the production, VSS-snapshot-backed pipeline is wired up.
 ///
-/// Returns `false` until [`job::candidate_source`] and
-/// [`job::content_source`] have real Broker/Reader-backed implementations
-/// (UFI.1/UFI.2) — the workflow itself ([`job::workflow::run_job`]) is
-/// already real, just not yet running against NTFS.
+/// `true` on Windows: [`job::candidate_source::VssCandidateSource`] and
+/// [`job::content_source::VssContentSource`] are real, and
+/// [`job::vss_job::run_vss_job`] has been validated end to end against
+/// real hardware (real VSS snapshot, real ephemeral target-selection
+/// daemon, real privileged Reader). `false` on every other platform —
+/// VSS doesn't exist there, so this pipeline fundamentally can't run.
 #[must_use]
+#[cfg(windows)]
+pub const fn is_implemented() -> bool {
+    true
+}
+
+/// Non-Windows: see the Windows doc comment above for why this is
+/// always `false` here, not a scaffold-vs-real distinction.
+#[must_use]
+#[cfg(not(windows))]
 pub const fn is_implemented() -> bool {
     false
+}
+
+/// Run the two-pipe transport server for the process's whole lifetime.
+///
+/// The real entry point an external consumer (e.g. Docenta) connects
+/// to. See the crate-private `serve` module's doc comment for the
+/// wire-level design.
+///
+/// # Errors
+/// Returns an error only if a pipe itself cannot be created at all.
+#[cfg(windows)]
+pub fn serve() -> anyhow::Result<()> {
+    serve::run()
 }
 
 #[cfg(test)]
@@ -71,7 +97,7 @@ mod tests {
     use super::is_implemented;
 
     #[test]
-    fn scaffold_reports_not_implemented() {
-        assert!(!is_implemented());
+    fn is_implemented_matches_platform_capability() {
+        assert_eq!(is_implemented(), cfg!(windows));
     }
 }

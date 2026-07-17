@@ -102,6 +102,15 @@ uffs-content-reader-protocol.workspace = true
 # teardown (`src/job/vss_orchestrator.rs`) — not used anywhere else in
 # this crate today.
 tracing.workspace = true
+# Named-pipe server for the two-pipe transport (`src/serve/`) — every
+# other feature this crate needs (`rt`/`sync`/`time`/`io-util`) is
+# already unconditional at workspace scope; only `net` (named pipes)
+# needs enabling here, matching `uffs-daemon`'s own declaration.
+tokio = { workspace = true, features = ["net"] }
+# Owner-only pipe DACL + `PipeName` validation for the two-pipe
+# transport server (`src/serve/pipe_io.rs`) — the same primitives
+# `uffs-daemon`'s and `uffs-content-reader`'s named-pipe servers use.
+uffs-security.workspace = true
 
 [build-dependencies]
 uffs-version = { workspace = true, features = ["build"] }

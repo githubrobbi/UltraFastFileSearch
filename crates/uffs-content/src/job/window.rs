@@ -1,21 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-// Not wired into the streaming engine yet — that lands with the
-// two-pipe server (same feature arc, still in progress). Exercised
-// today only by this module's own unit tests.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the not-yet-landed two-pipe server / \
-                  streaming engine; the type and its API are complete \
-                  and unit-tested ahead of that wiring landing, matching \
-                  this crate's existing build-ahead-of-the-consumer \
-                  precedent"
-    )
-)]
-
 //! Credit-based backpressure (design-doc §13.1 "Byte-based limits" /
 //! §13.2 "Slow consumer").
 //!
@@ -32,6 +17,16 @@
 
 /// Tracks how many bytes the producer may still send before it must
 /// pause and wait for a `WINDOW_UPDATE`.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(
+        dead_code,
+        reason = "only constructed by the Windows-only `serve` module's streaming \
+                  task in production; exercised cross-platform by this module's own \
+                  unit tests, which is why the type still lives here rather than \
+                  behind `#[cfg(windows)]`"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WindowTracker {
     /// Total bytes ever granted: the initial negotiated
@@ -41,6 +36,10 @@ pub(crate) struct WindowTracker {
     sent_bytes: u64,
 }
 
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "see the `WindowTracker` doc comment above")
+)]
 impl WindowTracker {
     /// A new tracker starting with `initial_window_bytes` of budget
     /// (the negotiated `max_unacknowledged_bytes`).

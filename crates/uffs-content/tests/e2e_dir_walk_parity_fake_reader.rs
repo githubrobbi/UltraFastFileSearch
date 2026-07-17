@@ -40,6 +40,8 @@ use anyhow as _;
 use serde as _;
 use serde_json as _;
 #[cfg(windows)]
+use tokio as _;
+#[cfg(windows)]
 use tracing as _;
 #[cfg(windows)]
 use uffs_broker_protocol as _;
@@ -47,6 +49,8 @@ use uffs_broker_protocol as _;
 use uffs_client as _;
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
+#[cfg(windows)]
+use uffs_security as _;
 use uffs_version as _;
 use uuid as _;
 

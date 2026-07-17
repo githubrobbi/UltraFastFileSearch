@@ -51,6 +51,8 @@ use serde_json as _;
 #[cfg(not(windows))]
 use tempfile as _;
 #[cfg(windows)]
+use tokio as _;
+#[cfg(windows)]
 use tracing as _;
 #[cfg(windows)]
 use uffs_broker_protocol as _;
@@ -61,6 +63,8 @@ use uffs_content as _;
 use uffs_content_protocol as _;
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
+#[cfg(windows)]
+use uffs_security as _;
 use uffs_version as _;
 use uuid as _;
 

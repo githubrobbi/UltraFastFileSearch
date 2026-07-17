@@ -17,7 +17,41 @@ pub mod candidate_source;
 pub mod content_source;
 pub mod intake;
 pub mod manifest_builder;
+// Coordinator-side client for the Broker's Snapshot Manager pipe — the
+// real VSS lease backend `candidate_source`'s VSS-backed implementation
+// calls into. Windows-only: no VSS, no Broker to talk to elsewhere,
+// matching the `[target.'cfg(windows)'.dependencies]` scoping in
+// Cargo.toml this module's own dependency (`uffs-broker-protocol`)
+// requires.
+#[cfg(windows)]
+pub mod snapshot_client;
+// Spawns/connects/tears down the ephemeral `uffsd` instance that
+// answers target-selection queries against a leased VSS snapshot.
+// Windows-only for the same reason as `snapshot_client`.
+#[cfg(windows)]
+pub mod ephemeral_daemon;
+// Ties `snapshot_client` and `ephemeral_daemon` together: one lease per
+// distinct drive, one combined daemon. Windows-only for the same reason
+// as its two dependents.
+#[cfg(windows)]
+pub mod vss_orchestrator;
+// Coordinator-side client for `uffs-content-reader-protocol` — spawns
+// and talks to the privileged `uffs-content-reader` process
+// `content_source::VssContentSource` reads through. Windows-only for
+// the same reason as its siblings.
+#[cfg(windows)]
+pub mod reader_client;
 pub mod workflow;
+// End-to-end VSS-backed job execution — ties every piece above together
+// into the real production entry point. Windows-only for the same
+// reason as its dependencies.
+#[cfg(windows)]
+pub mod vss_job;
+// Elevated smoke test: real VSS + real Reader playback, reused by the
+// `--self-test-vss-playback` CLI flag and the `#[ignore]` cargo test.
+// Windows-only for the same reason as `vss_job`.
+#[cfg(windows)]
+pub mod self_test;
 
 #[cfg(test)]
 mod tests;

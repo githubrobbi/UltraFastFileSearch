@@ -176,6 +176,30 @@ impl UffsClientSync {
             .map_err(|err| ClientError::ConnectionFailed(format!("No daemon is running: {err}")))
     }
 
+    /// Connect to a daemon at an explicit, caller-supplied `endpoint`
+    /// (a Unix socket path, or on Windows a named-pipe path) —
+    /// bypassing the well-known per-user socket/pipe resolution,
+    /// autostart, and PID-file identity verification entirely.
+    ///
+    /// For talking to an ephemeral, job-scoped `uffsd` instance the
+    /// caller spawned itself with `--ephemeral-id <id>` (and therefore
+    /// already trusts) — see [`crate::daemon_ctl::ephemeral_endpoint`]
+    /// for computing the matching `endpoint` string. Not for the
+    /// resident daemon: use [`Self::connect`] for that.
+    ///
+    /// # Errors
+    /// Returns `ConnectionFailed` if the endpoint can't be opened.
+    pub fn connect_at(endpoint: &str) -> Result<Self, ClientError> {
+        #[cfg(unix)]
+        {
+            Self::platform_connect_at(std::path::Path::new(endpoint))
+        }
+        #[cfg(windows)]
+        {
+            Self::platform_connect_at(endpoint)
+        }
+    }
+
     /// Connect to a running daemon, or auto-start one with extra CLI args.
     ///
     /// Auto-start uses the default

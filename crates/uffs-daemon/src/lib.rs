@@ -138,6 +138,15 @@ pub struct DaemonConfig {
     pub data_dir: Option<PathBuf>,
     /// Explicit drive letters (Windows only).
     pub drives: Vec<uffs_mft::platform::DriveLetter>,
+    /// VSS-snapshot device sources — `(device_path, drive)` pairs
+    /// (Windows only). Each is read fresh via
+    /// [`uffs_core::compact::MftSource::Device`] and, unlike `drives`,
+    /// never gets a background USN journal loop (the drive letter here
+    /// names which live volume the snapshot was taken *from*, not a
+    /// live volume this instance should keep polling — see
+    /// `spawn_journal_loops_for_warm_shards`'s ephemeral-instance
+    /// guard in `lib.rs`).
+    pub device_sources: Vec<(String, uffs_mft::platform::DriveLetter)>,
     /// Idle timeout in seconds (0 = use default 7200s / 2 hours).
     pub idle_timeout: u64,
     /// Disable auto-retire.
@@ -151,6 +160,19 @@ pub struct DaemonConfig {
     /// or `"-"`, the daemon defaults to `./uffs_daemon.log` in the
     /// current working directory.
     pub log_file: Option<PathBuf>,
+    /// Run as an ephemeral, job-scoped instance rather than the
+    /// resident per-user daemon.
+    ///
+    /// When set, both the lifecycle directory (PID file, shutdown
+    /// nonce) and the IPC endpoint (Unix socket / Windows named pipe)
+    /// are derived from this id via
+    /// [`uffs_client::daemon_ctl::ephemeral_lifecycle_dir`] /
+    /// [`uffs_client::daemon_ctl::ephemeral_endpoint`] instead of the
+    /// well-known per-user paths — so this instance can run alongside
+    /// a resident daemon without colliding with it. Callers connect
+    /// via [`uffs_client::connect_sync::UffsClientSync::connect_at`]
+    /// with the matching `ephemeral_endpoint`.
+    pub ephemeral_id: Option<String>,
 }
 
 /// Run the UFFS daemon with the given configuration.
@@ -204,18 +226,20 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     tracing::info!(mft_files = mft_files.len(), drives = ?drives, "Final data sources");
 
     // Refuse to start with zero data sources — an empty daemon is useless.
-    startup::validate_data_sources(&mft_files, &drives, &lifecycle_mgr)?;
+    startup::validate_data_sources(&mft_files, &drives, &config.device_sources, &lifecycle_mgr)?;
     tracing::info!("Data sources validated OK");
 
     let load_task = spawn_load_task(
         Arc::clone(&idx),
         mft_files,
         drives,
+        config.device_sources.clone(),
         config.no_cache,
         lifecycle_mgr.handle(),
+        config.ephemeral_id.is_some(),
     );
 
-    let ipc_task = spawn_ipc_servers(&idx, &lifecycle_mgr);
+    let ipc_task = spawn_ipc_servers(&idx, &lifecycle_mgr, config.ephemeral_id.clone());
     let _stats_task = spawn_stats_heartbeat(Arc::clone(&idx), lifecycle_mgr.handle());
     let _mem_snapshot_task = telemetry::spawn_mem_snapshot_task(
         Arc::clone(&idx),
@@ -250,8 +274,10 @@ fn spawn_load_task(
     load_index: Arc<index::IndexManager>,
     mft_files: Vec<PathBuf>,
     drives: Vec<uffs_mft::platform::DriveLetter>,
+    device_sources: Vec<(String, uffs_mft::platform::DriveLetter)>,
     no_cache: bool,
     load_lifecycle: lifecycle::LifecycleHandle,
+    is_ephemeral: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tracing::info!(mft_files = mft_files.len(), drives = ?drives, "Load task starting");
@@ -264,6 +290,18 @@ fn spawn_load_task(
         // load task is fully covered by `load_from_data_dir` above.
         #[cfg(windows)]
         load_live_drives_if_windows(&load_index, &drives, no_cache, &load_lifecycle).await;
+        #[cfg(windows)]
+        if !device_sources.is_empty() {
+            tracing::info!("Loading VSS-snapshot device sources...");
+            load_index.load_device_drives(&device_sources).await;
+            tracing::info!("Device sources loaded");
+        }
+        #[cfg(not(windows))]
+        debug_assert!(
+            device_sources.is_empty(),
+            "MftSource::Device is Windows-only (VSS snapshots don't exist elsewhere); \
+             device_sources must be empty on this platform"
+        );
         tracing::info!("Load task completed");
 
         // Latch the load phase as complete: from this point on, a daemon
@@ -282,7 +320,18 @@ fn spawn_load_task(
         // for the daemon's lifetime via the `Arc<RegistryPatchSink>`
         // captured by the per-loop sink clones; on shutdown the
         // applier exits cleanly when the last sink Arc drops.
-        let _journal_applier = spawn_journal_loops_for_warm_shards(&load_index).await;
+        //
+        // Skipped entirely for an ephemeral instance: its loaded drive
+        // letters (from `--device`) name the volume a VSS snapshot was
+        // taken *from*, not a live volume to keep polling — applying
+        // live USN deltas onto that frozen, point-in-time capture would
+        // silently corrupt the very guarantee VSS exists to provide.
+        let _journal_applier = if is_ephemeral {
+            tracing::info!("Ephemeral instance: skipping per-shard journal loops");
+            None
+        } else {
+            Some(spawn_journal_loops_for_warm_shards(&load_index).await)
+        };
 
         zero_drive_shutdown_guard(&load_index, &load_lifecycle).await;
     })
@@ -301,78 +350,12 @@ async fn load_live_drives_if_windows(
     if drives.is_empty() {
         return;
     }
-    warm_up_broker_handles_unless_elevated(drives);
+    broker_client::warm_up_broker_handles_unless_elevated(drives);
     tracing::info!(drives = ?drives, "Loading live drives...");
     load_index
         .load_live_drives(drives, no_cache, load_lifecycle)
         .await;
     tracing::info!("Live drives loaded");
-}
-
-/// Run the broker warm-up only when the daemon is **not** already elevated.
-///
-/// Gate on the daemon's OWN elevation, not on a broker probe.  An elevated
-/// daemon opens volumes directly (`CreateFileW`), so a broker request would be
-/// a futile per-drive pipe-open + WARN.  Crucially, `is_elevated()` is a token
-/// query — it does NOT touch the broker pipe, so it has none of the race the
-/// removed `broker_available()` probe had (that probe connected to and consumed
-/// the broker's single pipe instance, starving the real request; 2026-06-13 VM
-/// finding).  When NOT elevated, the handle request itself is the authoritative
-/// broker-presence test: it succeeds when a broker is serving and fails fast
-/// (WARN + direct-open fallback) when not.
-///
-/// Extracted from `load_live_drives_if_windows` so that caller stays under the
-/// `cognitive_complexity` ceiling.
-#[cfg(windows)]
-fn warm_up_broker_handles_unless_elevated(drives: &[uffs_mft::platform::DriveLetter]) {
-    if uffs_mft::is_elevated() {
-        tracing::debug!(
-            pid = std::process::id(),
-            "Daemon is elevated — skipping broker warm-up (direct volume open)"
-        );
-        return;
-    }
-    tracing::info!(
-        pid = std::process::id(),
-        drive_count = drives.len(),
-        "Daemon not elevated — attempting broker warm-up"
-    );
-    warm_up_broker_handles(drives);
-}
-
-/// Best-effort broker pre-warm: ask the elevated broker for a volume
-/// handle per drive so the subsequent `load_live_drives` skips the
-/// per-drive elevation prompt.  Failures are debug-traced and
-/// ignored — the direct-open path takes over transparently.
-#[cfg(windows)]
-fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
-    tracing::info!(
-        daemon_pid = std::process::id(),
-        drives = ?drives,
-        "warm_up_broker_handles: requesting volume handles from the Access Broker"
-    );
-    for &drive_letter in drives {
-        match broker_client::request_volume_handle(drive_letter) {
-            Ok(handle) => {
-                // Deposit the broker's (elevated, overlapped) volume handle in
-                // the uffs-mft registry; the subsequent `VolumeHandle::open`
-                // for this drive adopts it instead of calling `CreateFileW`
-                // (which a non-elevated daemon can't do).  This is what makes
-                // the broker path actually load the MFT — previously the
-                // handle was fetched and dropped, so the reader fell back to a
-                // direct open and failed with access-denied.
-                uffs_mft::register_broker_handle(drive_letter, handle);
-                tracing::info!(drive = %drive_letter, handle, "Registered broker volume handle");
-            }
-            Err(broker_err) => {
-                tracing::warn!(
-                    drive = %drive_letter,
-                    error = %broker_err,
-                    "Access Broker handle request FAILED — falling back to direct (elevated) open"
-                );
-            }
-        }
-    }
 }
 
 /// Catch the "every load failed but `Ready` fired anyway" zombie
@@ -396,6 +379,44 @@ async fn zero_drive_shutdown_guard(
     }
 }
 
+/// Run the primary (`AF_UNIX`) IPC listener to completion, logging any
+/// terminal error instead of propagating it — matches the fire-and-log
+/// contract `spawn_ipc_servers`'s `tokio::spawn` body used to embed
+/// inline before this helper was split out for cfg-branching.
+#[cfg(unix)]
+async fn run_primary_ipc_server(
+    index: Arc<index::IndexManager>,
+    lifecycle: lifecycle::LifecycleHandle,
+    ephemeral_id: Option<String>,
+) {
+    if let Err(ipc_err) = ipc::run_ipc_server(index, lifecycle, ephemeral_id.as_deref()).await {
+        tracing::error!(error = %ipc_err, "IPC server error");
+    }
+}
+
+/// Windows counterpart of [`run_primary_ipc_server`].
+///
+/// The legacy `AF_UNIX` bridge (`ipc::run_ipc_server` on Windows) has no
+/// ephemeral-endpoint support, and none is needed: an ephemeral instance
+/// is reached exclusively via the named pipe (`spawn_ipc_servers`'s
+/// `_pipe_task`, which IS ephemeral-aware). Skip the bridge entirely for
+/// an ephemeral instance rather than bind it to the resident daemon's
+/// well-known `AF_UNIX` path, where it would collide.
+#[cfg(windows)]
+async fn run_primary_ipc_server(
+    index: Arc<index::IndexManager>,
+    lifecycle: lifecycle::LifecycleHandle,
+    ephemeral_id: Option<String>,
+) {
+    if ephemeral_id.is_some() {
+        tracing::info!("Ephemeral instance: skipping legacy AF_UNIX bridge (named pipe only)");
+        return;
+    }
+    if let Err(ipc_err) = ipc::run_ipc_server(index, lifecycle).await {
+        tracing::error!(error = %ipc_err, "IPC server error");
+    }
+}
+
 /// Spawn the IPC server task(s).
 ///
 /// Always spawns the `AF_UNIX` listener (the cross-platform fallback);
@@ -407,16 +428,24 @@ async fn zero_drive_shutdown_guard(
 fn spawn_ipc_servers(
     idx: &Arc<index::IndexManager>,
     lifecycle_mgr: &lifecycle::LifecycleManager,
+    ephemeral_id: Option<String>,
 ) -> tokio::task::JoinHandle<()> {
     let ipc_index = Arc::clone(idx);
     let ipc_lifecycle = lifecycle_mgr.handle();
+    // On Windows `ephemeral_id` is needed again below for the named-pipe
+    // task, so this must clone; on Unix there is no second use, so moving
+    // it directly avoids a real `redundant_clone` clippy finding.
+    #[cfg(windows)]
+    let ipc_ephemeral_id = ephemeral_id.clone();
+    #[cfg(not(windows))]
+    let ipc_ephemeral_id = ephemeral_id;
 
     tracing::info!("Starting IPC server...");
-    let ipc_task = tokio::spawn(async move {
-        if let Err(ipc_err) = ipc::run_ipc_server(ipc_index, ipc_lifecycle).await {
-            tracing::error!(error = %ipc_err, "IPC server error");
-        }
-    });
+    let ipc_task = tokio::spawn(run_primary_ipc_server(
+        ipc_index,
+        ipc_lifecycle,
+        ipc_ephemeral_id,
+    ));
     tracing::info!("IPC server task spawned");
 
     // Task ownership (Phase 10c): the Windows named-pipe IPC server is
@@ -443,9 +472,12 @@ fn spawn_ipc_servers(
     let _pipe_task = {
         let pipe_index = Arc::clone(idx);
         let pipe_lifecycle = lifecycle_mgr.handle();
+        let pipe_ephemeral_id = ephemeral_id;
         tracing::info!("Starting named-pipe IPC server...");
         tokio::spawn(async move {
-            if let Err(pipe_err) = ipc::run_pipe_server(pipe_index, pipe_lifecycle).await {
+            if let Err(pipe_err) =
+                ipc::run_pipe_server(pipe_index, pipe_lifecycle, pipe_ephemeral_id.as_deref()).await
+            {
                 tracing::error!(error = %pipe_err, "Named-pipe IPC server error");
             }
         })

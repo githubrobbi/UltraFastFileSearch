@@ -211,7 +211,7 @@ fn stream_one_candidate(
     let mut read_error = None;
 
     while offset < entry.logical_size {
-        match content_source.read_at(entry, offset, max_chunk_bytes) {
+        match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
             Ok(bytes) if bytes.is_empty() => break,
             Ok(bytes) => {
                 let read_len = len_as_u64(bytes.len());

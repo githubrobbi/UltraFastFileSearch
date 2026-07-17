@@ -74,6 +74,12 @@ pub struct DisplayRow {
     /// ill-formed names — it is keyed on name validity, never on projection.
     /// JSON output therefore carries it by default for malformed rows.
     pub name_hex: Option<String>,
+    /// NTFS **File Reference** (`(sequence_number << 48) | frs`) — see
+    /// [`crate::compact::CompactRecord::file_ref`]. `0` by default;
+    /// [`Self::with_file_reference`] carries the real value from the
+    /// hot path's `CompactRecord`, mirroring [`Self::with_forensics`]'s
+    /// pattern so `new()`'s existing call sites stay untouched.
+    pub file_reference: u64,
 }
 
 impl DisplayRow {
@@ -121,6 +127,7 @@ impl DisplayRow {
             malformed: false,
             malformed_path: false,
             name_hex: None,
+            file_reference: 0,
         }
     }
 
@@ -139,6 +146,17 @@ impl DisplayRow {
         self.malformed = malformed;
         self.malformed_path = malformed_path;
         self.name_hex = name_hex;
+        self
+    }
+
+    /// Attach the NTFS file reference from the `CompactRecord` this row
+    /// was built from. Chained after [`Self::new`] for the same reason
+    /// as [`Self::with_forensics`] — keeps the many existing `new()`
+    /// call sites untouched.
+    #[must_use]
+    #[inline]
+    pub const fn with_file_reference(mut self, file_reference: u64) -> Self {
+        self.file_reference = file_reference;
         self
     }
 
@@ -208,6 +226,7 @@ impl Default for DisplayRow {
             malformed: false,
             malformed_path: false,
             name_hex: None,
+            file_reference: 0,
         }
     }
 }

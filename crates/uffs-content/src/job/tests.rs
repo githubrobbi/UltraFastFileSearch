@@ -77,17 +77,17 @@ fn fs_content_source_reads_bounded_ranges_and_reports_eof() {
     let entry = entries.first().expect("one entry expected");
 
     let first_half = FsContentSource
-        .read_at(entry, 0, 5)
+        .read_at(entry, 0, 0, 5)
         .expect("read first half");
     assert_eq!(first_half, b"01234");
 
     let second_half = FsContentSource
-        .read_at(entry, 5, 5)
+        .read_at(entry, 0, 5, 5)
         .expect("read second half");
     assert_eq!(second_half, b"56789");
 
     let past_eof = FsContentSource
-        .read_at(entry, 10, 5)
+        .read_at(entry, 0, 10, 5)
         .expect("read past EOF must not error");
     assert!(past_eof.is_empty(), "read at EOF must return no bytes");
 }
@@ -138,6 +138,7 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
     let request = JobRequest {
         source_id: "test-source".to_owned(),
         root: source_dir.path().to_path_buf(),
+        query: "*".to_owned(),
     };
 
     let outcome = run_job(

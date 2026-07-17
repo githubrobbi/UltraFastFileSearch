@@ -1,0 +1,82 @@
+# ============================================================================
+# uffs-content-reader: Privileged narrow Snapshot Reader
+# ============================================================================
+# Layer 1 bin-only crate. The privileged half of the Coordinator/Reader
+# split (uffs-ingest-implementation-plan.md §5): opens files directly
+# against a leased VSS snapshot device by NTFS file reference
+# (`OpenFileById`), re-resolves EOF from the opened handle, and returns
+# bounded logical bytes to `uffs-content` (the unprivileged Coordinator)
+# over a private named-pipe protocol (`uffs-content-reader-protocol`).
+#
+# Depends only on `uffs-content-reader-protocol` for its wire types — NOT
+# `uffs-core` (no query-engine surface belongs in a privileged reader) and
+# NOT `uffs-mft` for v1 (no MFT parsing needed yet: `OpenFileById` locates
+# the file directly by its 64-bit file reference, no path resolution or
+# identity revalidation against the snapshot's own MFT required — that's
+# a deferred hardening step, see `src/reader/logical.rs`).
+# ============================================================================
+
+[package]
+name = "uffs-content-reader"
+description = "Privileged narrow Snapshot Reader for uffs-content — opens VSS-snapshot files by NTFS file reference (Windows-only; other platforms build a stub)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Intentionally NOT published. Privileged, job-scoped companion process
+# spawned only by uffs-content — no standalone-useful library API outside
+# the UFFS architecture. Reserve the name on crates.io to prevent
+# squatting, but never carry content. Mirrors `uffs-broker`'s rationale.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-pc-windows-msvc"]
+default-target = "x86_64-pc-windows-msvc"
+
+[[bin]]
+name = "uffs-content-reader"
+path = "src/main.rs"
+
+# Cross-platform: `main.rs` calls `uffs_version::handle_version!` on every
+# platform, and the pure `read_plan` VDL/EOF function (the plan's own
+# "highest-value unit-test target") is deliberately platform-independent
+# so it runs on every CI lane, not just Windows.
+[dependencies]
+uffs-version.workspace = true
+uffs-content-reader-protocol.workspace = true
+# `ReadPlanError` (`src/reader/read_plan.rs`) — the pure VDL/EOF function
+# runs on every platform, so its error type's dependency does too.
+thiserror.workspace = true
+
+# Windows-only deps: the actual privileged logic (`reader.rs` and
+# `reader/`) is fully `#[cfg(windows)]` — scoped so the non-Windows stub
+# build (a tiny `eprintln!`-only `main.rs` path) doesn't pull these in
+# unused. Mirrors `uffs-broker`'s own split (F5 / issue #205).
+[target.'cfg(windows)'.dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+windows.workspace = true
+# Owner-only pipe DACL + `PipeName` validation — the same primitives
+# `uffs-daemon`'s named-pipe server uses.
+uffs-security.workspace = true
+# Safe named-pipe server wrapper (`tokio::net::windows::named_pipe`) —
+# avoids hand-rolling unsafe `CreateNamedPipeW` FFI for the pipe-server
+# half; only a "current_thread" runtime is used, no multi-threaded pool.
+tokio = { workspace = true, features = ["rt", "net", "io-util"] }
+
+[build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
+winresource.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

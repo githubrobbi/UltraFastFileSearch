@@ -196,6 +196,112 @@ impl IndexManager {
         });
     }
 
+    /// Load VSS-snapshot device sources — **all in parallel**.
+    ///
+    /// Mirrors [`Self::load_from_data_dir`]'s plain `JoinSet` pattern
+    /// (no semaphore throttling — an ephemeral instance loads at most a
+    /// handful of drives, not the "100 drives" case
+    /// [`Self::load_live_drives`]'s bounded fan-out guards against).
+    /// Each `(device_path, drive)` pair is read fresh — always
+    /// `no_cache = true` — via [`uffs_core::compact::MftSource::Device`],
+    /// which never touches the drive-letter-keyed on-disk caches (see
+    /// that variant's doc comment for why: this drive letter's *live*
+    /// cache, if any, must never be conflated with a point-in-time
+    /// snapshot capture).
+    #[cfg(windows)]
+    pub(crate) async fn load_device_drives(
+        &self,
+        devices: &[(String, uffs_mft::platform::DriveLetter)],
+    ) {
+        let total = devices.len();
+        *self.status.write().await = DaemonStatus::Loading {
+            drives_loaded: 0,
+            drives_total: total,
+        };
+
+        let mut join_set = Self::spawn_device_drive_loaders(devices);
+
+        let mut loaded: usize = 0;
+        while let Some(join_result) = join_set.join_next().await {
+            self.apply_device_drive_load_result(join_result, &mut loaded, total)
+                .await;
+        }
+
+        self.tune_concurrency().await;
+        self.set_ready().await;
+        self.emit_data_dir_ready_summary().await;
+    }
+
+    /// Spawn one blocking task per device source, returning the
+    /// `JoinSet` the caller drains for incremental progress.
+    #[cfg(windows)]
+    fn spawn_device_drive_loaders(
+        devices: &[(String, uffs_mft::platform::DriveLetter)],
+    ) -> tokio::task::JoinSet<(
+        uffs_mft::platform::DriveLetter,
+        anyhow::Result<(
+            uffs_core::compact::DriveCompactIndex,
+            uffs_core::compact::LoadTiming,
+        )>,
+    )> {
+        let mut join_set = tokio::task::JoinSet::new();
+        for (device_path, drive) in devices {
+            let path = device_path.clone();
+            let letter = *drive;
+            tracing::info!(device = %path, drive = %letter, "Loading snapshot device (parallel)");
+            join_set.spawn_blocking(move || {
+                let source = uffs_core::compact::MftSource::Device(path, letter);
+                let result = uffs_core::compact::load_drive(&source, /* no_cache= */ true);
+                (letter, result)
+            });
+        }
+        join_set
+    }
+
+    /// Process a single device-source `JoinSet` completion — mirrors
+    /// [`Self::apply_data_dir_load_result`] exactly, keyed by
+    /// `DriveLetter` instead of `PathBuf` (a device source's identity
+    /// for logging purposes; see [`Self::spawn_device_drive_loaders`]).
+    #[cfg(windows)]
+    async fn apply_device_drive_load_result(
+        &self,
+        join_result: Result<
+            (
+                uffs_mft::platform::DriveLetter,
+                anyhow::Result<(
+                    uffs_core::compact::DriveCompactIndex,
+                    uffs_core::compact::LoadTiming,
+                )>,
+            ),
+            tokio::task::JoinError,
+        >,
+        loaded: &mut usize,
+        total: usize,
+    ) {
+        *loaded = loaded.saturating_add(1);
+        match join_result {
+            Ok((_letter, Ok((drive_index, timing)))) => {
+                self.install_data_dir_drive(drive_index, &timing, *loaded, total)
+                    .await;
+            }
+            Ok((letter, Err(load_err))) => {
+                tracing::error!(drive = %letter, error = %load_err, "Failed to load snapshot device");
+            }
+            Err(join_err) => {
+                tracing::error!(error = %join_err, "Task panicked loading snapshot device");
+            }
+        }
+
+        release_allocator_pages();
+
+        let mut progress = self.status.write().await;
+        *progress = DaemonStatus::Loading {
+            drives_loaded: *loaded,
+            drives_total: total,
+        };
+        drop(progress);
+    }
+
     /// Per-drive load timeout.  If a single drive's MFT read takes
     /// longer than this, we skip it rather than blocking the entire
     /// daemon.  Raw NTFS volume reads can hang indefinitely when a

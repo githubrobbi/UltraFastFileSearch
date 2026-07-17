@@ -410,6 +410,9 @@ pub fn read_search_results(path: &Path) -> io::Result<SearchResponse> {
             malformed: rec.malformed != 0,
             malformed_path: rec.malformed_path != 0,
             name_hex: None,
+            // Not carried by the compact shmem record, same rationale as
+            // `name_hex` above — no shmem-path consumer needs it today.
+            file_reference: 0,
         });
     }
 

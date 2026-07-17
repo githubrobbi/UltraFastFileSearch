@@ -45,6 +45,45 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+/// Isolated lifecycle directory for an ephemeral daemon instance.
+///
+/// Identified by `ephemeral_id` — distinct from the resident daemon's
+/// well-known `uffs/` directory, so the PID file, shutdown nonce, and
+/// IPC endpoint (see [`ephemeral_endpoint`]) never collide with a
+/// resident daemon running on the same machine.
+///
+/// `ephemeral_id` should be a short, filesystem- and
+/// pipe-name-safe token (e.g. hex of a random `u64`); on Windows an
+/// unsafe token is rejected when [`ephemeral_endpoint`]'s result is
+/// parsed via `PipeName::parse`.
+#[must_use]
+pub fn ephemeral_lifecycle_dir(ephemeral_id: &str) -> PathBuf {
+    let base = dirs_next::data_local_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("uffs").join("ephemeral").join(ephemeral_id)
+}
+
+/// IPC endpoint string for an ephemeral daemon instance.
+///
+/// A Unix socket path, or (on Windows) a named-pipe path — matching what
+/// the daemon's own bind logic and
+/// [`crate::connect_sync::UffsClientSync::connect_at`] must agree on.
+/// Single source of truth for both sides so they can never
+/// independently drift.
+#[must_use]
+pub fn ephemeral_endpoint(ephemeral_id: &str) -> String {
+    #[cfg(unix)]
+    {
+        ephemeral_lifecycle_dir(ephemeral_id)
+            .join("daemon.sock")
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\uffs-ephemeral-{ephemeral_id}")
+    }
+}
+
 /// Windows named-pipe path (`\\.\pipe\uffs-<hash>`).
 ///
 /// This is the preferred IPC transport on Windows — replaces `AF_UNIX`
@@ -334,7 +373,7 @@ pub fn find_uffs_exe() -> PathBuf {
 ///    always `.exe`-qualified on Windows so a bare `uffsd` can never resolve to
 ///    a legacy `.com` via PATHEXT if handed to a shell.
 #[must_use]
-pub(crate) fn find_daemon_exe() -> PathBuf {
+pub fn find_daemon_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         let name = exe.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
         if name == "uffsd" {

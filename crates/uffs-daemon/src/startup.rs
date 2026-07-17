@@ -20,9 +20,10 @@ use crate::{DaemonConfig, config, events, lifecycle};
 pub(crate) fn validate_data_sources(
     mft_files: &[PathBuf],
     drives: &[uffs_mft::platform::DriveLetter],
+    device_sources: &[(String, uffs_mft::platform::DriveLetter)],
     lifecycle_mgr: &lifecycle::LifecycleManager,
 ) -> anyhow::Result<()> {
-    let has_data = !mft_files.is_empty() || {
+    let has_data = !mft_files.is_empty() || !device_sources.is_empty() || {
         #[cfg(windows)]
         {
             !drives.is_empty()
@@ -140,10 +141,17 @@ pub(crate) fn bootstrap_lifecycle_manager(
     event_tx: events::EventSender,
 ) -> anyhow::Result<lifecycle::LifecycleManager> {
     // Determine data directory:
-    // - lifecycle_dir: always %LOCALAPPDATA%\uffs — PID/socket/lock files
+    // - lifecycle_dir: %LOCALAPPDATA%\uffs (or, for an ephemeral instance — see
+    //   `DaemonConfig::ephemeral_id` — `.../uffs/ephemeral/<id>`) — PID/socket/lock
+    //   files
     // - data_dir: user-supplied --data-dir (for MFT file discovery/hot-load)
-    let lifecycle_dir = dirs_next::data_local_dir()
-        .map_or_else(|| PathBuf::from("/tmp/uffs"), |base| base.join("uffs"));
+    let lifecycle_dir = config.ephemeral_id.as_deref().map_or_else(
+        || {
+            dirs_next::data_local_dir()
+                .map_or_else(|| PathBuf::from("/tmp/uffs"), |base| base.join("uffs"))
+        },
+        uffs_client::daemon_ctl::ephemeral_lifecycle_dir,
+    );
 
     let idle_timeout = if config.no_retire {
         None

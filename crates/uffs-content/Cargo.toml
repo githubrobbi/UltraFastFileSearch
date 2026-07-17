@@ -66,6 +66,43 @@ serde_json.workspace = true
 # Job/run identifiers (`ManifestHeader::job_id`, etc.) — see `src/job/`.
 uuid.workspace = true
 
+# Windows-only deps: the real Snapshot Manager pipe client
+# (`src/job/snapshot_client.rs`) and the real VSS+MFT-query
+# `CandidateSource` it backs are meaningful only on Windows (no VSS, no
+# live MFT snapshot device, no Broker to talk to elsewhere) — the fake
+# `DirWalkCandidateSource`/`FsContentSource` backends remain
+# cross-platform. Scoped so a non-Windows build doesn't pull in
+# `uffs-broker-protocol`/`uffs-client`, matching `uffs-broker`'s own
+# rationale for this split (F5 / issue #205).
+#
+# Deliberately NOT depending on `uffs-mft`/`uffs-core` here: this crate
+# never reads or queries an MFT itself. It leases a VSS snapshot from
+# the Broker, spawns an ephemeral `uffsd --device <path>=<letter>`
+# instance to do the actual MFT read + query evaluation (the daemon
+# already owns all `uffs-mft`/`uffs-core` usage), and talks to it over
+# the same RPC protocol `uffs-client` already implements for every other
+# UFFS client.
+[target.'cfg(windows)'.dependencies]
+# Error handling for the pipe client and real VSS-backed CandidateSource
+# (`?`/`anyhow::bail!`/`anyhow::anyhow!`) — not used anywhere else in
+# this crate today, so scoped alongside the rest of this Windows-only
+# group rather than added unconditionally.
+anyhow.workspace = true
+# `SnapshotManagerRequest`/`SnapshotManagerResponse` wire types and
+# `SNAPSHOT_PIPE_NAME` for the Broker's Snapshot Manager pipe.
+uffs-broker-protocol.workspace = true
+# Spawns the ephemeral `uffsd` instance and queries it over the same
+# daemon RPC protocol every other UFFS client uses.
+uffs-client.workspace = true
+# Wire types for the private Coordinator<->Snapshot Reader protocol
+# (`src/job/reader_client.rs`, `src/job/content_source.rs`'s
+# `VssContentSource`).
+uffs-content-reader-protocol.workspace = true
+# Warn-logs best-effort lease-release failures during ephemeral-daemon
+# teardown (`src/job/vss_orchestrator.rs`) — not used anywhere else in
+# this crate today.
+tracing.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 # Independent oracle digest for the E2E dir-walk parity harness

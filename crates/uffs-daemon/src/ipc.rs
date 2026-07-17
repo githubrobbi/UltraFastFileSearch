@@ -358,8 +358,9 @@ impl IpcServer {
 pub(crate) async fn run_ipc_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
+    ephemeral_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let listener = bind_unix_listener()?;
+    let listener = bind_unix_listener(ephemeral_id)?;
     let events = index.event_sender().clone();
     let handler = Arc::new(RequestHandler {
         index,
@@ -381,8 +382,10 @@ pub(crate) async fn run_ipc_server(
 /// cleanup, bind, and 0600-permission lockdown so the orchestrator
 /// can stay focused on the accept loop.
 #[cfg(unix)]
-fn bind_unix_listener() -> anyhow::Result<tokio::net::UnixListener> {
-    let sock_path = IpcServer::socket_path();
+fn bind_unix_listener(ephemeral_id: Option<&str>) -> anyhow::Result<tokio::net::UnixListener> {
+    let sock_path = ephemeral_id.map_or_else(IpcServer::socket_path, |id| {
+        PathBuf::from(uffs_client::daemon_ctl::ephemeral_endpoint(id))
+    });
 
     if let Some(parent) = sock_path.parent() {
         uffs_security::fs::create_secure_dir(parent)?;
@@ -482,9 +485,9 @@ fn spawn_unix_connection(
 pub(crate) async fn run_pipe_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
+    ephemeral_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let pipe_name = uffs_security::pipe::PipeName::for_current_user()
-        .map_err(|sid_err| anyhow::anyhow!("pipe name resolution failed: {sid_err}"))?;
+    let pipe_name = resolve_pipe_name(ephemeral_id)?;
 
     // DACL: allow the linked-token user only.  Kept alive for the entire
     // lifetime of the listener — every server instance borrows from it.
@@ -561,6 +564,24 @@ pub(crate) async fn run_pipe_server(
             );
         });
     }
+}
+
+/// Resolve the pipe name [`run_pipe_server`] should bind: the per-user
+/// well-known name, or (when `ephemeral_id` is set) the isolated
+/// ephemeral-instance name. Extracted so `run_pipe_server` stays under
+/// clippy's cognitive-complexity budget.
+#[cfg(windows)]
+fn resolve_pipe_name(ephemeral_id: Option<&str>) -> anyhow::Result<uffs_security::pipe::PipeName> {
+    ephemeral_id.map_or_else(
+        || {
+            uffs_security::pipe::PipeName::for_current_user()
+                .map_err(|sid_err| anyhow::anyhow!("pipe name resolution failed: {sid_err}"))
+        },
+        |id| {
+            uffs_security::pipe::PipeName::parse(uffs_client::daemon_ctl::ephemeral_endpoint(id))
+                .map_err(|err| anyhow::anyhow!("invalid ephemeral pipe name: {err}"))
+        },
+    )
 }
 
 /// Build a single named-pipe server instance bound to `pipe_name` with

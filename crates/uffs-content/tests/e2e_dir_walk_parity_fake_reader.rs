@@ -16,9 +16,12 @@
 //! framing, and the ephemeral run-state bookkeeping — only the "how do
 //! we get the candidate list and bytes" step is faked.
 //!
-//! The real-VSS variant (§9.4, Windows-only, `#[ignore]`) is not built
-//! yet — it needs `uffs-content-reader` and a real Broker Snapshot
-//! Manager, neither of which exist yet.
+//! The real-VSS variant (§9.4, Windows-only, `#[ignore]`) is not wired
+//! up as an end-to-end test yet — `uffs-content-reader` and the Broker
+//! Snapshot Manager both exist now (see `crates/uffs-content-reader/`
+//! and `crates/uffs-broker/src/broker/snapshot_manager/`), but nothing
+//! yet calls `job::vss_orchestrator`/`job::reader_client` end to end
+//! from `workflow::run_job`.
 
 // `#[cfg(test)]` so clippy's test-code relaxations (`allow-expect-in-tests`
 // et al. in `clippy.toml`) apply inside `support/`'s helper files too —
@@ -29,8 +32,21 @@ mod support;
 
 // This crate's own dependencies (shared across the lib, bin, and every
 // integration test binary), not used directly from this particular test.
+// Windows-only deps, not used directly from this cross-platform fake-
+// pipeline test — see `src/main.rs`'s matching markers for the same
+// per-target rationale (each test binary is its own compilation unit).
+#[cfg(windows)]
+use anyhow as _;
 use serde as _;
 use serde_json as _;
+#[cfg(windows)]
+use tracing as _;
+#[cfg(windows)]
+use uffs_broker_protocol as _;
+#[cfg(windows)]
+use uffs_client as _;
+#[cfg(windows)]
+use uffs_content_reader_protocol as _;
 use uffs_version as _;
 use uuid as _;
 
@@ -67,6 +83,7 @@ mod tests {
         let request = JobRequest {
             source_id: "fixture-source".to_owned(),
             root: source_dir.path().to_path_buf(),
+            query: "*".to_owned(),
         };
         let outcome = run_job(
             &request,

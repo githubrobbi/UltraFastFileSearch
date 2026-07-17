@@ -9,9 +9,15 @@ use std::path::PathBuf;
 ///
 /// This is the local job-submission format — ordinary JSON, unlike the
 /// Docenta-facing frame protocol, which uses the explicit binary codec
-/// (addendum §5.4). Query filtering (extension/date/size) is not wired up
-/// yet: every job currently matches every regular file under `root`
-/// (equivalent to a `"*"` query) — see [`super::candidate_source`].
+/// (addendum §5.4).
+///
+/// `query` carries the UFFS query expression (e.g. `"*.txt"`, or `"*"`
+/// to match everything), matching the daemon's own query grammar so the
+/// real, VSS+MFT-query-backed `CandidateSource` can forward it verbatim
+/// to an ephemeral `uffsd` instance rather than re-implementing query
+/// parsing in this crate. [`super::candidate_source::DirWalkCandidateSource`]
+/// (the fake backend) ignores this field entirely — it always matches
+/// every regular file under `root`, equivalent to `query: "*"`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct JobRequest {
     /// Identifier for the source this job's candidates came from.
@@ -20,4 +26,7 @@ pub struct JobRequest {
     pub source_id: String,
     /// Root directory to enumerate candidates under.
     pub root: PathBuf,
+    /// UFFS query expression to evaluate against the snapshot's MFT
+    /// (e.g. `"*.txt"`); `"*"` matches every regular file.
+    pub query: String,
 }

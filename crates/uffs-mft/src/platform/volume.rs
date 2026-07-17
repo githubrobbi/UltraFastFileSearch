@@ -541,7 +541,6 @@ impl VolumeHandle {
     /// path fails (typically `ERROR_ACCESS_DENIED` when the caller is not
     /// elevated), or if `FSCTL_GET_NTFS_VOLUME_DATA` cannot read the volume
     /// descriptor for the opened handle.
-    #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: super::DriveLetter) -> Result<Self> {
         // Access Broker fast-path: if the (elevated) broker has deposited a
         // pre-opened, duplicated volume handle for this drive, adopt a
@@ -560,13 +559,50 @@ impl VolumeHandle {
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
+        Self::open_raw_path(&volume_path, volume)
+    }
 
-        // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration of
+    /// Opens an arbitrary device path for direct MFT reading — e.g. a VSS
+    /// snapshot device (`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN`),
+    /// rather than a live drive letter's `\\.\<letter>:` path.
+    ///
+    /// `volume` is used only as a diagnostic label (mirroring
+    /// [`crate::MftReader::from_file`]'s existing precedent of associating
+    /// an arbitrary data source with a caller-supplied [`super::DriveLetter`]
+    /// for logging/error messages) — it does not need to correspond to how
+    /// `device_path` is actually opened; pass the drive letter of the
+    /// *original* live volume the snapshot was taken from.
+    ///
+    /// Unlike [`Self::open`], this has no Access Broker fast-path: a VSS
+    /// snapshot device is never broker-vended (the broker's handle registry
+    /// is keyed by drive letter, not by an arbitrary device path), so the
+    /// caller must already be running elevated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError::Io`] if `CreateFileW` on `device_path` fails
+    /// (typically `ERROR_ACCESS_DENIED` when the caller is not elevated), or
+    /// if `FSCTL_GET_NTFS_VOLUME_DATA` cannot read the volume descriptor for
+    /// the opened handle.
+    pub fn open_device_path(device_path: &str, volume: super::DriveLetter) -> Result<Self> {
+        let wide_path: Vec<u16> = device_path
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+        Self::open_raw_path(&wide_path, volume)
+    }
+
+    /// `CreateFileW` + `FSCTL_GET_NTFS_VOLUME_DATA` against an already
+    /// NUL-terminated UTF-16 `path` — the shared body of [`Self::open`]
+    /// (after its Access Broker fast-path) and [`Self::open_device_path`].
+    #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
+    fn open_raw_path(path: &[u16], volume: super::DriveLetter) -> Result<Self> {
+        // SAFETY: `path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are passed as `None`, and on success the
         // returned handle is owned by this function.
         let create_result = unsafe {
             CreateFileW(
-                PCWSTR::from_raw(volume_path.as_ptr()),
+                PCWSTR::from_raw(path.as_ptr()),
                 FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,

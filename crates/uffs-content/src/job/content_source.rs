@@ -20,6 +20,13 @@ use super::candidate_source::CandidateEntry;
 pub trait ContentSource {
     /// Read up to `max_len` bytes starting at `offset` from `candidate`.
     ///
+    /// `candidate_id` is the same id `manifest_builder::build_manifest`
+    /// assigned this candidate (the caller already has it — see
+    /// `workflow::run_job`'s `entries.iter().zip(&built.candidate_ids)`)
+    /// — the production implementation needs it to correlate this read
+    /// against the finalized manifest over the Reader's wire protocol;
+    /// [`FsContentSource`] ignores it entirely.
+    ///
     /// Returns fewer than `max_len` bytes only at EOF (matching a normal
     /// [`std::io::Read::read`] short-read contract at end of file); an
     /// empty result means `offset` was at or past EOF.
@@ -27,8 +34,13 @@ pub trait ContentSource {
     /// # Errors
     /// Propagates the underlying [`io::Error`] from opening/seeking/
     /// reading the file.
-    fn read_at(&self, candidate: &CandidateEntry, offset: u64, max_len: u32)
-    -> io::Result<Vec<u8>>;
+    fn read_at(
+        &self,
+        candidate: &CandidateEntry,
+        candidate_id: u64,
+        offset: u64,
+        max_len: u32,
+    ) -> io::Result<Vec<u8>>;
 }
 
 /// Reads content directly from the live filesystem.
@@ -39,6 +51,7 @@ impl ContentSource for FsContentSource {
     fn read_at(
         &self,
         candidate: &CandidateEntry,
+        _candidate_id: u64,
         offset: u64,
         max_len: u32,
     ) -> io::Result<Vec<u8>> {
@@ -58,5 +71,58 @@ impl ContentSource for FsContentSource {
         }
         buffer.truncate(total_read);
         Ok(buffer)
+    }
+}
+
+/// Reads content from a VSS snapshot via the privileged
+/// `uffs-content-reader` process (see [`super::reader_client`]).
+///
+/// Windows-only: VSS snapshots, and the Reader that reads them, don't
+/// exist on any other platform — matching [`super::ephemeral_daemon`]'s
+/// and [`super::vss_orchestrator`]'s own scoping.
+#[cfg(windows)]
+pub struct VssContentSource {
+    /// The spawned Reader process + its live connection for this job.
+    reader: super::reader_client::ContentReader,
+}
+
+#[cfg(windows)]
+impl VssContentSource {
+    /// Wrap an already-spawned [`super::reader_client::ContentReader`].
+    #[must_use]
+    pub(crate) const fn new(reader: super::reader_client::ContentReader) -> Self {
+        Self { reader }
+    }
+
+    /// Tear down the wrapped Reader process. Explicit (rather than
+    /// relying on `Drop`) so a failed teardown is observable, mirroring
+    /// how [`super::vss_orchestrator::EphemeralJobResources::teardown`]
+    /// handles the ephemeral daemon.
+    ///
+    /// # Errors
+    /// Returns an error if the Reader process couldn't be killed.
+    pub(crate) fn shutdown(self) -> anyhow::Result<()> {
+        self.reader.shutdown()
+    }
+}
+
+#[cfg(windows)]
+impl ContentSource for VssContentSource {
+    fn read_at(
+        &self,
+        candidate: &CandidateEntry,
+        candidate_id: u64,
+        offset: u64,
+        max_len: u32,
+    ) -> io::Result<Vec<u8>> {
+        self.reader
+            .read_at(
+                candidate.snapshot_lease_id,
+                candidate_id,
+                candidate.file_reference,
+                offset,
+                max_len,
+            )
+            .map_err(|err| io::Error::other(err.to_string()))
     }
 }

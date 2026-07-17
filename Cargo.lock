@@ -4484,11 +4484,16 @@ dependencies = [
 name = "uffs-content"
 version = "0.6.27"
 dependencies = [
+ "anyhow",
  "blake3",
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
+ "uffs-broker-protocol",
+ "uffs-client",
  "uffs-content-protocol",
+ "uffs-content-reader-protocol",
  "uffs-version",
  "uuid",
 ]
@@ -4501,6 +4506,23 @@ dependencies = [
  "blake3",
  "proptest",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "uffs-content-reader"
+version = "0.6.27"
+dependencies = [
+ "anyhow",
+ "proptest",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uffs-content-reader-protocol",
+ "uffs-security",
+ "uffs-version",
+ "windows 0.62.2",
+ "winresource",
 ]
 
 [[package]]

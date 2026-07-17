@@ -241,6 +241,7 @@ fn search_response_inline_rows_round_trip() {
             malformed: false,
             malformed_path: false,
             name_hex: None,
+            file_reference: 0,
         }]),
         total_count: 1,
         records_scanned: 1_000_000,
@@ -309,6 +310,7 @@ fn search_row_default_json_carries_name_hex_for_malformed_only() {
         malformed: false,
         malformed_path: false,
         name_hex: None,
+        file_reference: 0,
     };
 
     // Well-formed row: no hex evidence, so the key is dropped entirely.

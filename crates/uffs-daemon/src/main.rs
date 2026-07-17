@@ -114,6 +114,47 @@ struct Cli {
     /// Use `"-"` or omit the path to default to `./uffs_daemon.log`.
     #[arg(long, value_name = "PATH")]
     log_file: Option<PathBuf>,
+
+    /// Run as an ephemeral, job-scoped instance identified by `ID`
+    /// rather than the resident per-user daemon.
+    ///
+    /// Both the lifecycle directory (PID file) and the IPC endpoint are
+    /// derived from `ID` — see [`uffs_daemon::DaemonConfig::ephemeral_id`]
+    /// — so this instance can run alongside a resident daemon without
+    /// colliding with it. Connect via
+    /// `UffsClientSync::connect_at(&
+    /// uffs_client::daemon_ctl::ephemeral_endpoint(ID))`.
+    #[arg(long, value_name = "ID")]
+    ephemeral_id: Option<String>,
+
+    /// VSS-snapshot device to load, as `DEVICE_PATH=LETTER` (Windows
+    /// only, repeatable — e.g.
+    /// `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy5=C`).
+    ///
+    /// Read fresh (never cached — see
+    /// [`uffs_daemon::DaemonConfig::device_sources`]), so this instance
+    /// never affects, and is never affected by, a resident daemon's
+    /// cache for the named drive letter.
+    #[arg(long = "device", value_name = "DEVICE_PATH=LETTER", value_parser = parse_device_source)]
+    device_sources: Vec<(String, uffs_mft::platform::DriveLetter)>,
+}
+
+/// Parse one `--device DEVICE_PATH=LETTER` argument.
+///
+/// Splits on the *last* `=` — Windows device paths never contain `=`,
+/// but splitting from the end is the more conservative choice if that
+/// ever changes.
+fn parse_device_source(input: &str) -> Result<(String, uffs_mft::platform::DriveLetter), String> {
+    let (path, letter) = input
+        .rsplit_once('=')
+        .ok_or_else(|| format!("expected DEVICE_PATH=LETTER, got '{input}' (missing '=')"))?;
+    if path.is_empty() {
+        return Err(format!("empty device path in '{input}'"));
+    }
+    let drive: uffs_mft::platform::DriveLetter = letter
+        .parse()
+        .map_err(|err| format!("invalid drive letter '{letter}' in '{input}': {err}"))?;
+    Ok((path.to_owned(), drive))
 }
 
 #[tokio::main]
@@ -152,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
     let fwd_no_cache = cli.no_cache;
+    let is_ephemeral = cli.ephemeral_id.is_some();
 
     let config = uffs_daemon::DaemonConfig {
         mft_files: cli.mft_files,
@@ -162,11 +204,17 @@ async fn main() -> anyhow::Result<()> {
         no_cache: cli.no_cache,
         log_level: cli.log_level,
         log_file: cli.log_file,
+        ephemeral_id: cli.ephemeral_id,
+        device_sources: cli.device_sources,
     };
 
     match uffs_daemon::run_daemon(config).await {
         Ok(()) => Ok(()),
-        Err(err) if is_already_running(&err) => {
+        // "Forward to the already-running daemon" only makes sense for
+        // the resident, well-known-endpoint daemon — an ephemeral
+        // instance has no sibling to forward to, and the resident
+        // daemon (if any) is a different, unrelated instance.
+        Err(err) if is_already_running(&err) && !is_ephemeral => {
             // Another daemon is running — forward the load request via IPC.
             forward_to_running_daemon(&fwd_drives, &fwd_mft_files, fwd_no_cache)
         }

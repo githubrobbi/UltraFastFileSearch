@@ -637,6 +637,7 @@ pub(super) fn make_display_row(
         forensics.malformed_path,
         forensics.name_hex,
     )
+    .with_file_reference(rec.file_ref)
 }
 
 /// Resolve `rec_idx`'s path (with the malformed-path bit) using the supplied

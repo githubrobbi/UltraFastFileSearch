@@ -516,6 +516,15 @@ pub struct SearchRow {
     /// column (it is not in `BASELINE_COLUMN_ORDER`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_hex: Option<String>,
+    /// NTFS File Reference (`(sequence_number << 48) | frs`) — see
+    /// `uffs_core::compact::CompactRecord::file_ref`. `0` for rows that
+    /// don't carry it (e.g. reconstructed from a `ShmemRows` blob, which
+    /// doesn't include this field — the CLI's large-result-set path has
+    /// no consumer that needs it). `#[serde(default)]` keeps the wire
+    /// format backward/forward compatible, matching the other
+    /// additive fields above.
+    #[serde(default)]
+    pub file_reference: u64,
 }
 
 /// Feed `SearchRow` directly into the shared `uffs-format` writer.

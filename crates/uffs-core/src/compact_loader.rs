@@ -45,6 +45,14 @@ pub enum MftSource {
     /// Live Windows NTFS volume (e.g., `'C'`).
     #[cfg(windows)]
     Live(uffs_mft::platform::DriveLetter),
+    /// A VSS snapshot device path (e.g.
+    /// `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN`), read via
+    /// [`uffs_mft::MftReader::open_device_path`]. The `DriveLetter` is
+    /// the drive the snapshot was taken from — used only to build the
+    /// compact index and for diagnostics, never as a cache key (see
+    /// [`Self::is_ephemeral_device`]).
+    #[cfg(windows)]
+    Device(String, uffs_mft::platform::DriveLetter),
 }
 
 impl MftSource {
@@ -61,7 +69,29 @@ impl MftSource {
         match self {
             Self::File(path, _) => Some(path),
             #[cfg(windows)]
-            Self::Live(_) => None,
+            Self::Live(_) | Self::Device(..) => None,
+        }
+    }
+
+    /// Whether this source's data must never be persisted to (or served
+    /// from) the drive-letter-keyed on-disk caches — `uffs-mft`'s
+    /// `.uffs` index cache and `uffs-core`'s compact cache.
+    ///
+    /// A VSS snapshot device is an ephemeral, point-in-time capture that
+    /// happens to report the same drive letter as the live volume it was
+    /// taken from. Both caches key purely by drive letter, so sharing
+    /// that key would let the resident daemon serve snapshot data as if
+    /// it were live, or (worse) let a snapshot read silently overwrite
+    /// the live drive's cache. `Device` sources are always read fresh
+    /// and never cached — see [`load_mft_index_from_device`].
+    #[must_use]
+    pub const fn is_ephemeral_device(&self) -> bool {
+        match self {
+            Self::File(..) => false,
+            #[cfg(windows)]
+            Self::Live(_) => false,
+            #[cfg(windows)]
+            Self::Device(..) => true,
         }
     }
 }
@@ -91,7 +121,7 @@ pub fn load_drive(
                 .unwrap_or(uffs_mft::platform::DriveLetter::X)
         }),
         #[cfg(windows)]
-        MftSource::Live(ch) => *ch,
+        MftSource::Live(ch) | MftSource::Device(_, ch) => *ch,
     };
 
     // ── Load MftIndex (cache + USN replay, or cold) ────────────────
@@ -118,6 +148,8 @@ pub fn load_drive(
         MftSource::File(path, _) => load_mft_index_from_file(path, drive_letter, no_cache)?,
         #[cfg(windows)]
         MftSource::Live(ch) => load_mft_index_live(*ch, no_cache)?,
+        #[cfg(windows)]
+        MftSource::Device(device_path, ch) => load_mft_index_from_device(device_path, *ch)?,
     };
     let mft_elapsed = mft_start.elapsed().as_millis();
 
@@ -135,7 +167,11 @@ pub fn load_drive(
     }
 
     // ── Save compact cache (background, best-effort) ────────────────
-    if !no_cache {
+    //
+    // Never persist an ephemeral VSS-snapshot-device read: it shares its
+    // drive letter's cache key with the live drive but is a distinct,
+    // point-in-time capture (see `MftSource::is_ephemeral_device`).
+    if !no_cache && !source.is_ephemeral_device() {
         let t_compact_save = Instant::now();
         if let Err(err) = crate::compact_cache::save_compact_cache_background(&compact) {
             tracing::warn!(drive = %drive_letter, error = %err, "Failed to start compact cache save");
@@ -394,6 +430,38 @@ fn load_mft_index_live(
     // calling context.  The ~50µs overhead is negligible against seconds of
     // MFT I/O.  This avoids `block_in_place` (panics on blocking threads)
     // and `handle.block_on` (panics inside a runtime context).
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(read_index)
+}
+
+/// Load `MftIndex` fresh from a VSS snapshot device path.
+///
+/// Always a fresh read — deliberately never consults or populates the
+/// drive-letter-keyed `.uffs` index cache (unlike
+/// [`load_mft_index_live`]/[`load_mft_index_from_file`]). See
+/// [`MftSource::is_ephemeral_device`] for why sharing that cache key
+/// would be a correctness bug, not just a missed optimization.
+#[cfg(windows)]
+fn load_mft_index_from_device(
+    device_path: &str,
+    drive_letter: uffs_mft::platform::DriveLetter,
+) -> anyhow::Result<MftIndex> {
+    use anyhow::Context as _;
+
+    let read_index = async {
+        let reader = uffs_mft::MftReader::open_device_path(device_path, drive_letter)
+            .with_context(|| format!("Failed to open snapshot device {device_path}"))?;
+        reader
+            .read_all_index()
+            .await
+            .with_context(|| format!("Failed to read MFT from snapshot device {device_path}"))
+    };
+
+    // See `load_mft_index_live`'s matching comment: a dedicated
+    // current-thread runtime is always safe regardless of the calling
+    // context (Tokio worker thread, blocking thread, or no runtime).
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

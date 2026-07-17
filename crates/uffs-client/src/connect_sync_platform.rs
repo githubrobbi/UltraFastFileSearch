@@ -55,8 +55,16 @@ impl UffsClientSync {
     /// deadline on every subsequent blocking read/write with zero
     /// additional cost in the client.
     pub(crate) fn platform_connect() -> Result<Self, ClientError> {
-        let sock_path = socket_path();
-        let stream = std::os::unix::net::UnixStream::connect(&sock_path)
+        Self::platform_connect_at(&socket_path())
+    }
+
+    /// Connect via Unix domain socket at an explicit path, bypassing the
+    /// well-known per-user [`socket_path`] resolution — used by
+    /// [`UffsClientSync::connect_at`] to reach an ephemeral daemon
+    /// instance. Shares every other behavior (deadline, buffering) with
+    /// [`Self::platform_connect`].
+    pub(crate) fn platform_connect_at(sock_path: &std::path::Path) -> Result<Self, ClientError> {
+        let stream = std::os::unix::net::UnixStream::connect(sock_path)
             .map_err(|err| ClientError::ConnectionFailed(err.to_string()))?;
 
         // Set both read and write deadlines.  A hung daemon could stall
@@ -142,23 +150,27 @@ impl UffsClientSync {
     /// disarm, nanoseconds); per-client overhead is one long-lived
     /// thread with a 50 ms poll period.
     pub(crate) fn platform_connect() -> Result<Self, ClientError> {
+        let name = crate::daemon_ctl::pipe_name()
+            .map_err(|err| ClientError::ConnectionFailed(err.to_string()))?;
+        Self::platform_connect_at(name.as_str())
+    }
+
+    /// Connect via named pipe at an explicit path, bypassing the
+    /// well-known per-user [`crate::daemon_ctl::pipe_name`] resolution —
+    /// used by [`UffsClientSync::connect_at`] to reach an ephemeral
+    /// daemon instance. Shares every other behavior (busy-retry,
+    /// deadline guard) with [`Self::platform_connect`].
+    pub(crate) fn platform_connect_at(pipe_path: &str) -> Result<Self, ClientError> {
         use std::fs::{File, OpenOptions};
 
         /// `ERROR_PIPE_BUSY` — transient, retry with backoff.
         const ERROR_PIPE_BUSY: i32 = 231;
 
-        let name = crate::daemon_ctl::pipe_name()
-            .map_err(|err| ClientError::ConnectionFailed(err.to_string()))?;
-
         let pipe: File = {
             let mut last_err: Option<std::io::Error> = None;
             let mut pipe_file: Option<File> = None;
             for attempt in 0..5_u32 {
-                match OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(name.as_str())
-                {
+                match OpenOptions::new().read(true).write(true).open(pipe_path) {
                     Ok(file) => {
                         pipe_file = Some(file);
                         break;

@@ -24,6 +24,12 @@ pub struct CandidateEntry {
     /// source uses the OS's native per-volume file identifier, which is
     /// stable across hard links the same way an NTFS file reference is.
     pub file_reference: u64,
+    /// Which VSS snapshot lease (see [`super::snapshot_client::SnapshotLease`])
+    /// this candidate's device path/file reference resolve against — a
+    /// job may lease more than one drive. `0` (never a real lease id,
+    /// which the Broker assigns starting from 1) for
+    /// [`DirWalkCandidateSource`], which has no snapshot at all.
+    pub snapshot_lease_id: u64,
 }
 
 /// Produces the candidate list for a job.
@@ -75,6 +81,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<CandidateEntry>) -> io::Result<()
                 logical_size: metadata.len(),
                 mtime_unix_ms: mtime_unix_ms(&metadata),
                 file_reference: file_identity(&metadata),
+                snapshot_lease_id: 0,
             });
         }
     }
@@ -113,4 +120,117 @@ fn file_identity(metadata: &fs::Metadata) -> u64 {
 #[cfg(not(any(unix, windows)))]
 const fn file_identity(_metadata: &fs::Metadata) -> u64 {
     0
+}
+
+/// Evaluates a job's query against the ephemeral, VSS-snapshot-backed
+/// `uffsd` instance
+/// [`super::vss_orchestrator::prepare_ephemeral_daemon_for_roots`]
+/// spawned — the real production `CandidateSource`.
+///
+/// Windows-only: VSS snapshots, and the ephemeral daemon that queries
+/// them, don't exist on any other platform — matching
+/// [`super::ephemeral_daemon`]'s own scoping.
+#[cfg(windows)]
+pub struct VssCandidateSource<'a> {
+    /// UFFS query expression (`JobRequest::query`), forwarded verbatim
+    /// to the daemon as `SearchParams::pattern`.
+    query: String,
+    /// The already-spawned, already-`Ready` ephemeral daemon covering
+    /// every drive this job leased.
+    daemon: &'a super::ephemeral_daemon::EphemeralDaemon,
+    /// Drive letter -> lease id, so each result row (which only carries
+    /// a drive letter) can be tagged with the lease
+    /// [`super::content_source::VssContentSource`] will need to read it
+    /// back afterward.
+    drive_to_lease: std::collections::HashMap<char, u64>,
+}
+
+#[cfg(windows)]
+impl<'a> VssCandidateSource<'a> {
+    /// Wrap an already-spawned, already-`Ready` ephemeral daemon.
+    #[must_use]
+    pub(crate) const fn new(
+        query: String,
+        daemon: &'a super::ephemeral_daemon::EphemeralDaemon,
+        drive_to_lease: std::collections::HashMap<char, u64>,
+    ) -> Self {
+        Self {
+            query,
+            daemon,
+            drive_to_lease,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl CandidateSource for VssCandidateSource<'_> {
+    fn enumerate(&self, root: &Path) -> io::Result<Vec<CandidateEntry>> {
+        let mut client = self
+            .daemon
+            .connect()
+            .map_err(|err| io::Error::other(err.to_string()))?;
+
+        // Scope the search to this job's root: `path_contains` is a
+        // directory-path glob matched against each record's directory
+        // portion — `<root>*` restricts results to the subtree without
+        // needing this crate to walk anything itself.
+        let root_glob = format!("{}*", root.display());
+        let params = uffs_client::protocol::SearchParams {
+            pattern: self.query.clone(),
+            filter_mode: Some(uffs_client::protocol::SearchFilterMode::Files),
+            path_contains: Some(root_glob),
+            limit: None,
+            ..Default::default()
+        };
+        let response = client
+            .search(&params)
+            .map_err(|err| io::Error::other(err.to_string()))?;
+
+        let rows = resolve_rows(response.payload)?;
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let letter = row.drive.as_char();
+            let Some(&lease_id) = self.drive_to_lease.get(&letter) else {
+                return Err(io::Error::other(format!(
+                    "search result on drive {letter} has no matching lease for this job"
+                )));
+            };
+            let path = PathBuf::from(&row.path);
+            let relative_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            entries.push(CandidateEntry {
+                relative_path,
+                absolute_path: path,
+                logical_size: row.size,
+                // `SearchRow::modified` is Unix *microseconds*;
+                // `CandidateEntry::mtime_unix_ms` is Unix milliseconds.
+                mtime_unix_ms: row.modified / 1000,
+                file_reference: row.file_reference,
+                snapshot_lease_id: lease_id,
+            });
+        }
+        Ok(entries)
+    }
+}
+
+/// Resolve a `SearchPayload` into its `SearchRow` list, reading a
+/// shmem-backed result set from disk if the daemon chose that delivery
+/// channel — a job-scoped query is usually small enough to stay inline,
+/// but a job matching many files could still cross the daemon's shmem
+/// threshold.
+#[cfg(windows)]
+fn resolve_rows(
+    payload: uffs_client::protocol::response::SearchPayload,
+) -> io::Result<Vec<uffs_client::protocol::response::SearchRow>> {
+    use uffs_client::protocol::response::SearchPayload;
+    match payload {
+        SearchPayload::Empty => Ok(Vec::new()),
+        SearchPayload::InlineRows(rows) => Ok(rows),
+        SearchPayload::ShmemRows { path, .. } => {
+            uffs_client::shmem::read_search_results(Path::new(&path))
+                .map(|response| response.payload.into_inline_rows().unwrap_or_default())
+        }
+        SearchPayload::InlineBlob(_) | SearchPayload::ShmemBlob(_) => Err(io::Error::other(
+            "daemon returned a pre-formatted text blob instead of structured rows",
+        )),
+    }
 }

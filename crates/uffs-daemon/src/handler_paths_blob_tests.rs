@@ -39,6 +39,7 @@ fn path_only_row(path: String) -> SearchRow {
         malformed: false,
         malformed_path: false,
         name_hex: None,
+        file_reference: 0,
     }
 }
 

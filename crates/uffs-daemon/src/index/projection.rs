@@ -38,6 +38,7 @@ impl IndexManager {
             malformed: row.malformed,
             malformed_path: row.malformed_path,
             name_hex: row.name_hex.clone(),
+            file_reference: row.file_reference,
         }
     }
 

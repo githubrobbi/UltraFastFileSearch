@@ -45,6 +45,12 @@ pub mod run;
 // unit tests.
 #[cfg(test)]
 use blake3 as _;
+// Will spawn/query the ephemeral `uffsd` instance once the real,
+// VSS+MFT-query-backed `CandidateSource` is wired up (not yet — the
+// dead-code state on `job::snapshot_client` today is the same
+// deliberately-deferred state, see that module's doc comment).
+#[cfg(windows)]
+use uffs_client as _;
 use uffs_version as _;
 
 /// Whether the production, VSS-snapshot-backed pipeline is wired up.

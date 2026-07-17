@@ -105,3 +105,69 @@ fn interpret_handle_response(
         }
     }
 }
+
+/// Run the broker warm-up only when the daemon is **not** already elevated.
+///
+/// Gate on the daemon's OWN elevation, not on a broker probe.  An elevated
+/// daemon opens volumes directly (`CreateFileW`), so a broker request would be
+/// a futile per-drive pipe-open + WARN.  Crucially, `is_elevated()` is a token
+/// query — it does NOT touch the broker pipe, so it has none of the race the
+/// removed `broker_available()` probe had (that probe connected to and consumed
+/// the broker's single pipe instance, starving the real request; 2026-06-13 VM
+/// finding).  When NOT elevated, the handle request itself is the authoritative
+/// broker-presence test: it succeeds when a broker is serving and fails fast
+/// (WARN + direct-open fallback) when not.
+///
+/// Extracted from `crate::load_live_drives_if_windows` so that caller stays
+/// under the `cognitive_complexity` ceiling.
+#[cfg(windows)]
+pub(crate) fn warm_up_broker_handles_unless_elevated(drives: &[uffs_mft::platform::DriveLetter]) {
+    if uffs_mft::is_elevated() {
+        tracing::debug!(
+            pid = std::process::id(),
+            "Daemon is elevated — skipping broker warm-up (direct volume open)"
+        );
+        return;
+    }
+    tracing::info!(
+        pid = std::process::id(),
+        drive_count = drives.len(),
+        "Daemon not elevated — attempting broker warm-up"
+    );
+    warm_up_broker_handles(drives);
+}
+
+/// Best-effort broker pre-warm: ask the elevated broker for a volume
+/// handle per drive so the subsequent `load_live_drives` skips the
+/// per-drive elevation prompt.  Failures are debug-traced and
+/// ignored — the direct-open path takes over transparently.
+#[cfg(windows)]
+fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
+    tracing::info!(
+        daemon_pid = std::process::id(),
+        drives = ?drives,
+        "warm_up_broker_handles: requesting volume handles from the Access Broker"
+    );
+    for &drive_letter in drives {
+        match request_volume_handle(drive_letter) {
+            Ok(handle) => {
+                // Deposit the broker's (elevated, overlapped) volume handle in
+                // the uffs-mft registry; the subsequent `VolumeHandle::open`
+                // for this drive adopts it instead of calling `CreateFileW`
+                // (which a non-elevated daemon can't do).  This is what makes
+                // the broker path actually load the MFT — previously the
+                // handle was fetched and dropped, so the reader fell back to a
+                // direct open and failed with access-denied.
+                uffs_mft::register_broker_handle(drive_letter, handle);
+                tracing::info!(drive = %drive_letter, handle, "Registered broker volume handle");
+            }
+            Err(broker_err) => {
+                tracing::warn!(
+                    drive = %drive_letter,
+                    error = %broker_err,
+                    "Access Broker handle request FAILED — falling back to direct (elevated) open"
+                );
+            }
+        }
+    }
+}

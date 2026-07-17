@@ -663,14 +663,47 @@ impl VolumeHandle {
         Self::from_adopted_handle(handle, volume)
     }
 
-    /// Build a broker-backed `VolumeHandle` from an already-duplicated,
-    /// caller-owned volume `handle` (the output of
-    /// [`duplicate_registered_handle`] / [`try_adopt_broker_handle`]).
+    /// Reconstruct a `VolumeHandle` from a raw handle this process already
+    /// owns an independent duplicate of — the `u64` produced by
+    /// [`Self::duplicate`] on the calling thread, carried across a
+    /// `spawn_blocking` boundary (a `HANDLE` isn't `Send`; `expose_provenance`/
+    /// `with_exposed_provenance_mut` is this codebase's established way to
+    /// smuggle one across as a plain integer — see `persistence_capture.rs`).
+    ///
+    /// This is the fix for the async
+    /// `read_all_index`/`read_index_with_progress` entry points
+    /// (`reader/index_read.rs`), which used to call [`Self::open`] fresh
+    /// inside their `spawn_blocking` closure — silently re-opening the
+    /// *live* `\\.\<letter>:` volume even when the original reader was
+    /// constructed via [`Self::open_device_path`] against a VSS
+    /// snapshot device, defeating point-in-time consistency entirely.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError`] if the volume descriptor cannot be read from
+    /// the reconstructed handle.
+    #[cfg(windows)]
+    pub(crate) fn from_duplicated_handle(
+        raw_handle: u64,
+        volume: super::DriveLetter,
+    ) -> Result<Self> {
+        let handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
+            usize::try_from(raw_handle).unwrap_or(0),
+        ));
+        Self::from_adopted_handle(handle, volume)
+    }
+
+    /// Build a `VolumeHandle` from an already-duplicated, caller-owned
+    /// volume `handle` (the output of [`duplicate_registered_handle`] /
+    /// [`try_adopt_broker_handle`] / [`Self::from_duplicated_handle`]).
     ///
     /// Reads the volume descriptor from the handle and marks the result
     /// `broker_backed` so [`Self::open_overlapped_handle`] duplicates the
-    /// handle rather than re-opening `\\.\X:`.  Shared by [`Self::open`]'s
-    /// fast-path and [`Self::from_broker_handle`] so the descriptor read +
+    /// handle rather than re-opening `\\.\X:` — correct regardless of
+    /// whether the handle actually came from the broker or was duplicated
+    /// from this same process's own earlier `open`/`open_device_path`.
+    /// Shared by [`Self::open`]'s fast-path, [`Self::from_broker_handle`],
+    /// and [`Self::from_duplicated_handle`] so the descriptor read +
     /// `broker_backed` construction live in one place.
     ///
     /// # Errors
@@ -680,7 +713,7 @@ impl VolumeHandle {
     #[cfg(windows)]
     fn from_adopted_handle(handle: HANDLE, volume: super::DriveLetter) -> Result<Self> {
         let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
-        tracing::info!(drive = %volume, "Adopted Access Broker volume handle for MFT read");
+        tracing::info!(drive = %volume, "Adopted an already-open volume handle for MFT read");
         Ok(Self {
             handle,
             volume,
@@ -799,7 +832,7 @@ impl VolumeHandle {
         // access-denied).  The broker handle is already overlapped, so hand
         // back an independent duplicate the caller can close on its own.
         if self.broker_backed {
-            return self.duplicate_broker_handle();
+            return self.duplicate();
         }
 
         let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
@@ -828,16 +861,23 @@ impl VolumeHandle {
         })
     }
 
-    /// Duplicate the adopted broker handle into a fresh, independently-owned
-    /// overlapped handle for the bulk MFT read path.
+    /// Duplicate this handle into a fresh, independently-owned handle with
+    /// the same access rights and mode (`DUPLICATE_SAME_ACCESS`) —
+    /// `self.handle` stays intact (for the volume-data queries and for
+    /// `Drop`), and the caller owns the returned duplicate.
     ///
-    /// Same-process `DuplicateHandle` with `DUPLICATE_SAME_ACCESS` clones the
-    /// access rights and the `FILE_FLAG_OVERLAPPED` mode of the broker handle;
-    /// the caller closes the returned handle, leaving `self.handle` intact for
-    /// the volume-data queries and for `Drop`.
+    /// Used by [`Self::open_overlapped_handle`]'s broker-backed branch,
+    /// and by the async `read_all_index`/`read_index_with_progress`
+    /// entry points (`reader/index_read.rs`) to carry an already-open
+    /// handle — e.g. a VSS snapshot device handle from
+    /// [`Self::open_device_path`] — across a `spawn_blocking` boundary.
+    /// Re-opening `\\.\<letter>:` fresh inside that closure (the
+    /// previous approach) silently read the *live* volume even when
+    /// this reader was constructed from a snapshot device, defeating
+    /// the whole point of a point-in-time read.
     #[cfg(windows)]
     #[expect(unsafe_code, reason = "FFI: DuplicateHandle / GetCurrentProcess")]
-    fn duplicate_broker_handle(&self) -> Result<HANDLE> {
+    pub(crate) fn duplicate(&self) -> Result<HANDLE> {
         use windows::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
         use windows::Win32::System::Threading::GetCurrentProcess;
 

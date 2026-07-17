@@ -5,10 +5,22 @@
 //!
 //! Spawns `uffs-content-reader --device <path>=<snapshot_lease_id> ...`
 //! once per job — mirrors [`super::ephemeral_daemon`]'s spawn model, but
-//! for the content-reading phase rather than target selection — connects
-//! to its fixed `READER_PIPE_NAME`, and sends framed
-//! `ReadRequest`/`ReadResponse` messages over that one persistent
-//! connection for the whole job.
+//! for the content-reading phase rather than target selection — and
+//! opens **one persistent connection per leased drive** to its fixed
+//! `READER_PIPE_NAME`, sending framed `ReadRequest`/`ReadResponse`
+//! messages over whichever connection matches a read's
+//! `snapshot_lease_id`.
+//!
+//! One connection per drive, not one shared connection for the whole
+//! job: a `Mutex`-guarded connection serializes every read that uses
+//! it, so a single shared connection would serialize reads for
+//! genuinely independent physical drives behind each other for no
+//! reason. Keying connections by `snapshot_lease_id` means reads for
+//! different drives never contend on the same mutex, while reads for
+//! the *same* drive still serialize behind that drive's own
+//! connection (reasonable — extending to more than one connection per
+//! drive is a small follow-up if a single volume's own queue depth
+//! turns out to matter).
 //!
 //! Mirrors [`super::snapshot_client`]'s connect style (plain
 //! `std::fs::OpenOptions` + `Read`/`Write`) and wire framing
@@ -17,6 +29,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
+use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -36,19 +49,21 @@ const CONNECT_RETRY_BUDGET: Duration = Duration::from_secs(10);
 /// Delay between connect retries.
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
-/// A running `uffs-content-reader` process + its live pipe connection,
-/// held for the whole job's content-reading phase.
+/// A running `uffs-content-reader` process + its live pipe connections
+/// (one per leased drive), held for the whole job's content-reading
+/// phase.
 pub(crate) struct ContentReader {
     /// The spawned `uffs-content-reader` child process. Killed on
     /// [`Self::shutdown`]/[`Drop`] — this process spawned it, so a
     /// direct kill is simplest and correct (mirrors
     /// [`super::ephemeral_daemon::EphemeralDaemon::shutdown`]).
     child: Child,
-    /// The one persistent pipe connection this job's whole
-    /// content-reading phase shares. `Mutex`-guarded so `read_at` can
-    /// take `&self` (the `ContentSource` trait's shape) while still
-    /// mutating the connection.
-    pipe: Mutex<std::fs::File>,
+    /// One persistent pipe connection per leased drive, keyed by
+    /// `snapshot_lease_id` — see the module doc comment for why this is
+    /// per-drive rather than one shared connection. `Mutex`-guarded so
+    /// `read_at` can take `&self` (the `ContentSource` trait's shape)
+    /// while still mutating a connection.
+    connections: HashMap<u64, Mutex<std::fs::File>>,
     /// This job's id, echoed into every `ReadRequest`.
     job_id: [u8; 16],
     /// Monotonically increasing nonce for request/response correlation.
@@ -57,12 +72,13 @@ pub(crate) struct ContentReader {
 
 impl ContentReader {
     /// Spawn `uffs-content-reader --device <device_path>=<snapshot_lease_id>
-    /// ...` for every pair in `devices`, and connect to it.
+    /// ...` for every pair in `devices`, and open one connection per
+    /// device.
     ///
     /// # Errors
     /// Returns an error if `devices` is empty, the binary can't be
-    /// spawned, or the pipe never comes up within
-    /// [`CONNECT_RETRY_BUDGET`].
+    /// spawned, or any of the `devices.len()` connections never comes up
+    /// within [`CONNECT_RETRY_BUDGET`].
     pub(crate) fn spawn(job_id: [u8; 16], devices: &[(String, u64)]) -> Result<Self> {
         anyhow::ensure!(
             !devices.is_empty(),
@@ -84,11 +100,16 @@ impl ContentReader {
             .spawn()
             .with_context(|| format!("failed to spawn {}", exe.display()))?;
 
-        let pipe = connect_with_retry()?;
+        let mut connections = HashMap::with_capacity(devices.len());
+        for (_device_path, lease_id) in devices {
+            let pipe = connect_with_retry()
+                .with_context(|| format!("failed to open a connection for lease {lease_id}"))?;
+            connections.insert(*lease_id, Mutex::new(pipe));
+        }
 
         Ok(Self {
             child,
-            pipe: Mutex::new(pipe),
+            connections,
             job_id,
             next_nonce: AtomicU64::new(1),
         })
@@ -129,7 +150,7 @@ impl ContentReader {
             request_nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
         };
 
-        match self.round_trip(&request)? {
+        match self.round_trip(snapshot_lease_id, &request)? {
             ReadResponse::Bytes { payload, .. } => Ok(payload),
             ReadResponse::Error { code, message } => {
                 anyhow::bail!("Reader rejected read: {code:?}: {message}")
@@ -138,10 +159,16 @@ impl ContentReader {
     }
 
     /// Send one framed [`ReadRequest`] and read back one framed
-    /// [`ReadResponse`], over this job's one persistent connection.
-    fn round_trip(&self, request: &ReadRequest) -> Result<ReadResponse> {
-        let Ok(mut pipe) = self.pipe.lock() else {
-            anyhow::bail!("content reader pipe mutex poisoned");
+    /// [`ReadResponse`], over `snapshot_lease_id`'s own connection —
+    /// never contending with reads for a different drive.
+    fn round_trip(&self, snapshot_lease_id: u64, request: &ReadRequest) -> Result<ReadResponse> {
+        let connection = self.connections.get(&snapshot_lease_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no content reader connection for snapshot_lease_id {snapshot_lease_id}"
+            )
+        })?;
+        let Ok(mut pipe) = connection.lock() else {
+            anyhow::bail!("content reader pipe mutex poisoned (lease {snapshot_lease_id})");
         };
         write_framed_message(&mut pipe, &request.encode())?;
         let response_bytes = read_framed_message(&mut pipe)?;

@@ -109,7 +109,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
 /// three totals (candidate count, manifest metadata bytes, streamed
 /// content bytes) disagrees with ground truth.
 pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> {
-    let (ground_truth_count, ground_truth_bytes, skipped_dirs) =
+    let (ground_truth_count, ground_truth_bytes, skipped_dirs, ground_truth_paths) =
         ground_truth_extension_totals(root, extension);
     if !skipped_dirs.is_empty() {
         tracing::warn!(
@@ -145,12 +145,17 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
 
     let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
 
-    anyhow::ensure!(
-        outcome.run_summary.candidate_count == ground_truth_count,
-        "candidate count mismatch: pipeline found {}, ground-truth disk walk found {}",
-        outcome.run_summary.candidate_count,
-        ground_truth_count
-    );
+    if outcome.run_summary.candidate_count != ground_truth_count {
+        let pipeline_paths = decode_candidate_paths(&outcome.manifest_bytes)
+            .context("failed to decode candidate paths for mismatch diagnostics")?;
+        anyhow::bail!(
+            "candidate count mismatch: pipeline found {}, ground-truth disk walk found {}\n\
+             (path, pipeline_count, ground_truth_count) for every differing path:\n{:#?}",
+            outcome.run_summary.candidate_count,
+            ground_truth_count,
+            count_mismatches(&pipeline_paths, &ground_truth_paths),
+        );
+    }
     anyhow::ensure!(
         outcome.run_summary.succeeded_count == outcome.run_summary.candidate_count,
         "not every candidate succeeded: {} of {} (failed-retryable={}, failed-terminal={}, \
@@ -196,22 +201,25 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
 /// were skipped, so a real discrepancy is still visible rather than
 /// silently swallowed.
 ///
-/// Returns `(matching_file_count, total_logical_bytes, skipped_dirs)`.
+/// Returns `(matching_file_count, total_logical_bytes, skipped_dirs,
+/// matching_paths)`.
 fn ground_truth_extension_totals(
     root: &Path,
     extension: &str,
-) -> (u64, u64, Vec<std::path::PathBuf>) {
+) -> (u64, u64, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
     let mut count: u64 = 0;
     let mut total_bytes: u64 = 0;
     let mut skipped_dirs = Vec::new();
+    let mut matching_paths = Vec::new();
     walk_tolerating_denied(
         root,
         extension,
         &mut count,
         &mut total_bytes,
         &mut skipped_dirs,
+        &mut matching_paths,
     );
-    (count, total_bytes, skipped_dirs)
+    (count, total_bytes, skipped_dirs, matching_paths)
 }
 
 /// Recursive worker for [`ground_truth_extension_totals`]. A directory
@@ -224,6 +232,7 @@ fn walk_tolerating_denied(
     count: &mut u64,
     total_bytes: &mut u64,
     skipped_dirs: &mut Vec<std::path::PathBuf>,
+    matching_paths: &mut Vec<std::path::PathBuf>,
 ) {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         skipped_dirs.push(dir.to_path_buf());
@@ -235,7 +244,14 @@ fn walk_tolerating_denied(
             continue;
         };
         if metadata.is_dir() {
-            walk_tolerating_denied(&path, extension, count, total_bytes, skipped_dirs);
+            walk_tolerating_denied(
+                &path,
+                extension,
+                count,
+                total_bytes,
+                skipped_dirs,
+                matching_paths,
+            );
         } else if metadata.is_file() {
             let matches = path
                 .extension()
@@ -244,9 +260,51 @@ fn walk_tolerating_denied(
             if matches {
                 *count += 1;
                 *total_bytes += metadata.len();
+                matching_paths.push(path);
             }
         }
     }
+}
+
+/// Decode every `CandidateRecord::path` out of a manifest, for the
+/// candidate-count-mismatch diagnostic in
+/// [`self_test_vss_query_metadata`].
+fn decode_candidate_paths(manifest_bytes: &[u8]) -> Result<Vec<std::path::PathBuf>> {
+    let mut manifest_reader = WireReader::new(manifest_bytes);
+    let header = ManifestHeader::decode(&mut manifest_reader)
+        .map_err(|err| anyhow::anyhow!("decode manifest header: {err}"))?;
+    let mut paths = Vec::with_capacity(usize::try_from(header.candidate_count).unwrap_or(0));
+    for _ in 0..header.candidate_count {
+        let record = CandidateRecord::decode(&mut manifest_reader)
+            .map_err(|err| anyhow::anyhow!("decode candidate record: {err}"))?;
+        paths.push(std::path::PathBuf::from(record.path.display_lossy()));
+    }
+    Ok(paths)
+}
+
+/// For every path whose occurrence count differs between `left` and
+/// `right`, `(path, left_count, right_count)` — for the candidate-count-
+/// mismatch diagnostic in [`self_test_vss_query_metadata`]. Counts a path
+/// appearing twice in one side but once in the other (a literal duplicate
+/// row), not just paths missing entirely from one side, since that's
+/// exactly the shape a merge/dedup bug would produce.
+fn count_mismatches(
+    left: &[std::path::PathBuf],
+    right: &[std::path::PathBuf],
+) -> Vec<(std::path::PathBuf, usize, usize)> {
+    let mut counts: alloc::collections::BTreeMap<&Path, (usize, usize)> =
+        alloc::collections::BTreeMap::new();
+    for path in left {
+        counts.entry(path.as_path()).or_default().0 += 1;
+    }
+    for path in right {
+        counts.entry(path.as_path()).or_default().1 += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|(_, (left_count, right_count))| left_count != right_count)
+        .map(|(path, (left_count, right_count))| (path.to_path_buf(), left_count, right_count))
+        .collect()
 }
 
 /// Aggregate totals decoded from a job's own manifest + frame output, for

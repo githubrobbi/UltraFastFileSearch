@@ -36,6 +36,8 @@
 //! and privileged-Reader-backed ones (UFI.1/UFI.2). [`is_implemented`]
 //! tracks the latter, not this crate's own workflow logic.
 
+extern crate alloc;
+
 pub mod job;
 pub mod run;
 

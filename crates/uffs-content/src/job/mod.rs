@@ -17,6 +17,10 @@ pub mod candidate_source;
 pub mod content_source;
 pub mod intake;
 pub mod manifest_builder;
+// In-memory per-job resume state (which candidates a reconnecting
+// consumer still needs streamed). Cross-platform: pure logic, no VSS/
+// pipe dependency of its own.
+mod registry;
 // Coordinator-side client for the Broker's Snapshot Manager pipe — the
 // real VSS lease backend `candidate_source`'s VSS-backed implementation
 // calls into. Windows-only: no VSS, no Broker to talk to elsewhere,

@@ -17,6 +17,11 @@
 //! uffs-content-reader --device <SNAPSHOT_DEVICE_PATH>=<SNAPSHOT_LEASE_ID> [--device ...]
 //! ```
 
+// `reader::pipe_server` needs `alloc::sync::Arc`, so bring the crate
+// into scope (Windows-only, matching `uffs-broker`'s own convention).
+#[cfg(windows)]
+extern crate alloc;
+
 // `reader::read_plan` is cross-platform (pure logic, no I/O — see its
 // own doc comment); the rest of `reader` (`logical`, `pipe_server`,
 // dispatch) is `#[cfg(windows)]`-gated within the module itself, so

@@ -3,22 +3,37 @@
 
 //! Named-pipe server for [`READER_PIPE_NAME`].
 //!
-//! Accepts exactly one client connection (the Coordinator that spawned
-//! this process) and serves framed `ReadRequest`/`ReadResponse`
-//! messages on it until the Coordinator disconnects, then this process
-//! exits — mirrors the one-Reader-per-job lifecycle
-//! `uffs-ingest-implementation-plan.md` describes.
+//! Accepts every connection the Coordinator opens — one per leased
+//! drive, for read parallelism (see the local-only content-engine
+//! architecture doc's Reader-parallelism section) — and serves framed
+//! `ReadRequest`/`ReadResponse` messages on each independently, until
+//! that connection's own peer disconnects. Each request's disk I/O runs
+//! via [`tokio::task::spawn_blocking`], so concurrent connections'
+//! reads actually execute in parallel instead of serializing behind one
+//! current-thread runtime.
+//!
+//! This process has no "last connection closed" lifecycle logic of its
+//! own to worry about: the Coordinator kills it directly
+//! (`ContentReader::shutdown`) once the job is done, mirroring
+//! `uffs-ingest-implementation-plan.md`'s one-Reader-per-job lifecycle —
+//! the accept loop below just runs for as long as the process does,
+//! same shape as `uffs-content::serve`'s own command-pipe accept loop.
 
+use alloc::sync::Arc;
 use std::collections::HashMap;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
-use uffs_content_reader_protocol::{READER_PIPE_NAME, ReadRequest, ReadResponse};
+use uffs_content_reader_protocol::{READER_PIPE_NAME, ReadRequest, ReadResponse, ReaderErrorCode};
 
 /// Matches the Coordinator-side `MAX_REQUEST_BYTES`-style bound used
 /// for the Broker's Snapshot Manager pipe — a generous ceiling for this
 /// small, narrow API.
 const MAX_REQUEST_BYTES: u32 = 64 * 1024;
+
+/// How long to back off before retrying pipe-instance creation after a
+/// transient failure.
+const PIPE_RETRY_BACKOFF: core::time::Duration = core::time::Duration::from_millis(100);
 
 /// Run the Reader's pipe server for the process's whole lifetime.
 ///
@@ -31,46 +46,101 @@ pub(crate) fn run(devices: &HashMap<u64, String>) -> anyhow::Result<()> {
     rt.block_on(serve(devices))
 }
 
-/// Bind, accept one connection, and serve requests on it until the
-/// Coordinator disconnects — the async body of [`run`].
+/// Accept every connection the Coordinator opens, spawning one task per
+/// connection so multiple drives' reads run concurrently — the async
+/// body of [`run`].
+#[expect(
+    clippy::infinite_loop,
+    reason = "process-lifetime accept loop: this process is killed externally by the \
+              Coordinator once the job is done, matching uffs-content::serve's own \
+              command-pipe accept loop"
+)]
 async fn serve(devices: &HashMap<u64, String>) -> anyhow::Result<()> {
     let pipe_name = uffs_security::pipe::PipeName::parse(READER_PIPE_NAME)
         .map_err(|err| anyhow::anyhow!("invalid READER_PIPE_NAME: {err}"))?;
     let sd = uffs_security::pipe::OwnerOnlySd::for_current_user()
         .map_err(|err| anyhow::anyhow!("owner-only DACL build failed: {err}"))?;
+    let shared_devices = Arc::new(devices.clone());
 
-    let mut server = create_server(&pipe_name, &sd, /* first= */ true)?;
-    tracing::info!(pipe = READER_PIPE_NAME, "Reader pipe listening");
-    server.connect().await?;
-    tracing::info!("Coordinator connected");
+    let mut first_instance = true;
+    loop {
+        let mut server = match create_server(&pipe_name, &sd, first_instance) {
+            Ok(server) => server,
+            Err(err) => {
+                tracing::warn!(error = %err, "pipe instance unavailable; retrying shortly");
+                tokio::time::sleep(PIPE_RETRY_BACKOFF).await;
+                continue;
+            }
+        };
+        first_instance = false;
+        if server.connect().await.is_err() {
+            continue;
+        }
+        tracing::info!("Coordinator connected");
 
-    serve_requests(&mut server, devices).await
+        let devices_for_connection = Arc::clone(&shared_devices);
+        tokio::spawn(async move {
+            serve_requests(&mut server, &devices_for_connection).await;
+        });
+    }
 }
 
-/// Drain requests off `server` until the Coordinator disconnects (or
-/// sends a malformed request, which also ends the connection — see
-/// [`read_one_request`]). Extracted from [`serve`] to keep it under
-/// clippy's cognitive-complexity budget.
-async fn serve_requests(
-    server: &mut NamedPipeServer,
-    devices: &HashMap<u64, String>,
-) -> anyhow::Result<()> {
+/// Drain requests off `server` until the Coordinator disconnects that
+/// connection (or sends a malformed request, which also ends it — see
+/// [`read_one_request`]). Every request's blocking disk I/O runs via
+/// `spawn_blocking`, so a slow read on one connection never blocks any
+/// other connection.
+async fn serve_requests(server: &mut NamedPipeServer, devices: &Arc<HashMap<u64, String>>) {
     loop {
         match read_one_request(server).await {
             Ok(Some(request)) => {
-                let response = super::dispatch_request(&request, devices);
-                write_one_response(server, &response).await?;
+                if !respond_to_one_request(server, request, devices).await {
+                    return;
+                }
             }
             Ok(None) => {
-                tracing::info!("Coordinator disconnected — exiting");
-                return Ok(());
+                tracing::info!("Coordinator disconnected this connection");
+                return;
             }
             Err(err) => {
                 tracing::warn!(error = %err, "malformed request; closing connection");
-                return Ok(());
+                return;
             }
         }
     }
+}
+
+/// Dispatch one request and write its response. Returns `false` if the
+/// connection should close (a write failure — the read side already
+/// handles its own EOF/malformed-request cases in [`serve_requests`]).
+async fn respond_to_one_request(
+    server: &mut NamedPipeServer,
+    request: ReadRequest,
+    devices: &Arc<HashMap<u64, String>>,
+) -> bool {
+    let response = dispatch_request_blocking(request, Arc::clone(devices)).await;
+    if let Err(err) = write_one_response(server, &response).await {
+        tracing::warn!(error = %err, "failed to write response; closing connection");
+        return false;
+    }
+    true
+}
+
+/// Run [`super::dispatch_request`]'s blocking disk I/O on tokio's
+/// blocking thread pool, turning a panic there into a
+/// [`ReaderErrorCode::InternalError`] response rather than propagating
+/// it (a single request's panic must not tear down the whole
+/// connection, matching `dispatch_request`'s own never-panics contract).
+async fn dispatch_request_blocking(
+    request: ReadRequest,
+    devices: Arc<HashMap<u64, String>>,
+) -> ReadResponse {
+    tokio::task::spawn_blocking(move || super::dispatch_request(&request, &devices))
+        .await
+        .unwrap_or_else(|join_err| ReadResponse::Error {
+            code: ReaderErrorCode::InternalError,
+            message: format!("read task panicked: {join_err}"),
+        })
 }
 
 /// Read one `[u32 LE length][payload]`-framed [`ReadRequest`], or `Ok(None)`

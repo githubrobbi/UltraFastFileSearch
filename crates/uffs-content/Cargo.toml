@@ -65,6 +65,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # Job/run identifiers (`ManifestHeader::job_id`, etc.) — see `src/job/`.
 uuid.workspace = true
+# Structured logging: `workflow::run_job`'s per-candidate content-read
+# failure log (`src/job/workflow.rs`) runs in both the cross-platform
+# fake-reader pipeline and the Windows-only real VSS pipeline, so this
+# stays unconditional even though most other job-pipeline logging below
+# is Windows-only. The macros themselves have no OS-specific behavior;
+# only installing a subscriber to consume them (`tracing-subscriber`,
+# Windows-only below) is Windows-specific.
+tracing.workspace = true
 
 # Windows-only deps: the real Snapshot Manager pipe client
 # (`src/job/snapshot_client.rs`) and the real VSS+MFT-query
@@ -105,10 +113,13 @@ uffs-mft.workspace = true
 # (`src/job/reader_client.rs`, `src/job/content_source.rs`'s
 # `VssContentSource`).
 uffs-content-reader-protocol.workspace = true
-# Warn-logs best-effort lease-release failures during ephemeral-daemon
-# teardown (`src/job/vss_orchestrator.rs`) — not used anywhere else in
-# this crate today.
-tracing.workspace = true
+# Installs the subscriber consuming this crate's `tracing` events (see
+# the unconditional `tracing` dependency above), for the
+# `--self-test-*`/`--serve` entry points (`src/main.rs::init_tracing`) —
+# matches `uffs-broker`/`uffs-content-reader`'s own `fmt()` init. Scoped
+# to Windows only: every entry point that calls `init_tracing()` is
+# itself Windows-only (real VSS/Broker/ephemeral-daemon machinery).
+tracing-subscriber.workspace = true
 # Named-pipe server for the two-pipe transport (`src/serve/`) — every
 # other feature this crate needs (`rt`/`sync`/`time`/`io-util`) is
 # already unconditional at workspace scope; only `net` (named pipes)

@@ -191,10 +191,11 @@ impl<'a> VssCandidateSource<'a> {
 #[cfg(windows)]
 impl CandidateSource for VssCandidateSource<'_> {
     fn enumerate(&self, root: &Path) -> io::Result<Vec<CandidateEntry>> {
-        let mut client = self
-            .daemon
-            .connect()
-            .map_err(|err| io::Error::other(err.to_string()))?;
+        tracing::info!(root = %root.display(), "candidate enumeration: connecting to ephemeral daemon");
+        let mut client = self.daemon.connect().map_err(|err| {
+            tracing::warn!(root = %root.display(), error = %err, "candidate enumeration: connect failed");
+            io::Error::other(err.to_string())
+        })?;
 
         // Scope the search to this job's root: `path_contains` is a
         // directory-path glob matched against each record's directory
@@ -215,12 +216,21 @@ impl CandidateSource for VssCandidateSource<'_> {
             attr: self.attr.clone(),
             ..Default::default()
         };
-        let response = client
-            .search(&params)
-            .map_err(|err| io::Error::other(err.to_string()))?;
+        tracing::info!(root = %root.display(), "candidate enumeration: sending search request");
+        let response = client.search(&params).map_err(|err| {
+            tracing::warn!(root = %root.display(), error = %err, "candidate enumeration: search request failed");
+            io::Error::other(err.to_string())
+        })?;
 
         let rows = resolve_rows(response.payload)?;
+        let row_count = rows.len();
         let deduped = dedup_rows_by_file_reference_and_path(rows);
+        tracing::info!(
+            root = %root.display(),
+            rows = row_count,
+            deduped = deduped.len(),
+            "candidate enumeration: search response received"
+        );
 
         let mut entries = Vec::with_capacity(deduped.len());
         for row in deduped {

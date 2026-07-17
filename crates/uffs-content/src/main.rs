@@ -55,9 +55,10 @@ use tempfile as _;
 // thin entry point directly.
 #[cfg(windows)]
 use tokio as _;
-// Used by `uffs_content::job::vss_orchestrator` (best-effort
-// lease-release warnings), not by this thin entry point directly.
-#[cfg(windows)]
+// Used directly by `init_tracing()` on Windows; on every other platform
+// that function doesn't exist, so `tracing` (an unconditional
+// dependency — see `Cargo.toml`) goes unused by this bin directly.
+#[cfg(not(windows))]
 use tracing as _;
 #[cfg(windows)]
 use uffs_broker_protocol as _;
@@ -82,17 +83,40 @@ use uffs_security as _;
 // directly.
 use uuid as _;
 
+/// Install the `tracing` subscriber every `--self-test-*`/`--serve` entry
+/// point relies on for diagnostic output (job/lease/daemon/reader
+/// lifecycle events across `uffs_content::job`) — mirrors
+/// `uffs-broker`/`uffs-content-reader`'s own `fmt()` init exactly
+/// (`with_target(false)`, `INFO` by default) so a foreground `--serve`
+/// run's log looks the same shape as the Broker's.
+///
+/// Uses `try_init` so a test harness embedding this crate that already
+/// installed a subscriber doesn't panic.
+#[cfg(windows)]
+fn init_tracing() {
+    let init_result = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .try_init();
+    drop(init_result);
+}
+
 #[expect(
     clippy::print_stderr,
-    reason = "scaffold only: no tracing subscriber exists yet, so this is the \
-              only way the operator sees the status. Replace with `tracing::info!` \
-              once job intake wires up a subscriber, matching uffsd/uffs-broker."
+    reason = "the final ready/scaffold status lines below run whether or not a job intake \
+              flag matched, and are plain one-line user-facing status text rather than \
+              diagnostic logging — every diagnostic-logging path (self-test/benchmark/serve) \
+              now has a real tracing subscriber via init_tracing()"
 )]
 fn main() {
     // `--version` / `-V` is handled here, before any job dispatch, so it
     // works on every platform and exits 0 — matches `uffs-broker` and
     // `uffsd` so the self-update version probe can parse it uniformly.
     uffs_version::handle_version!("uffs-content");
+
+    #[cfg(windows)]
+    init_tracing();
 
     let args: Vec<String> = std::env::args().collect();
     if let Some(test_dir) = self_test_vss_playback_dir(&args) {

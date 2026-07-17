@@ -55,6 +55,10 @@ pub(crate) mod serve;
 // unit tests.
 #[cfg(test)]
 use blake3 as _;
+// Installed by `main.rs::init_tracing()` (the bin target), not used
+// directly by this library crate.
+#[cfg(windows)]
+use tracing_subscriber as _;
 use uffs_version as _;
 
 /// Whether the production, VSS-snapshot-backed pipeline is wired up.

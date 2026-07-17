@@ -96,14 +96,21 @@ impl ContentReader {
                 .arg("--device")
                 .arg(format!("{device_path}={lease_id}"));
         }
+        tracing::info!(
+            exe = %exe.display(),
+            device_count = devices.len(),
+            "content reader: spawning uffs-content-reader"
+        );
         let child = command
             .spawn()
             .with_context(|| format!("failed to spawn {}", exe.display()))?;
+        tracing::info!(pid = child.id(), "content reader: process spawned");
 
         let mut connections = HashMap::with_capacity(devices.len());
         for (_device_path, lease_id) in devices {
             let pipe = connect_with_retry()
                 .with_context(|| format!("failed to open a connection for lease {lease_id}"))?;
+            tracing::info!(lease_id, "content reader: connection established");
             connections.insert(*lease_id, Mutex::new(pipe));
         }
 
@@ -150,10 +157,28 @@ impl ContentReader {
             request_nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
         };
 
-        match self.round_trip(snapshot_lease_id, &request)? {
-            ReadResponse::Bytes { payload, .. } => Ok(payload),
-            ReadResponse::Error { code, message } => {
+        match self.round_trip(snapshot_lease_id, &request) {
+            Ok(ReadResponse::Bytes { payload, .. }) => Ok(payload),
+            Ok(ReadResponse::Error { code, message }) => {
+                tracing::warn!(
+                    snapshot_lease_id,
+                    candidate_id,
+                    logical_offset,
+                    ?code,
+                    message = %message,
+                    "content reader: read rejected"
+                );
                 anyhow::bail!("Reader rejected read: {code:?}: {message}")
+            }
+            Err(err) => {
+                tracing::warn!(
+                    snapshot_lease_id,
+                    candidate_id,
+                    logical_offset,
+                    error = %err,
+                    "content reader: round trip failed"
+                );
+                Err(err)
             }
         }
     }

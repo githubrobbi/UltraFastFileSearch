@@ -260,6 +260,7 @@ impl WindowsVssProvider {
     /// split out to keep that function's cognitive complexity down.
     fn finish_create_snapshot(
         &self,
+        volume_path: &str,
         pending: PendingSpawn,
         reader: BufReader<File>,
         writer: File,
@@ -294,14 +295,38 @@ impl WindowsVssProvider {
                 stage,
                 hresult,
                 message,
-            } => Err(VssError::CreateFailed {
-                hresult: Some(hresult),
-                message: format!("stage={stage} hresult={hresult:#x}: {message}"),
-            }),
-            HelperEvent::Released | HelperEvent::Pong => Err(VssError::CreateFailed {
-                hresult: None,
-                message: "unexpected event from helper before Ready".to_owned(),
-            }),
+            } => {
+                // Kept at `warn!` (not silently propagated): without this,
+                // an operator watching the Broker's own log sees "waiting
+                // for Ready/Failed from helper" and then nothing for this
+                // volume at all — the failure only became visible on the
+                // Coordinator side, several process hops away. See
+                // `uffs-content`'s `vss_orchestrator` for how
+                // `VSS_E_VOLUME_NOT_SUPPORTED` specifically is handled
+                // (skipped, not fatal) once it reaches that side.
+                tracing::warn!(
+                    volume = %volume_path,
+                    stage,
+                    hresult = format!("{hresult:#x}"),
+                    message = %message,
+                    "vss: snapshot creation failed"
+                );
+                Err(VssError::CreateFailed {
+                    hresult: Some(hresult),
+                    message: format!("stage={stage} hresult={hresult:#x}: {message}"),
+                })
+            }
+            HelperEvent::Released | HelperEvent::Pong => {
+                tracing::warn!(
+                    volume = %volume_path,
+                    ?event,
+                    "vss: unexpected event from helper before Ready"
+                );
+                Err(VssError::CreateFailed {
+                    hresult: None,
+                    message: "unexpected event from helper before Ready".to_owned(),
+                })
+            }
         }
     }
 }
@@ -379,7 +404,7 @@ impl VssProvider for WindowsVssProvider {
             })?;
 
         let (reader, writer, event) = wait_for_helper_ready(pipe_handle)?;
-        self.finish_create_snapshot(pending, reader, writer, event)
+        self.finish_create_snapshot(&volume_path, pending, reader, writer, event)
     }
 
     fn delete_snapshot(&self, snapshot_id: &[u8]) -> Result<(), VssError> {

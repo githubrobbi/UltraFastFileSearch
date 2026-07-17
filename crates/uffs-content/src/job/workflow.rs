@@ -123,11 +123,21 @@ where
     // job is equivalent to a `"*"` query, so its digest is fixed.
     let query_digest = digest(b"*");
 
+    tracing::info!(
+        job_id = %uuid::Uuid::from_bytes(job_id),
+        root_count = request.roots.len(),
+        concurrency = batch_size,
+        "job: starting candidate enumeration"
+    );
     let mut entries = Vec::new();
     for root in &request.roots {
         entries.extend(candidate_source.enumerate(root)?);
     }
     let candidate_count = len_as_u64(entries.len());
+    tracing::info!(
+        candidate_count,
+        "job: enumeration complete, building manifest"
+    );
 
     let built = build_manifest(job_id, source_id, query_digest, &entries)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
@@ -181,6 +191,13 @@ where
     }
     drop(failure_log);
 
+    tracing::info!(
+        succeeded = counters.succeeded_count,
+        failed_retryable = counters.failed_retryable_count,
+        failed_terminal = counters.failed_terminal_count,
+        deferred_manual = counters.deferred_manual_count,
+        "job: content reads complete, finalizing"
+    );
     emit_job_end(
         &counters,
         built.manifest_digest,
@@ -377,6 +394,13 @@ fn read_one_candidate(
                 chunk_sequence += 1;
             }
             Err(err) => {
+                tracing::warn!(
+                    candidate_id,
+                    path = %entry.relative_path.display(),
+                    offset,
+                    error = %err,
+                    "content read failed"
+                );
                 read_error = Some(err);
                 break;
             }

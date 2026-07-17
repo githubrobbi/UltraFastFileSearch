@@ -124,45 +124,14 @@ pub(crate) fn prepare_ephemeral_daemon_for_roots(
             continue; // already leased this drive for an earlier root
         }
 
-        let requested_root = utf16le_bytes(&format!("{letter}:\\"));
-        let lease_result = snapshot_client::create_lease(
-            job_id,
-            VolumeIdentity {
-                // Presently inert: the Broker's real `create_snapshot`
-                // path derives the volume to snapshot from
-                // `requested_root`, not this struct (confirmed via
-                // direct source read) — populate a real serial/GUID
-                // once the Broker actually validates against it.
-                volume_serial: 0,
-                volume_guid: Vec::new(),
-            },
-            requested_root,
-            DEFAULT_LEASE_LIFETIME_SECS,
-            DEFAULT_POLICY_ID,
-        );
-
-        let lease = match lease_result {
-            Ok(lease) => lease,
-            Err(err) if is_volume_not_supported(&err) => {
-                tracing::warn!(
-                    drive = %letter,
-                    "skipping drive: VSS does not support snapshotting this volume \
-                     (VSS_E_VOLUME_NOT_SUPPORTED — typically removable/USB media)"
-                );
-                continue;
-            }
+        match lease_one_drive(job_id, letter) {
+            Ok(Some(lease)) => leases.push(lease),
+            Ok(None) => {} // VSS_E_VOLUME_NOT_SUPPORTED — skip, already warn-logged
             Err(err) => {
                 release_all_leases(&lease_ids(&leases));
-                return Err(
-                    err.context(format!("failed to lease a VSS snapshot for drive {letter}"))
-                );
+                return Err(err);
             }
-        };
-        leases.push(LeasedDrive {
-            device_path: lease.snapshot_device_identity,
-            drive_letter: letter,
-            lease_id: lease.snapshot_lease_id,
-        });
+        }
     }
 
     let devices: Vec<(String, char)> = leases
@@ -170,13 +139,74 @@ pub(crate) fn prepare_ephemeral_daemon_for_roots(
         .map(|lease| (lease.device_path.clone(), lease.drive_letter))
         .collect();
 
+    tracing::info!(drive_count = devices.len(), "spawning ephemeral daemon");
     match EphemeralDaemon::spawn(ephemeral_id, &devices) {
-        Ok(daemon) => Ok(EphemeralJobResources { daemon, leases }),
+        Ok(daemon) => {
+            tracing::info!("ephemeral daemon ready");
+            Ok(EphemeralJobResources { daemon, leases })
+        }
         Err(err) => {
+            tracing::warn!(error = %err, "ephemeral daemon spawn failed");
             release_all_leases(&lease_ids(&leases));
             Err(err)
         }
     }
+}
+
+/// Lease a VSS snapshot for drive `letter`, split out of
+/// [`prepare_ephemeral_daemon_for_roots`]'s loop to keep that function's
+/// cognitive complexity down.
+///
+/// `Ok(None)` means VSS specifically reported
+/// `VSS_E_VOLUME_NOT_SUPPORTED` for this volume — skip it, not fatal
+/// (already warn-logged here) — see the caller's doc comment.
+///
+/// # Errors
+/// Returns any other lease failure reason.
+fn lease_one_drive(job_id: [u8; 16], letter: char) -> Result<Option<LeasedDrive>> {
+    tracing::info!(drive = %letter, "leasing VSS snapshot");
+    let requested_root = utf16le_bytes(&format!("{letter}:\\"));
+    let lease_result = snapshot_client::create_lease(
+        job_id,
+        VolumeIdentity {
+            // Presently inert: the Broker's real `create_snapshot` path
+            // derives the volume to snapshot from `requested_root`, not
+            // this struct (confirmed via direct source read) — populate
+            // a real serial/GUID once the Broker actually validates
+            // against it.
+            volume_serial: 0,
+            volume_guid: Vec::new(),
+        },
+        requested_root,
+        DEFAULT_LEASE_LIFETIME_SECS,
+        DEFAULT_POLICY_ID,
+    );
+
+    let lease = match lease_result {
+        Ok(lease) => lease,
+        Err(err) if is_volume_not_supported(&err) => {
+            tracing::warn!(
+                drive = %letter,
+                "skipping drive: VSS does not support snapshotting this volume \
+                 (VSS_E_VOLUME_NOT_SUPPORTED — typically removable/USB media)"
+            );
+            return Ok(None);
+        }
+        Err(err) => {
+            return Err(err.context(format!("failed to lease a VSS snapshot for drive {letter}")));
+        }
+    };
+    tracing::info!(
+        drive = %letter,
+        lease_id = lease.snapshot_lease_id,
+        device = %lease.snapshot_device_identity,
+        "VSS snapshot leased"
+    );
+    Ok(Some(LeasedDrive {
+        device_path: lease.snapshot_device_identity,
+        drive_letter: letter,
+        lease_id: lease.snapshot_lease_id,
+    }))
 }
 
 /// Whether `err` is a [`BrokerRejectedCreate`] specifically reporting

@@ -78,15 +78,23 @@ impl EphemeralDaemon {
                 .arg(format!("{device_path}={letter}"));
         }
 
+        tracing::info!(
+            exe = %exe.display(),
+            device_count = devices.len(),
+            "ephemeral daemon: spawning uffsd"
+        );
         let child = command
             .spawn()
             .with_context(|| format!("failed to spawn {}", exe.display()))?;
+        let pid = child.id();
 
         let instance = Self {
             child,
             endpoint: ephemeral_endpoint(ephemeral_id),
         };
+        tracing::info!(pid, endpoint = %instance.endpoint, "ephemeral daemon: waiting for Ready");
         instance.await_ready()?;
+        tracing::info!(pid, "ephemeral daemon: Ready");
         Ok(instance)
     }
 

@@ -41,8 +41,11 @@ use serde as _;
 use serde_json as _;
 #[cfg(windows)]
 use tokio as _;
-#[cfg(windows)]
+// Unconditional dependency of `uffs-content` (see that crate's
+// `Cargo.toml`) — not named directly by this cross-platform test.
 use tracing as _;
+#[cfg(windows)]
+use tracing_subscriber as _;
 #[cfg(windows)]
 use uffs_broker_protocol as _;
 #[cfg(windows)]

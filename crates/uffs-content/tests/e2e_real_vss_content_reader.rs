@@ -52,8 +52,12 @@ use serde_json as _;
 use tempfile as _;
 #[cfg(windows)]
 use tokio as _;
-#[cfg(windows)]
+// Unconditional dependency of `uffs-content` (see that crate's
+// `Cargo.toml`) — reached transitively on every platform, not named
+// directly by this thin test on either.
 use tracing as _;
+#[cfg(windows)]
+use tracing_subscriber as _;
 #[cfg(windows)]
 use uffs_broker_protocol as _;
 #[cfg(windows)]

@@ -17,7 +17,7 @@
 //! "the single highest-value unit-test target in the whole Reader"
 //! per the implementation plan.
 //!
-//! Its only real (non-test) caller, [`super::logical`], is
+//! Its only real (non-test) caller, `super::logical`, is
 //! `#[cfg(windows)]` — so on every other platform this module is
 //! genuinely unused outside its own tests, permanently (not "deferred
 //! until wired up" the way other dead-code states in this workspace

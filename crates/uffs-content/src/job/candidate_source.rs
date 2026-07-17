@@ -24,7 +24,7 @@ pub struct CandidateEntry {
     /// source uses the OS's native per-volume file identifier, which is
     /// stable across hard links the same way an NTFS file reference is.
     pub file_reference: u64,
-    /// Which VSS snapshot lease (see [`super::snapshot_client::SnapshotLease`])
+    /// Which VSS snapshot lease (see `super::snapshot_client::SnapshotLease`)
     /// this candidate's device path/file reference resolve against — a
     /// job may lease more than one drive. `0` (never a real lease id,
     /// which the Broker assigns starting from 1) for

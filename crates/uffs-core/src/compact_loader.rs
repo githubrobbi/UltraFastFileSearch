@@ -83,7 +83,7 @@ impl MftSource {
     /// that key would let the resident daemon serve snapshot data as if
     /// it were live, or (worse) let a snapshot read silently overwrite
     /// the live drive's cache. `Device` sources are always read fresh
-    /// and never cached — see [`load_mft_index_from_device`].
+    /// and never cached — see `load_mft_index_from_device`.
     #[must_use]
     pub const fn is_ephemeral_device(&self) -> bool {
         match self {

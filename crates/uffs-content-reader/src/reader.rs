@@ -14,7 +14,7 @@
 //! while it is itself elevated — there is no Broker-mediated handle
 //! duplication or Authenticode identity check on the connecting client
 //! for this pipe (unlike the Broker's Snapshot Manager pipe). The named
-//! pipe's owner-only DACL ([`uffs_security::pipe::OwnerOnlySd`]) is the
+//! pipe's owner-only DACL (`uffs_security::pipe::OwnerOnlySd`) is the
 //! security boundary: only the current elevated user's linked/primary
 //! token can open it at all. `FIRST_PIPE_INSTANCE` protects against
 //! another process squatting the well-known name first.

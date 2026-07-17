@@ -140,7 +140,7 @@ pub struct DaemonConfig {
     pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// VSS-snapshot device sources — `(device_path, drive)` pairs
     /// (Windows only). Each is read fresh via
-    /// [`uffs_core::compact::MftSource::Device`] and, unlike `drives`,
+    /// `uffs_core::compact::MftSource::Device` and, unlike `drives`,
     /// never gets a background USN journal loop (the drive letter here
     /// names which live volume the snapshot was taken *from*, not a
     /// live volume this instance should keep polling — see

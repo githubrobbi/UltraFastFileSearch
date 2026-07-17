@@ -145,6 +145,7 @@ fn apply_frame(
         | FrameType::Heartbeat
         | FrameType::JobEnd
         | FrameType::JobCancel
-        | FrameType::WindowUpdate => {}
+        | FrameType::WindowUpdate
+        | FrameType::JobResume => {}
     }
 }

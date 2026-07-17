@@ -6,8 +6,8 @@
 use super::{
     ConsumerAckStatus, ContentChunk, ContentSemantics, DigestAlgorithm, FailedOutcome,
     FailureStage, FileAck, FileBegin, FileDeferred, FileEnd, FileFailed, FrameEnvelope, FrameError,
-    FrameOrdering, FrameType, Heartbeat, JobBegin, JobCancel, JobEnd, JobStatus, Progress,
-    ReadMode, RetryClass, WindowUpdate,
+    FrameOrdering, FrameType, Heartbeat, JobBegin, JobCancel, JobEnd, JobResume, JobStatus,
+    Progress, ReadMode, RetryClass, WindowUpdate,
 };
 use crate::codec::Reader;
 use crate::error::ErrorCode;
@@ -468,11 +468,41 @@ fn progress_round_trips() {
 }
 
 #[test]
-fn heartbeat_encodes_to_empty_bytes() {
-    let payload = Heartbeat;
+fn heartbeat_round_trips_the_progress_marker() {
+    let payload = Heartbeat {
+        last_completed_candidate_id: 42,
+    };
+    let bytes = payload.encode();
+    let mut reader = Reader::new(&bytes);
+    let decoded = Heartbeat::decode(&mut reader);
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn heartbeat_with_no_progress_yet_uses_the_zero_sentinel() {
+    let payload = Heartbeat {
+        last_completed_candidate_id: 0,
+    };
+    let bytes = payload.encode();
+    let mut reader = Reader::new(&bytes);
+    let decoded = Heartbeat::decode(&mut reader);
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn heartbeat_decodes_an_old_peers_empty_payload_as_the_zero_sentinel() {
+    let decoded = Heartbeat::decode(&mut Reader::new(&[]));
+    assert_eq!(decoded, Heartbeat {
+        last_completed_candidate_id: 0
+    });
+}
+
+#[test]
+fn job_resume_encodes_to_empty_bytes() {
+    let payload = JobResume;
     assert!(payload.encode().is_empty());
-    let decoded = Heartbeat::decode();
-    assert_eq!(decoded, Heartbeat);
+    let decoded = JobResume::decode();
+    assert_eq!(decoded, JobResume);
 }
 
 #[test]

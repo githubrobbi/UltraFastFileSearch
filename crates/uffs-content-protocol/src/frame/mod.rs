@@ -29,7 +29,7 @@ mod job_begin;
 mod job_end;
 
 pub use content_chunk::ContentChunk;
-pub use control::{Heartbeat, JobCancel, Progress, WindowUpdate};
+pub use control::{Heartbeat, JobCancel, JobResume, Progress, WindowUpdate};
 pub use file_ack::FileAck;
 pub use file_begin::FileBegin;
 pub use file_deferred::FileDeferred;
@@ -109,7 +109,13 @@ pub enum FrameError {
     },
 }
 
-/// The 12 required frame types (design-doc §12.2).
+/// The 12 required frame types (design-doc §12.2), plus [`Self::JobResume`].
+///
+/// `JobResume` is a reconnect-after-a-transport-blip mechanism this
+/// crate adds on top of the design doc's transport model (the doc
+/// leaves how a consumer reconnects to an in-flight job unspecified).
+/// Empty payload: the envelope's own `job_id` already names which job to
+/// resume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum FrameType {
@@ -137,6 +143,10 @@ pub enum FrameType {
     JobCancel = 11,
     /// Consumer-initiated backpressure window increase.
     WindowUpdate = 12,
+    /// Consumer reconnect: resume streaming the job named by this
+    /// frame's envelope `job_id`, skipping any candidate already
+    /// acknowledged before the connection dropped.
+    JobResume = 13,
 }
 
 impl FrameType {

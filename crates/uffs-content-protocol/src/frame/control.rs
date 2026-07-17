@@ -51,13 +51,58 @@ impl Progress {
     }
 }
 
-/// `HEARTBEAT` payload: empty. Its purpose is solely the frame envelope
-/// arriving at all (design-doc §12.2 "prevents an idle long-file
-/// operation from looking dead").
+/// `HEARTBEAT` payload.
+///
+/// Primarily exists so the frame envelope arriving at all proves
+/// liveness (design-doc §12.2 "prevents an idle long-file operation from
+/// looking dead"), but also carries a cheap resume marker — the
+/// producer's own idea of the last candidate it completed — so a
+/// reconnecting consumer (or the producer itself, after a transport blip
+/// that didn't kill the process) has a recent, no-cost checkpoint
+/// without needing a durable ledger. Superseded by the authoritative
+/// `FILE_ACK`-driven state in `crate::job::registry` (UFFS-side, not
+/// part of this wire crate) whenever the two disagree — this is a hint,
+/// not a source of truth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Heartbeat;
+pub struct Heartbeat {
+    /// The most recent candidate id the producer finished streaming
+    /// (`FILE_END`/`FILE_FAILED`/`FILE_DEFERRED` already sent for it), or
+    /// `0` if none yet — `0` is never a real candidate id (candidate ids
+    /// are 1-based; see `manifest_builder::index_to_candidate_id`'s own
+    /// reserved-sentinel rationale).
+    pub last_completed_candidate_id: u64,
+}
 
 impl Heartbeat {
+    /// Encode this payload.
+    #[must_use]
+    pub fn encode(self) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_u64_le(&mut out, self.last_completed_candidate_id);
+        out
+    }
+
+    /// Decode this payload. A short/empty buffer (an old peer's empty
+    /// `HEARTBEAT`) decodes as `last_completed_candidate_id: 0` rather
+    /// than erroring — liveness-only heartbeats from a peer that
+    /// predates this marker are still valid heartbeats.
+    #[must_use]
+    pub fn decode(reader: &mut Reader<'_>) -> Self {
+        Self {
+            last_completed_candidate_id: reader.read_u64_le().unwrap_or(0),
+        }
+    }
+}
+
+/// `JOB_RESUME` payload: empty.
+///
+/// Sent by a reconnecting consumer to resume the job named by this
+/// frame's own `FrameEnvelope::job_id` — nothing else needs to travel in
+/// the payload, since the envelope already identifies the job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobResume;
+
+impl JobResume {
     /// Encode this payload (always empty).
     #[must_use]
     #[expect(

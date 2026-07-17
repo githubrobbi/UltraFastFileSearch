@@ -52,7 +52,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
 
     let request = JobRequest {
         source_id: "uffs-content-self-test".to_owned(),
-        root: test_dir.to_path_buf(),
+        roots: vec![test_dir.to_path_buf()],
         query: unique_name,
         ..Default::default()
     };
@@ -142,7 +142,7 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
 
     let request = JobRequest {
         source_id: "uffs-content-self-test-query".to_owned(),
-        root: root.to_path_buf(),
+        roots: vec![root.to_path_buf()],
         query: "*".to_owned(),
         ext: Some(extension.to_owned()),
         ..Default::default()

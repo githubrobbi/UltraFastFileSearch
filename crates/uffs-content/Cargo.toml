@@ -75,13 +75,18 @@ uuid.workspace = true
 # `uffs-broker-protocol`/`uffs-client`, matching `uffs-broker`'s own
 # rationale for this split (F5 / issue #205).
 #
-# Deliberately NOT depending on `uffs-mft`/`uffs-core` here: this crate
-# never reads or queries an MFT itself. It leases a VSS snapshot from
-# the Broker, spawns an ephemeral `uffsd --device <path>=<letter>`
-# instance to do the actual MFT read + query evaluation (the daemon
-# already owns all `uffs-mft`/`uffs-core` usage), and talks to it over
-# the same RPC protocol `uffs-client` already implements for every other
-# UFFS client.
+# Deliberately NOT depending on `uffs-core` here, and not on `uffs-mft`
+# for MFT reading/parsing/querying: this crate never reads or queries an
+# MFT itself. It leases a VSS snapshot from the Broker, spawns an
+# ephemeral `uffsd --device <path>=<letter>` instance to do the actual
+# MFT read + query evaluation (the daemon already owns all
+# `uffs-mft`/`uffs-core` usage for that), and talks to it over the same
+# RPC protocol `uffs-client` already implements for every other UFFS
+# client. The one `uffs-mft` dependency below is narrowly scoped to its
+# `detect_ntfs_drives` platform helper (a `GetLogicalDrives`/
+# `GetVolumeInformationW` check, no MFT involved) for the "no roots
+# given, default to every local NTFS drive" case — the same helper
+# `uffs-daemon` itself uses for its own no-`--drive`-flag default.
 [target.'cfg(windows)'.dependencies]
 # Error handling for the pipe client and real VSS-backed CandidateSource
 # (`?`/`anyhow::bail!`/`anyhow::anyhow!`) — not used anywhere else in
@@ -94,6 +99,8 @@ uffs-broker-protocol.workspace = true
 # Spawns the ephemeral `uffsd` instance and queries it over the same
 # daemon RPC protocol every other UFFS client uses.
 uffs-client.workspace = true
+# `detect_ntfs_drives()` only — see the block comment above.
+uffs-mft.workspace = true
 # Wire types for the private Coordinator<->Snapshot Reader protocol
 # (`src/job/reader_client.rs`, `src/job/content_source.rs`'s
 # `VssContentSource`).

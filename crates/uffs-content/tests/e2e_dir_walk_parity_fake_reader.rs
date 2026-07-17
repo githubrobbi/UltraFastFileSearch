@@ -50,6 +50,8 @@ use uffs_client as _;
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
 #[cfg(windows)]
+use uffs_mft as _;
+#[cfg(windows)]
 use uffs_security as _;
 use uffs_version as _;
 use uuid as _;
@@ -86,7 +88,7 @@ mod tests {
         let run_dir = tempfile::tempdir().expect("create run temp dir");
         let request = JobRequest {
             source_id: "fixture-source".to_owned(),
-            root: source_dir.path().to_path_buf(),
+            roots: vec![source_dir.path().to_path_buf()],
             query: "*".to_owned(),
             ..Default::default()
         };

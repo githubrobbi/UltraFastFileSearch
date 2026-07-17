@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-/// A request to ingest content under `root`.
+/// A request to ingest content under `roots`.
 ///
 /// This is the local job-submission format — ordinary JSON, unlike the
 /// Docenta-facing frame protocol, which uses the explicit binary codec
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 /// VSS+MFT-query-backed `super::candidate_source::VssCandidateSource`.
 /// [`super::candidate_source::DirWalkCandidateSource`] (the fake,
 /// cross-platform backend) ignores every filter field — it always
-/// matches every regular file under `root`, equivalent to `query: "*"`
+/// matches every regular file under a root, equivalent to `query: "*"`
 /// with no other filters set.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 pub struct JobRequest {
@@ -32,8 +32,17 @@ pub struct JobRequest {
     /// `ManifestHeader::source_id` is derived deterministically from this
     /// string (see [`super::workflow::run_job`]).
     pub source_id: String,
-    /// Root directory to enumerate candidates under.
-    pub root: PathBuf,
+    /// Root directories to enumerate candidates under — one job may span
+    /// multiple drives (`super::vss_orchestrator` already leases one VSS
+    /// snapshot per distinct drive letter among these and serves them all
+    /// from a single combined ephemeral daemon). Empty means "every local
+    /// NTFS drive" — see `super::vss_job::run_vss_job`'s own doc
+    /// comment for how that default is resolved (Windows-only; the
+    /// cross-platform fake `DirWalkCandidateSource` path requires an
+    /// explicit, non-empty list, since "every drive" isn't a concept a
+    /// plain directory walk has).
+    #[serde(default)]
+    pub roots: Vec<PathBuf>,
     /// UFFS name/path pattern to evaluate against the snapshot's MFT
     /// (e.g. `"*.txt"`); `"*"` matches every regular file.
     pub query: String,

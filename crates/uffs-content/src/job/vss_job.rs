@@ -15,7 +15,7 @@
 //! Windows-only: every piece this wires together already is.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
@@ -32,11 +32,17 @@ use super::workflow::{JobOutcome, run_job};
 /// produced — see [`run_job`]'s own doc comment for why this is a
 /// callback rather than a returned `Vec`.
 ///
+/// `request.roots` is used as given if non-empty; if empty, this job
+/// defaults to every local NTFS drive (`uffs_mft::detect_ntfs_drives`) —
+/// the same auto-discovery `uffsd` itself falls back to when started
+/// with no `--drive` flag.
+///
 /// # Errors
-/// Returns an error if any VSS lease, ephemeral daemon spawn, or
-/// content Reader spawn step fails, or if the underlying `run_job` call
-/// fails. Every resource successfully acquired before a failure is
-/// released best-effort before returning.
+/// Returns an error if root resolution finds no local NTFS drives to
+/// default to, any VSS lease, ephemeral daemon spawn, or content Reader
+/// spawn step fails, or if the underlying `run_job` call fails. Every
+/// resource successfully acquired before a failure is released
+/// best-effort before returning.
 pub fn run_vss_job<F>(request: &JobRequest, run_dir: &Path, emit_frame: F) -> Result<JobOutcome>
 where
     F: FnMut(Vec<u8>) -> std::io::Result<()>,
@@ -44,19 +50,26 @@ where
     let job_id = *uuid::Uuid::new_v4().as_bytes();
     let ephemeral_id = uuid::Uuid::new_v4().simple().to_string();
 
-    let resources = vss_orchestrator::prepare_ephemeral_daemon_for_roots(
-        job_id,
-        &[request.root.as_path()],
-        &ephemeral_id,
-    )
-    .context("failed to lease VSS snapshot(s) and spawn the target-selection daemon")?;
+    let roots = resolve_roots(request)?;
+    let root_paths: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+
+    let resources =
+        vss_orchestrator::prepare_ephemeral_daemon_for_roots(job_id, &root_paths, &ephemeral_id)
+            .context("failed to lease VSS snapshot(s) and spawn the target-selection daemon")?;
 
     let drive_to_lease: HashMap<char, u64> = resources
         .leases
         .iter()
         .map(|lease| (lease.drive_letter, lease.lease_id))
         .collect();
-    let candidate_source = VssCandidateSource::new(request, &resources.daemon, drive_to_lease);
+    // The resolved (never-empty) root list is what `run_job`'s own
+    // enumeration loop must iterate, not whatever `request.roots`
+    // originally said (which may have been empty, relying on the
+    // default-to-all-drives resolution above).
+    let mut resolved_request = request.clone();
+    resolved_request.roots = roots;
+    let candidate_source =
+        VssCandidateSource::new(&resolved_request, &resources.daemon, drive_to_lease);
 
     let devices_for_reader: Vec<(String, u64)> = resources
         .leases
@@ -68,7 +81,7 @@ where
     let content_source = VssContentSource::new(content_reader);
 
     let result = run_job(
-        request,
+        &resolved_request,
         &candidate_source,
         &content_source,
         run_dir,
@@ -90,4 +103,27 @@ where
     }
 
     result
+}
+
+/// Resolve `request.roots`: as given if non-empty, else one root per
+/// local NTFS drive on this machine — the consumer's "search everything"
+/// default, matching `uffsd`'s own no-`--drive`-flag fallback
+/// (`uffs_mft::detect_ntfs_drives`).
+///
+/// # Errors
+/// Returns an error if `request.roots` is empty and no local NTFS drive
+/// is found to default to.
+fn resolve_roots(request: &JobRequest) -> Result<Vec<PathBuf>> {
+    if !request.roots.is_empty() {
+        return Ok(request.roots.clone());
+    }
+    let drives = uffs_mft::detect_ntfs_drives();
+    anyhow::ensure!(
+        !drives.is_empty(),
+        "no roots given and no local NTFS drive found to default to"
+    );
+    Ok(drives
+        .into_iter()
+        .map(|letter| PathBuf::from(format!("{}:\\", letter.as_char())))
+        .collect())
 }

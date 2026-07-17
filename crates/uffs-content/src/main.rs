@@ -65,6 +65,10 @@ use uffs_content_protocol as _;
 // not by this thin entry point directly.
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
+// Used by `uffs_content::job::vss_job` (default-to-all-drives root
+// resolution), not by this thin entry point directly.
+#[cfg(windows)]
+use uffs_mft as _;
 // Used by `uffs_content::serve`'s named-pipe owner-only DACL helpers,
 // not by this thin entry point directly.
 #[cfg(windows)]

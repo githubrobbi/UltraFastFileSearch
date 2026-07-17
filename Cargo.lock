@@ -4495,6 +4495,7 @@ dependencies = [
  "uffs-client",
  "uffs-content-protocol",
  "uffs-content-reader-protocol",
+ "uffs-mft",
  "uffs-security",
  "uffs-version",
  "uuid",

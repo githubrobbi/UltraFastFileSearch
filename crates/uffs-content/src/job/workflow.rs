@@ -63,9 +63,12 @@ pub struct JobOutcome {
     pub run_summary: RunSummary,
 }
 
-/// Run one job: enumerate `request.root` via `candidate_source`, finalize
-/// a manifest, stream every candidate's content via `content_source`, and
-/// finalize the run's summary/failure log under `run_dir`.
+/// Run one job: enumerate every one of `request.roots` via
+/// `candidate_source`.
+///
+/// Finalize a manifest, stream every candidate's content via
+/// `content_source`, and finalize the run's summary/failure log under
+/// `run_dir`.
 ///
 /// Every encoded frame (`JOB_BEGIN`, then per-candidate frames, then
 /// `JOB_END`) is passed to `emit_frame` in emission order as soon as it
@@ -94,7 +97,10 @@ where
     // job is equivalent to a `"*"` query, so its digest is fixed.
     let query_digest = digest(b"*");
 
-    let entries = candidate_source.enumerate(&request.root)?;
+    let mut entries = Vec::new();
+    for root in &request.roots {
+        entries.extend(candidate_source.enumerate(root)?);
+    }
     let candidate_count = len_as_u64(entries.len());
 
     let built = build_manifest(job_id, source_id, query_digest, &entries)

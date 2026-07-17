@@ -64,6 +64,8 @@ use uffs_content_protocol as _;
 #[cfg(windows)]
 use uffs_content_reader_protocol as _;
 #[cfg(windows)]
+use uffs_mft as _;
+#[cfg(windows)]
 use uffs_security as _;
 use uffs_version as _;
 use uuid as _;

@@ -20,7 +20,6 @@ use uffs_content_protocol::codec::Reader as WireReader;
 use uffs_content_protocol::frame::{ContentChunk, FileEnd, FrameEnvelope, FrameType};
 use uffs_content_protocol::manifest::{CandidateRecord, ManifestHeader};
 
-use super::candidate_source::{CandidateSource as _, DirWalkCandidateSource};
 use super::intake::JobRequest;
 use super::vss_job::run_vss_job;
 
@@ -100,8 +99,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
 /// manifest's own `logical_size` fields must sum to the ground-truth
 /// total, and the bytes actually streamed over `CONTENT_CHUNK` frames
 /// must also sum to that same total. Ground truth comes from
-/// [`DirWalkCandidateSource`] — the same cross-platform `std::fs` walker
-/// used elsewhere in this crate — filtered to `extension`, reading the
+/// [`walk_tolerating_denied`] — a permissive `std::fs` walker reading the
 /// **live** volume rather than the job's VSS snapshot; on a quiescent
 /// drive the two are expected to match exactly.
 ///
@@ -111,10 +109,19 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
 /// three totals (candidate count, manifest metadata bytes, streamed
 /// content bytes) disagrees with ground truth.
 pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> {
-    let (ground_truth_count, ground_truth_bytes) = ground_truth_extension_totals(root, extension)
-        .with_context(|| {
-        format!("ground-truth filesystem walk of {} failed", root.display())
-    })?;
+    let (ground_truth_count, ground_truth_bytes, skipped_dirs) =
+        ground_truth_extension_totals(root, extension);
+    if !skipped_dirs.is_empty() {
+        tracing::warn!(
+            skipped_count = skipped_dirs.len(),
+            skipped = ?skipped_dirs,
+            "ground-truth walk skipped {} inaccessible director{} (e.g. OS-reserved \
+             folders) — the real MFT-based query engine reads these regardless, so a \
+             mismatch caused by this is a ground-truth walker limitation, not a pipeline bug",
+            skipped_dirs.len(),
+            if skipped_dirs.len() == 1 { "y" } else { "ies" }
+        );
+    }
     anyhow::ensure!(
         ground_truth_count > 0,
         "no *.{extension} files found under {} — nothing to validate",
@@ -178,25 +185,68 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
 /// the size of every regular file whose extension case-insensitively
 /// matches `extension`.
 ///
-/// Returns `(matching_file_count, total_logical_bytes)`.
-fn ground_truth_extension_totals(root: &Path, extension: &str) -> Result<(u64, u64)> {
-    let entries = DirWalkCandidateSource
-        .enumerate(root)
-        .with_context(|| format!("failed to walk {}", root.display()))?;
+/// Deliberately **not** [`DirWalkCandidateSource`] (used elsewhere in this
+/// crate for synthetic test fixtures, where an access-denied error is
+/// itself a bug worth failing loud on): a real, pre-existing drive
+/// routinely has OS-reserved, ACL-locked directories (`System Volume
+/// Information`, `$RECYCLE.BIN`) that plain `std::fs::read_dir` can't
+/// enter but that the real MFT-based query engine reads regardless (it
+/// never goes through filesystem permission checks). This walker treats
+/// a directory it can't enter as "skip, not fail" and reports how many
+/// were skipped, so a real discrepancy is still visible rather than
+/// silently swallowed.
+///
+/// Returns `(matching_file_count, total_logical_bytes, skipped_dirs)`.
+fn ground_truth_extension_totals(
+    root: &Path,
+    extension: &str,
+) -> (u64, u64, Vec<std::path::PathBuf>) {
     let mut count: u64 = 0;
     let mut total_bytes: u64 = 0;
-    for entry in &entries {
-        let matches = entry
-            .relative_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension));
-        if matches {
-            count += 1;
-            total_bytes += entry.logical_size;
+    let mut skipped_dirs = Vec::new();
+    walk_tolerating_denied(
+        root,
+        extension,
+        &mut count,
+        &mut total_bytes,
+        &mut skipped_dirs,
+    );
+    (count, total_bytes, skipped_dirs)
+}
+
+/// Recursive worker for [`ground_truth_extension_totals`]. A directory
+/// that can't be listed (permission denied, or any other `read_dir`
+/// error) is appended to `skipped_dirs` and skipped, rather than
+/// propagated — see that function's doc comment for why.
+fn walk_tolerating_denied(
+    dir: &Path,
+    extension: &str,
+    count: &mut u64,
+    total_bytes: &mut u64,
+    skipped_dirs: &mut Vec<std::path::PathBuf>,
+) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        skipped_dirs.push(dir.to_path_buf());
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            walk_tolerating_denied(&path, extension, count, total_bytes, skipped_dirs);
+        } else if metadata.is_file() {
+            let matches = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(extension));
+            if matches {
+                *count += 1;
+                *total_bytes += metadata.len();
+            }
         }
     }
-    Ok((count, total_bytes))
 }
 
 /// Aggregate totals decoded from a job's own manifest + frame output, for

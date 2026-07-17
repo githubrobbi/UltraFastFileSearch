@@ -4496,6 +4496,7 @@ dependencies = [
  "uffs-content-reader-protocol",
  "uffs-version",
  "uuid",
+ "winresource",
 ]
 
 [[package]]

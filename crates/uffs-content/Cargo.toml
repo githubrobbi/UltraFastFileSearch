@@ -103,6 +103,10 @@ uffs-content-reader-protocol.workspace = true
 # this crate today.
 tracing.workspace = true
 
+[build-dependencies]
+uffs-version = { workspace = true, features = ["build"] }
+winresource.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 # Independent oracle digest for the E2E dir-walk parity harness

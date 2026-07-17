@@ -709,10 +709,20 @@ fn read_pipe(pipe: windows::Win32::Foundation::HANDLE, buf: &mut [u8]) -> anyhow
 }
 
 /// Write bytes to the pipe.
+///
+/// Flushes via `FlushFileBuffers` after a successful `WriteFile`, before
+/// returning — the caller (`serve_pipe_requests`) disconnects the pipe
+/// immediately once this returns, and `WriteFile` succeeding only means
+/// the bytes reached the pipe's kernel buffer, not that the client has
+/// read them. Without the flush, `DisconnectNamedPipe` can discard a
+/// buffered-but-unread response out from under the client. Same fix as
+/// `snapshot_manager::write_framed_message`, applied here for the same
+/// reason even though this pipe's fixed 9-byte response makes the race
+/// far narrower in practice.
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "WriteFile is an FFI call")]
+#[expect(unsafe_code, reason = "WriteFile/FlushFileBuffers are FFI calls")]
 fn write_pipe(pipe: windows::Win32::Foundation::HANDLE, buf: &[u8]) -> anyhow::Result<()> {
-    use windows::Win32::Storage::FileSystem::WriteFile;
+    use windows::Win32::Storage::FileSystem::{FlushFileBuffers, WriteFile};
 
     let mut bytes_written = 0_u32;
 
@@ -722,6 +732,10 @@ fn write_pipe(pipe: windows::Win32::Foundation::HANDLE, buf: &[u8]) -> anyhow::R
 
     if let Err(win_err) = result {
         anyhow::bail!("WriteFile failed: {win_err}");
+    }
+    // SAFETY: `pipe` is the same valid, still-open pipe HANDLE written to above.
+    if let Err(win_err) = unsafe { FlushFileBuffers(pipe) } {
+        anyhow::bail!("FlushFileBuffers failed: {win_err}");
     }
     Ok(())
 }

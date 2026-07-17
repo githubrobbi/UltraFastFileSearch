@@ -464,9 +464,25 @@ fn read_exact(pipe: HANDLE, buf: &mut [u8]) -> anyhow::Result<()> {
 }
 
 /// Write a `u32`-LE-length-prefixed message to the pipe.
-#[expect(unsafe_code, reason = "WriteFile is an FFI call")]
+///
+/// Calls `FlushFileBuffers` after a successful `WriteFile` and before
+/// returning, so the caller's subsequent `disconnect_pipe` (see
+/// `serve_snapshot_pipe`) can never race the client's read of this
+/// response. `WriteFile` returning success only means the bytes were
+/// copied into the pipe's kernel buffer — it does **not** mean the
+/// client has actually read them yet. `DisconnectNamedPipe` discards
+/// any buffered-but-unread bytes immediately, which is exactly what
+/// produced `ERROR_PIPE_NOT_CONNECTED` (233) on the client's *second*
+/// `ReadFile` (the response payload, after the 4-byte length prefix
+/// already made it through) in the 2026-07-17 real-hardware VSS
+/// playback test: the length prefix is 4 bytes and gets read almost
+/// instantly, but the larger payload was still in flight when the
+/// worker thread's `disconnect_pipe` ran. `FlushFileBuffers` on a pipe
+/// server handle blocks until the client has drained everything this
+/// call wrote, closing that window.
+#[expect(unsafe_code, reason = "WriteFile/FlushFileBuffers are FFI calls")]
 fn write_framed_message(pipe: HANDLE, payload: &[u8]) -> anyhow::Result<()> {
-    use windows::Win32::Storage::FileSystem::WriteFile;
+    use windows::Win32::Storage::FileSystem::{FlushFileBuffers, WriteFile};
 
     let length = u32::try_from(payload.len()).unwrap_or(u32::MAX);
     let mut framed = Vec::with_capacity(payload.len() + 4);
@@ -479,6 +495,10 @@ fn write_framed_message(pipe: HANDLE, payload: &[u8]) -> anyhow::Result<()> {
     let result = unsafe { WriteFile(pipe, Some(&framed), Some(&raw mut bytes_written), None) };
     if let Err(win_err) = result {
         anyhow::bail!("WriteFile failed: {win_err}");
+    }
+    // SAFETY: `pipe` is the same valid, still-open pipe HANDLE written to above.
+    if let Err(win_err) = unsafe { FlushFileBuffers(pipe) } {
+        anyhow::bail!("FlushFileBuffers failed: {win_err}");
     }
     Ok(())
 }

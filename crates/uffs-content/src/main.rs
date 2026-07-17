@@ -29,6 +29,11 @@
 //!                                                 # extension-filtered query against
 //!                                                 # an existing directory, verified
 //!                                                 # against a ground-truth disk walk
+//! uffs-content --self-test-reader-benchmark <roots> [query] # Elevated: measure real
+//!                                                 # content-read throughput. <roots> is
+//!                                                 # "all" (every local NTFS drive) or a
+//!                                                 # comma-separated list; [query] defaults
+//!                                                 # to "*"
 //! ```
 
 // Reserved for the wire types the bin will emit once job intake is wired
@@ -95,6 +100,9 @@ fn main() {
     }
     if let Some((root, extension)) = self_test_vss_query_args(&args) {
         std::process::exit(run_self_test_vss_query(&root, &extension));
+    }
+    if let Some((roots, query)) = self_test_reader_benchmark_args(&args) {
+        std::process::exit(run_self_test_reader_benchmark(&roots, &query));
     }
     if args.iter().any(|arg| arg == "--serve") {
         std::process::exit(run_serve());
@@ -237,5 +245,84 @@ fn run_self_test_vss_query(root: &std::path::Path, extension: &str) -> i32 {
 /// for a symmetrical `#[cfg]` shape).
 #[cfg(not(windows))]
 const fn run_self_test_vss_query(_root: &std::path::Path, _extension: &str) -> i32 {
+    1
+}
+
+/// Return the `(roots, query)` arguments following
+/// `--self-test-reader-benchmark`, if present. `roots` is `all` (case
+/// insensitive, resolved to an empty `Vec` — every local NTFS drive, see
+/// [`uffs_content::job::vss_job::run_vss_job`]) or a comma-separated
+/// path list; `query` defaults to `"*"` if omitted.
+#[cfg(windows)]
+fn self_test_reader_benchmark_args(args: &[String]) -> Option<(Vec<std::path::PathBuf>, String)> {
+    let flag_index = args
+        .iter()
+        .position(|arg| arg == "--self-test-reader-benchmark")?;
+    let roots_arg = args.get(flag_index + 1)?;
+    let roots = if roots_arg.eq_ignore_ascii_case("all") {
+        Vec::new()
+    } else {
+        roots_arg.split(',').map(std::path::PathBuf::from).collect()
+    };
+    let query = args
+        .get(flag_index + 2)
+        .cloned()
+        .unwrap_or_else(|| "*".to_owned());
+    Some((roots, query))
+}
+
+/// Non-Windows stub: `--self-test-reader-benchmark` needs a real VSS
+/// snapshot, which doesn't exist on this platform.
+#[cfg(not(windows))]
+const fn self_test_reader_benchmark_args(
+    _args: &[String],
+) -> Option<(Vec<std::path::PathBuf>, String)> {
+    None
+}
+
+/// Run [`uffs_content::job::self_test::self_test_reader_benchmark`] and
+/// print the measured content-read throughput. Returns the process exit
+/// code (`0` pass, `1` fail).
+#[cfg(windows)]
+#[expect(
+    clippy::print_stderr,
+    reason = "one-shot CLI diagnostic invoked before any tracing subscriber exists"
+)]
+fn run_self_test_reader_benchmark(roots: &[std::path::PathBuf], query: &str) -> i32 {
+    match uffs_content::job::self_test::self_test_reader_benchmark(roots, query) {
+        Ok(report) => {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "diagnostic-only display value, not computed against further"
+            )]
+            #[expect(
+                clippy::float_arithmetic,
+                reason = "diagnostic-only unit conversion for a printed benchmark report"
+            )]
+            let content_mib = report.content_bytes as f64 / (1_024.0_f64 * 1_024.0_f64);
+            eprintln!(
+                "PASS: {} candidates ({} succeeded) — {:.2} MiB content-read in {} ms \
+                 ({:.2} MiB/s); enumeration+manifest: {} ms",
+                report.candidate_count,
+                report.succeeded_count,
+                content_mib,
+                report.content_read_ms,
+                report.throughput_mib_per_sec,
+                report.enumeration_ms,
+            );
+            0
+        }
+        Err(err) => {
+            eprintln!("FAIL: {err:#}");
+            1
+        }
+    }
+}
+
+/// Non-Windows stub, matching [`self_test_reader_benchmark_args`] always
+/// returning `None` there (so this is unreachable in practice, but kept
+/// for a symmetrical `#[cfg]` shape).
+#[cfg(not(windows))]
+const fn run_self_test_reader_benchmark(_roots: &[std::path::PathBuf], _query: &str) -> i32 {
     1
 }

@@ -195,6 +195,113 @@ pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> 
     Ok(())
 }
 
+/// One [`self_test_reader_benchmark`] run's measured results.
+#[derive(Debug, Clone, Copy)]
+pub struct ReaderBenchmarkReport {
+    /// Total candidates the manifest committed to.
+    pub candidate_count: u64,
+    /// Candidates that reached a successful terminal outcome.
+    pub succeeded_count: u64,
+    /// Sum of every `CONTENT_CHUNK.payload.len()` actually streamed.
+    pub content_bytes: u64,
+    /// Wall-clock time from job start to the first `CONTENT_CHUNK` frame:
+    /// VSS lease + ephemeral daemon spawn + enumeration + manifest
+    /// finalization, milliseconds.
+    pub enumeration_ms: u128,
+    /// Wall-clock time from the first `CONTENT_CHUNK` frame to the job
+    /// finishing — the number this benchmark exists to measure,
+    /// milliseconds.
+    pub content_read_ms: u128,
+    /// `content_bytes` / `content_read_ms`, in MiB/s. `0.0` if
+    /// `content_read_ms` is `0` (nothing to divide by — e.g. a job with
+    /// no content-bearing candidates).
+    pub throughput_mib_per_sec: f64,
+}
+
+/// Run a real VSS-backed job against `roots` (empty = every local NTFS
+/// drive — see [`super::vss_job::run_vss_job`]) evaluating `query`, and
+/// report content-read wall-clock time and throughput.
+///
+/// This is the baseline-measurement tool for judging Reader-parallelism
+/// work (see the local-only content-engine architecture doc): it
+/// deliberately isolates the *content-read phase* from VSS-lease/
+/// ephemeral-daemon/enumeration overhead by using `emit_frame` itself as
+/// the observation point — the moment the first `CONTENT_CHUNK` frame
+/// arrives marks the enumeration/content-read phase boundary — rather
+/// than adding timing instrumentation to `run_job`/`workflow` itself.
+///
+/// # Errors
+/// Returns an error if the run directory can't be created or
+/// `run_vss_job` fails.
+pub fn self_test_reader_benchmark(
+    roots: &[std::path::PathBuf],
+    query: &str,
+) -> Result<ReaderBenchmarkReport> {
+    let run_dir = std::env::temp_dir().join(format!(
+        "uffs-content-reader-benchmark-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&run_dir)
+        .with_context(|| format!("failed to create run dir {}", run_dir.display()))?;
+
+    let request = JobRequest {
+        source_id: "uffs-content-reader-benchmark".to_owned(),
+        roots: roots.to_vec(),
+        query: query.to_owned(),
+        ..Default::default()
+    };
+
+    let start = std::time::Instant::now();
+    let mut first_content_chunk_at: Option<std::time::Instant> = None;
+    let mut content_bytes: u64 = 0;
+
+    let outcome = run_vss_job(&request, &run_dir, |frame_bytes| {
+        let mut reader = WireReader::new(&frame_bytes);
+        if let Ok((envelope, payload)) = FrameEnvelope::decode(&mut reader, u64::MAX)
+            && envelope.frame_type == FrameType::ContentChunk
+        {
+            first_content_chunk_at.get_or_insert_with(std::time::Instant::now);
+            let mut payload_reader = WireReader::new(&payload);
+            if let Ok(chunk) = ContentChunk::decode(&mut payload_reader, u32::MAX) {
+                content_bytes += u64::try_from(chunk.payload.len()).unwrap_or(u64::MAX);
+            }
+        }
+        Ok(())
+    })
+    .context("run_vss_job failed")?;
+
+    let end = std::time::Instant::now();
+    let content_start = first_content_chunk_at.unwrap_or(end);
+    let enumeration_ms = content_start.duration_since(start).as_millis();
+    let content_read_ms = end.duration_since(content_start).as_millis();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "diagnostic-only throughput number for a benchmark report, not a value \
+                  anything downstream computes against — losing precision above 2^53 bytes \
+                  (8+ petabytes) or milliseconds is not a real concern here"
+    )]
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "diagnostic-only throughput ratio for a benchmark report — same precision \
+                  posture as uffs-daemon's own EMA rate arithmetic (drive_stats.rs)"
+    )]
+    let throughput_mib_per_sec = if content_read_ms > 0 {
+        (content_bytes as f64 / (1_024.0_f64 * 1_024.0_f64))
+            / (content_read_ms as f64 / 1_000.0_f64)
+    } else {
+        0.0_f64
+    };
+
+    Ok(ReaderBenchmarkReport {
+        candidate_count: outcome.run_summary.candidate_count,
+        succeeded_count: outcome.run_summary.succeeded_count,
+        content_bytes,
+        enumeration_ms,
+        content_read_ms,
+        throughput_mib_per_sec,
+    })
+}
+
 /// Independent ground truth for [`self_test_vss_query_metadata`]: walk
 /// `root` live via `std::fs` (bypassing VSS/the daemon entirely) and sum
 /// the size of every regular file whose extension case-insensitively

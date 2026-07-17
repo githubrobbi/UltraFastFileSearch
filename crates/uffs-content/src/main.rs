@@ -133,8 +133,20 @@ fn main() {
     if let Some((root, extension)) = self_test_vss_query_args(&args) {
         std::process::exit(run_self_test_vss_query(&root, &extension));
     }
-    if let Some((roots, query)) = self_test_reader_benchmark_args(&args) {
-        std::process::exit(run_self_test_reader_benchmark(&roots, &query));
+    match self_test_reader_benchmark_args(&args) {
+        Some(Ok((roots, query))) => {
+            std::process::exit(run_self_test_reader_benchmark(&roots, &query));
+        }
+        Some(Err(positionals)) => {
+            tracing::error!(
+                ?positionals,
+                "--self-test-reader-benchmark takes exactly one bare [query] argument; \
+                 got more than one (this flag no longer takes an \"all\"/roots positional — \
+                 use --drive instead, or omit --drive entirely for every local NTFS drive)"
+            );
+            std::process::exit(1);
+        }
+        None => {}
     }
     if args.iter().any(|arg| arg == "--serve") {
         std::process::exit(run_serve());
@@ -280,6 +292,11 @@ const fn run_self_test_vss_query(_root: &std::path::Path, _extension: &str) -> i
     1
 }
 
+/// Success case: `(roots, query)`. Error case: every bare positional
+/// argument found, when there was more than the one `[query]` this flag
+/// accepts — see [`self_test_reader_benchmark_args`]'s doc comment.
+type ReaderBenchmarkArgs = Result<(Vec<std::path::PathBuf>, String), Vec<String>>;
+
 /// Return the `(roots, query)` arguments following
 /// `--self-test-reader-benchmark`, if present. `query` is the one bare
 /// (non-`--drive`) positional argument, defaulting to `"*"` if omitted.
@@ -288,26 +305,43 @@ const fn run_self_test_vss_query(_root: &std::path::Path, _extension: &str) -> i
 /// (see [`parse_drive_list`]) — resolved to `<letter>:\\` roots.
 /// Omitting `--drive` resolves to an empty `Vec` — every local NTFS
 /// drive, see [`uffs_content::job::vss_job::run_vss_job`].
+///
+/// A *second* bare positional argument (e.g. a leftover `all` from the
+/// pre-`--drive` syntax this flag used to have) is a usage error, not
+/// silently dropped: `Some(Err(_))` tells [`main`] to `tracing::error!`
+/// and exit `1` itself (this function must not call `std::process::exit`
+/// directly — `clippy::exit` reserves that to `main`), rather than
+/// quietly running the wrong query, which is exactly what used to
+/// happen here.
 #[cfg(windows)]
-fn self_test_reader_benchmark_args(args: &[String]) -> Option<(Vec<std::path::PathBuf>, String)> {
+fn self_test_reader_benchmark_args(args: &[String]) -> Option<ReaderBenchmarkArgs> {
     let flag_index = args
         .iter()
         .position(|arg| arg == "--self-test-reader-benchmark")?;
     let rest = args.get(flag_index + 1..)?;
 
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
-    let mut query: Option<String> = None;
+    let mut positionals: Vec<String> = Vec::new();
     let mut rest_iter = rest.iter();
     while let Some(arg) = rest_iter.next() {
         if arg == "--drive" {
             if let Some(value) = rest_iter.next() {
                 roots.extend(parse_drive_list(value));
             }
-        } else if query.is_none() {
-            query = Some(arg.clone());
+        } else {
+            positionals.push(arg.clone());
         }
     }
-    Some((roots, query.unwrap_or_else(|| "*".to_owned())))
+
+    if positionals.len() > 1 {
+        return Some(Err(positionals));
+    }
+
+    let query = positionals
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "*".to_owned());
+    Some(Ok((roots, query)))
 }
 
 /// Parse a comma-separated drive-letter list (each entry `C` or `C:`,
@@ -333,9 +367,7 @@ fn parse_drive_list(value: &str) -> Vec<std::path::PathBuf> {
 /// Non-Windows stub: `--self-test-reader-benchmark` needs a real VSS
 /// snapshot, which doesn't exist on this platform.
 #[cfg(not(windows))]
-const fn self_test_reader_benchmark_args(
-    _args: &[String],
-) -> Option<(Vec<std::path::PathBuf>, String)> {
+const fn self_test_reader_benchmark_args(_args: &[String]) -> Option<ReaderBenchmarkArgs> {
     None
 }
 

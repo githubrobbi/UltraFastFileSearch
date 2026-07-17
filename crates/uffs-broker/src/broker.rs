@@ -192,6 +192,7 @@ fn run_foreground() -> anyhow::Result<()> {
     init_tracing();
     tracing::info!(
         pid = std::process::id(),
+        version = %uffs_version::version_short!("uffs-broker"),
         "uffs-broker starting (foreground mode)"
     );
     warn_if_not_elevated();

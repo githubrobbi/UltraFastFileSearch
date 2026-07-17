@@ -103,33 +103,30 @@ impl RequestHandler {
             Ok(params) => params,
             Err(parse_err) => return parse_err.to_rpc_error_json(id),
         };
+        let search_started = std::time::Instant::now();
+        tracing::info!(
+            pattern = %search_params.pattern,
+            drives = ?search_params.drives,
+            path_contains = ?search_params.path_contains,
+            "search: request received"
+        );
 
-        // Auto-load missing drives from data_dir before searching.
-        if !search_params.drives.is_empty() {
-            let missing = self
-                .index
-                .ensure_drives_loaded(&search_params.drives, false)
-                .await;
-            if !missing.is_empty() {
-                tracing::warn!(
-                    missing_drives = ?missing,
-                    "Some requested drives could not be auto-loaded"
-                );
-            }
-        }
+        self.auto_load_missing_drives(&search_params.drives).await;
 
         // A `--diff <baseline>` routes to the snapshot-diff path (which may
         // early-return a JSON-RPC error); everything else is a live search.
-        let mut response = match self.search_or_diff(id, &search_params).await {
-            Ok(resp) => resp,
+        // Row count is captured up-front (by `run_search_or_diff`) for
+        // logging and threshold dispatch: both blob-packing and
+        // shmem-rows routing may replace the payload variant in-place,
+        // at which point `response.payload.row_count_hint()` returns
+        // `None` (for blob variants) or a stale value (for consumed rows).
+        let (mut response, row_count) = match self
+            .run_search_or_diff(id, &search_params, search_started)
+            .await
+        {
+            Ok(result) => result,
             Err(error_json) => return error_json,
         };
-        // Row count captured up-front for logging and threshold
-        // dispatch: both blob-packing and shmem-rows routing may
-        // replace the payload variant in-place, at which point
-        // `response.payload.row_count_hint()` returns `None` (for
-        // blob variants) or a stale value (for consumed rows).
-        let row_count = response.payload.row_count_hint().unwrap_or(0);
 
         // Path-only single-buffer fast path (see `try_pack_paths_blob`).
         // May replace `response.payload` with `InlineBlob` or `ShmemBlob`.

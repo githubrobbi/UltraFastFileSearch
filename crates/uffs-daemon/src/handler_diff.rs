@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Snapshot-diff error mapping for [`super::RequestHandler`].
+//! Snapshot-diff error mapping for [`super::RequestHandler`], plus the
+//! logged `search`-request helpers built on top of
+//! [`RequestHandler::search_or_diff`].
 //!
 //! Lifted out of `handler.rs` to keep that file under the 800-line policy
 //! ceiling. Re-attached via `#[path = "handler_diff.rs"] mod diff_handler;`, so
-//! `diff_search_response` stays an `impl RequestHandler` method the search
-//! handler calls as `self.diff_search_response(...)`.
+//! every item stays an `impl RequestHandler` method the search handler calls
+//! as `self.diff_search_response(...)` / `self.auto_load_missing_drives(...)`
+//! / `self.run_search_or_diff(...)`.
 //!
 //! The diff itself lives in `IndexManager::diff_search` (`crate::index::diff`);
 //! this only maps its [`crate::index::diff::DiffError`] setup failures onto the
@@ -33,6 +36,64 @@ impl RequestHandler {
             self.diff_search_response(id, params).await
         } else {
             Ok(self.index.search(params).await)
+        }
+    }
+
+    /// Auto-load `drives` from `data_dir` before a search, timing the
+    /// load and warn-logging any drive that couldn't be auto-loaded —
+    /// split out of `handler.rs::handle_search` to keep that function's
+    /// cognitive complexity down.
+    pub(super) async fn auto_load_missing_drives(
+        &self,
+        drives: &[uffs_mft::platform::DriveLetter],
+    ) {
+        if drives.is_empty() {
+            return;
+        }
+        let load_started = std::time::Instant::now();
+        let missing = self.index.ensure_drives_loaded(drives, false).await;
+        tracing::info!(
+            ?drives,
+            elapsed_ms = load_started.elapsed().as_millis(),
+            "search: ensure_drives_loaded complete"
+        );
+        if !missing.is_empty() {
+            tracing::warn!(
+                missing_drives = ?missing,
+                "Some requested drives could not be auto-loaded"
+            );
+        }
+    }
+
+    /// Run [`Self::search_or_diff`] for `search_params`, logging its
+    /// elapsed time and outcome (row count on success) — split out of
+    /// `handler.rs::handle_search` to keep that function's cognitive
+    /// complexity down. `started` is `handle_search`'s own request-start
+    /// timer, so the logged elapsed time covers the drive auto-load step
+    /// too, not just this call.
+    pub(super) async fn run_search_or_diff(
+        &self,
+        id: u64,
+        search_params: &SearchParams,
+        started: std::time::Instant,
+    ) -> Result<(SearchResponse, usize), String> {
+        match self.search_or_diff(id, search_params).await {
+            Ok(response) => {
+                let row_count = response.payload.row_count_hint().unwrap_or(0);
+                tracing::info!(
+                    row_count,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "search: search_or_diff complete"
+                );
+                Ok((response, row_count))
+            }
+            Err(error_json) => {
+                tracing::warn!(
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "search: search_or_diff failed"
+                );
+                Err(error_json)
+            }
         }
     }
 

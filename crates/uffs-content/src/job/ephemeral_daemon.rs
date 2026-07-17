@@ -65,10 +65,24 @@ impl EphemeralDaemon {
         );
 
         let exe = find_daemon_exe();
+        // `--stdout/--stderr(Stdio::null())` used to discard every one of
+        // uffsd's own `tracing::info!` events (it defaults to logging to
+        // stdout at `info` level — see `uffs-daemon::log_init`) — meaning
+        // none of its internal timing (e.g. a slow `search` against a
+        // freshly-loaded, uncached device source) was ever visible,
+        // however much this crate's own logging improved. `--log-file`
+        // routes it to a discoverable file instead, and `--log-level`
+        // pins the level explicitly rather than relying on uffsd's own
+        // default matching ours.
+        let log_file = std::env::temp_dir().join(format!("uffsd-ephemeral-{ephemeral_id}.log"));
         let mut command = Command::new(&exe);
         command
             .arg("--ephemeral-id")
             .arg(ephemeral_id)
+            .arg("--log-level")
+            .arg("info")
+            .arg("--log-file")
+            .arg(&log_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -81,6 +95,7 @@ impl EphemeralDaemon {
         tracing::info!(
             exe = %exe.display(),
             device_count = devices.len(),
+            log_file = %log_file.display(),
             "ephemeral daemon: spawning uffsd"
         );
         let child = command

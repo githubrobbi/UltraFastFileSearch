@@ -117,6 +117,12 @@ fn main() {
 
     #[cfg(windows)]
     init_tracing();
+    #[cfg(windows)]
+    tracing::info!(
+        pid = std::process::id(),
+        version = %uffs_version::version_short!("uffs-content"),
+        "uffs-content starting"
+    );
 
     let args: Vec<String> = std::env::args().collect();
     if let Some(test_dir) = self_test_vss_playback_dir(&args) {

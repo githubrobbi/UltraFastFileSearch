@@ -15,7 +15,7 @@ use windows::Win32::System::Threading::{
 
 use crate::pipe;
 use crate::protocol::{self, BrokerCommand, HelperEvent};
-use crate::snapshot::VssSnapshotSession;
+use crate::snapshot::{SnapshotDescriptor, VssRequestError, VssSnapshotSession};
 
 /// Parsed command-line arguments.
 struct Args {
@@ -68,6 +68,83 @@ impl Args {
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> anyhow::Result<String> {
     args.next()
         .ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))
+}
+
+/// `HRESULT`s the VSS documentation defines as transient: a fresh
+/// attempt (a brand-new `IVssBackupComponents` session, which is exactly
+/// what every [`VssSnapshotSession::create`] call already does) is
+/// expected to succeed once the underlying contention clears. Every
+/// other failure (unsupported volume, bad arguments, access denied, …)
+/// is left to fail immediately — retrying those would just waste the
+/// backoff budget on something that will never succeed.
+///
+/// - `VSS_E_PROVIDER_VETO` (`0x80042306`) — the provider couldn't currently
+///   service the request; per Microsoft's VSS requestor guidance this is one of
+///   the errors a requestor is expected to retry. Observed on real hardware
+///   from back-to-back snapshot create/release cycles on the same volume.
+/// - `VSS_E_SNAPSHOT_SET_IN_PROGRESS` (`0x80042316`) — another shadow copy
+///   operation is still in flight on this volume.
+/// - `VSS_E_HOLD_WRITES_TIMEOUT` (`0x80042317`) / `VSS_E_FLUSH_WRITES_TIMEOUT`
+///   (`0x80042318`) — the freeze/flush phase didn't complete in time.
+/// - `VSS_E_WRITERERROR_RETRYABLE` (`0x800423F3`) — a writer reported a
+///   retryable error. This requestor runs `VSS_CTX_FILE_SHARE_BACKUP` with no
+///   writer coordination (see `native/vss_shim.cpp`'s header comment), so
+///   writers should never actually be in play, but the code is retryable by
+///   definition if it ever is returned.
+const RETRYABLE_HRESULTS: [i32; 5] = [
+    0x8004_2306_u32.cast_signed(), // VSS_E_PROVIDER_VETO
+    0x8004_2316_u32.cast_signed(), // VSS_E_SNAPSHOT_SET_IN_PROGRESS
+    0x8004_2317_u32.cast_signed(), // VSS_E_HOLD_WRITES_TIMEOUT
+    0x8004_2318_u32.cast_signed(), // VSS_E_FLUSH_WRITES_TIMEOUT
+    0x8004_23F3_u32.cast_signed(), // VSS_E_WRITERERROR_RETRYABLE
+];
+
+/// Total attempts [`create_snapshot_with_retry`] makes before giving up
+/// (the first attempt plus this many retries).
+const MAX_SNAPSHOT_ATTEMPTS: u32 = 3;
+
+/// Backoff before retry attempt `N` (1-based): attempt 2 waits
+/// [`RETRY_BACKOFF_BASE`], attempt 3 waits `RETRY_BACKOFF_BASE * 2`, and
+/// so on — a short exponential backoff bounded by [`MAX_SNAPSHOT_ATTEMPTS`]
+/// so a genuinely stuck volume fails in single-digit-second multiples of
+/// this, not indefinitely.
+const RETRY_BACKOFF_BASE: core::time::Duration = core::time::Duration::from_secs(2);
+
+/// Create a `VSS_CTX_FILE_SHARE_BACKUP` snapshot of `volume_path`,
+/// retrying with backoff on the small set of `HRESULT`s VSS documents as
+/// transient ([`RETRYABLE_HRESULTS`]). Each attempt is a fully fresh
+/// [`VssSnapshotSession::create`] call — a brand-new `IVssBackupComponents`
+/// session — which is exactly what Microsoft's own guidance requires:
+/// retrying a transient VSS failure means restarting the whole sequence,
+/// never resuming mid-sequence.
+///
+/// # Errors
+/// Returns the last attempt's [`VssRequestError`] if every attempt
+/// failed, or immediately on the first attempt that fails with a
+/// non-retryable `HRESULT`.
+fn create_snapshot_with_retry(
+    volume_path: &str,
+) -> Result<(VssSnapshotSession, SnapshotDescriptor), VssRequestError> {
+    let mut backoff = RETRY_BACKOFF_BASE;
+    let mut attempt = 1_u32;
+    loop {
+        match VssSnapshotSession::create(volume_path) {
+            Ok(created) => return Ok(created),
+            Err(err)
+                if attempt < MAX_SNAPSHOT_ATTEMPTS && RETRYABLE_HRESULTS.contains(&err.hresult) =>
+            {
+                debug_log(&format!(
+                    "snapshot creation attempt {attempt}/{MAX_SNAPSHOT_ATTEMPTS} failed with \
+                     retryable hresult={:#x} (stage={}); retrying in {backoff:?}",
+                    err.hresult, err.stage
+                ));
+                std::thread::sleep(backoff);
+                backoff *= 2;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// An event the main loop reacts to — a decoded command from the
@@ -147,7 +224,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .try_clone()
         .map_err(|err| anyhow::anyhow!("failed to clone pipe handle for reading: {err}"))?;
 
-    let session = match VssSnapshotSession::create(&args.volume_path) {
+    let session = match create_snapshot_with_retry(&args.volume_path) {
         Ok((session, descriptor)) => {
             debug_log("snapshot created; writing Ready event");
             protocol::write_event(&mut writer, &HelperEvent::Ready {

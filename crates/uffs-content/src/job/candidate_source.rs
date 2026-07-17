@@ -216,7 +216,11 @@ impl CandidateSource for VssCandidateSource<'_> {
             attr: self.attr.clone(),
             ..Default::default()
         };
-        tracing::info!(root = %root.display(), "candidate enumeration: sending search request");
+        tracing::info!(
+            root = %root.display(),
+            params = %serde_json::to_string(&params).unwrap_or_else(|err| format!("<undeserializable: {err}>")),
+            "candidate enumeration: sending search request"
+        );
         let response = client.search(&params).map_err(|err| {
             tracing::warn!(root = %root.display(), error = %err, "candidate enumeration: search request failed");
             io::Error::other(err.to_string())
@@ -224,6 +228,7 @@ impl CandidateSource for VssCandidateSource<'_> {
 
         let rows = resolve_rows(response.payload)?;
         let row_count = rows.len();
+        log_first_rows(root, &rows);
         let deduped = dedup_rows_by_file_reference_and_path(rows);
         tracing::info!(
             root = %root.display(),
@@ -254,6 +259,26 @@ impl CandidateSource for VssCandidateSource<'_> {
             });
         }
         Ok(entries)
+    }
+}
+
+/// Log the first 20 raw rows exactly as the daemon returned them —
+/// *before* [`dedup_rows_by_file_reference_and_path`] touches anything —
+/// one full JSON row per log line so duplicates/corruption are visible
+/// by eye without reconstructing them from a single giant blob.
+/// Diagnostic aid for the row-count-inflation investigation (real
+/// hardware has shown search returning far more rows than the true file
+/// count for some drives, in ways the existing exact-duplicate dedup
+/// doesn't catch).
+#[cfg(windows)]
+fn log_first_rows(root: &Path, rows: &[uffs_client::protocol::response::SearchRow]) {
+    for (index, row) in rows.iter().take(20).enumerate() {
+        tracing::info!(
+            root = %root.display(),
+            index,
+            row = %serde_json::to_string(row).unwrap_or_else(|err| format!("<undeserializable: {err}>")),
+            "candidate enumeration: raw row"
+        );
     }
 }
 

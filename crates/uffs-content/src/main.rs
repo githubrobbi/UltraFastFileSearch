@@ -19,9 +19,13 @@
 //! # Usage
 //!
 //! ```bash
-//! uffs-content --version                       # Print version (also -V)
-//! uffs-content --self-test-vss-playback <dir>  # Elevated smoke test: real VSS
-//!                                               # snapshot + real Reader playback
+//! uffs-content --version                        # Print version (also -V)
+//! uffs-content --self-test-vss-playback <dir>    # Elevated smoke test: real VSS
+//!                                                 # snapshot + real Reader playback
+//! uffs-content --self-test-vss-query <root> <ext> # Elevated smoke test: real
+//!                                                 # extension-filtered query against
+//!                                                 # an existing directory, verified
+//!                                                 # against a ground-truth disk walk
 //! ```
 
 // Reserved for the wire types the bin will emit once job intake is wired
@@ -73,6 +77,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(test_dir) = self_test_vss_playback_dir(&args) {
         std::process::exit(run_self_test_vss_playback(&test_dir));
+    }
+    if let Some((root, extension)) = self_test_vss_query_args(&args) {
+        std::process::exit(run_self_test_vss_query(&root, &extension));
     }
 
     if uffs_content::is_implemented() {
@@ -130,5 +137,54 @@ fn run_self_test_vss_playback(test_dir: &std::path::Path) -> i32 {
 /// for a symmetrical `#[cfg]` shape).
 #[cfg(not(windows))]
 const fn run_self_test_vss_playback(_test_dir: &std::path::Path) -> i32 {
+    1
+}
+
+/// Return the `(root, extension)` arguments following
+/// `--self-test-vss-query`, if present.
+#[cfg(windows)]
+fn self_test_vss_query_args(args: &[String]) -> Option<(std::path::PathBuf, String)> {
+    let flag_index = args.iter().position(|arg| arg == "--self-test-vss-query")?;
+    let root = args.get(flag_index + 1).map(std::path::PathBuf::from)?;
+    let extension = args.get(flag_index + 2).cloned()?;
+    Some((root, extension))
+}
+
+/// Non-Windows stub: `--self-test-vss-query` needs a real VSS snapshot,
+/// which doesn't exist on this platform.
+#[cfg(not(windows))]
+const fn self_test_vss_query_args(_args: &[String]) -> Option<(std::path::PathBuf, String)> {
+    None
+}
+
+/// Run [`uffs_content::job::self_test::self_test_vss_query_metadata`] and
+/// print a PASS/FAIL result. Returns the process exit code (`0` pass, `1`
+/// fail).
+#[cfg(windows)]
+#[expect(
+    clippy::print_stderr,
+    reason = "one-shot CLI diagnostic invoked before any tracing subscriber exists"
+)]
+fn run_self_test_vss_query(root: &std::path::Path, extension: &str) -> i32 {
+    match uffs_content::job::self_test::self_test_vss_query_metadata(root, extension) {
+        Ok(()) => {
+            eprintln!(
+                "PASS: query metadata/content totals matched ground truth ({}, *.{extension})",
+                root.display()
+            );
+            0
+        }
+        Err(err) => {
+            eprintln!("FAIL: {err:#}");
+            1
+        }
+    }
+}
+
+/// Non-Windows stub, matching [`self_test_vss_query_args`] always
+/// returning `None` there (so this is unreachable in practice, but kept
+/// for a symmetrical `#[cfg]` shape).
+#[cfg(not(windows))]
+const fn run_self_test_vss_query(_root: &std::path::Path, _extension: &str) -> i32 {
     1
 }

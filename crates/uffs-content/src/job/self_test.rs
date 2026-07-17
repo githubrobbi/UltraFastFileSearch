@@ -18,8 +18,9 @@ use std::path::Path;
 use anyhow::{Context as _, Result};
 use uffs_content_protocol::codec::Reader as WireReader;
 use uffs_content_protocol::frame::{ContentChunk, FileEnd, FrameEnvelope, FrameType};
-use uffs_content_protocol::manifest::ManifestHeader;
+use uffs_content_protocol::manifest::{CandidateRecord, ManifestHeader};
 
+use super::candidate_source::{CandidateSource as _, DirWalkCandidateSource};
 use super::intake::JobRequest;
 use super::vss_job::run_vss_job;
 
@@ -54,6 +55,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
         source_id: "uffs-content-self-test".to_owned(),
         root: test_dir.to_path_buf(),
         query: unique_name,
+        ..Default::default()
     };
 
     let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
@@ -83,6 +85,173 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Run a real, extension-filtered query against an existing directory and
+/// verify the pipeline's reported metadata/content totals against ground
+/// truth.
+///
+/// Runs against a real drive with real files already on it — not a
+/// synthetic sample. Unlike [`self_test_vss_playback`] (one synthetic
+/// file, content-only),
+/// this validates the pipeline against however many real files of
+/// `extension` already exist under `root`: every candidate must succeed,
+/// the candidate count must match the ground-truth walk's file count, the
+/// manifest's own `logical_size` fields must sum to the ground-truth
+/// total, and the bytes actually streamed over `CONTENT_CHUNK` frames
+/// must also sum to that same total. Ground truth comes from
+/// [`DirWalkCandidateSource`] — the same cross-platform `std::fs` walker
+/// used elsewhere in this crate — filtered to `extension`, reading the
+/// **live** volume rather than the job's VSS snapshot; on a quiescent
+/// drive the two are expected to match exactly.
+///
+/// # Errors
+/// Returns an error if the ground-truth walk finds no matching files,
+/// `run_vss_job` fails, any candidate doesn't succeed, or any of the
+/// three totals (candidate count, manifest metadata bytes, streamed
+/// content bytes) disagrees with ground truth.
+pub fn self_test_vss_query_metadata(root: &Path, extension: &str) -> Result<()> {
+    let (ground_truth_count, ground_truth_bytes) = ground_truth_extension_totals(root, extension)
+        .with_context(|| {
+        format!("ground-truth filesystem walk of {} failed", root.display())
+    })?;
+    anyhow::ensure!(
+        ground_truth_count > 0,
+        "no *.{extension} files found under {} — nothing to validate",
+        root.display()
+    );
+
+    let run_dir = std::env::temp_dir().join(format!(
+        "uffs-content-query-metadata-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&run_dir)
+        .with_context(|| format!("failed to create run dir {}", run_dir.display()))?;
+
+    let request = JobRequest {
+        source_id: "uffs-content-self-test-query".to_owned(),
+        root: root.to_path_buf(),
+        query: "*".to_owned(),
+        ext: Some(extension.to_owned()),
+        ..Default::default()
+    };
+
+    let outcome = run_vss_job(&request, &run_dir).context("run_vss_job failed")?;
+
+    anyhow::ensure!(
+        outcome.run_summary.candidate_count == ground_truth_count,
+        "candidate count mismatch: pipeline found {}, ground-truth disk walk found {}",
+        outcome.run_summary.candidate_count,
+        ground_truth_count
+    );
+    anyhow::ensure!(
+        outcome.run_summary.succeeded_count == outcome.run_summary.candidate_count,
+        "not every candidate succeeded: {} of {} (failed-retryable={}, failed-terminal={}, \
+         deferred={})",
+        outcome.run_summary.succeeded_count,
+        outcome.run_summary.candidate_count,
+        outcome.run_summary.failed_retryable_count,
+        outcome.run_summary.failed_terminal_count,
+        outcome.run_summary.deferred_manual_count
+    );
+
+    let summary = summarize_query_outcome(&outcome.manifest_bytes, &outcome.frames)
+        .context("failed to decode the job's own manifest/frame output")?;
+    anyhow::ensure!(
+        summary.metadata_total_bytes == ground_truth_bytes,
+        "manifest metadata size total mismatch: pipeline reported {} bytes, ground-truth {} bytes",
+        summary.metadata_total_bytes,
+        ground_truth_bytes
+    );
+    anyhow::ensure!(
+        summary.content_total_bytes == ground_truth_bytes,
+        "streamed content byte total mismatch: pipeline streamed {} bytes, ground-truth {} bytes",
+        summary.content_total_bytes,
+        ground_truth_bytes
+    );
+
+    Ok(())
+}
+
+/// Independent ground truth for [`self_test_vss_query_metadata`]: walk
+/// `root` live via `std::fs` (bypassing VSS/the daemon entirely) and sum
+/// the size of every regular file whose extension case-insensitively
+/// matches `extension`.
+///
+/// Returns `(matching_file_count, total_logical_bytes)`.
+fn ground_truth_extension_totals(root: &Path, extension: &str) -> Result<(u64, u64)> {
+    let entries = DirWalkCandidateSource
+        .enumerate(root)
+        .with_context(|| format!("failed to walk {}", root.display()))?;
+    let mut count: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    for entry in &entries {
+        let matches = entry
+            .relative_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension));
+        if matches {
+            count += 1;
+            total_bytes += entry.logical_size;
+        }
+    }
+    Ok((count, total_bytes))
+}
+
+/// Aggregate totals decoded from a job's own manifest + frame output, for
+/// [`self_test_vss_query_metadata`].
+struct QueryOutcomeSummary {
+    /// Sum of every `CandidateRecord::logical_size` in the manifest.
+    metadata_total_bytes: u64,
+    /// Sum of every `CONTENT_CHUNK.payload.len()` actually streamed.
+    content_total_bytes: u64,
+}
+
+/// Decode a manifest describing `header.candidate_count` candidates plus
+/// their frame stream, returning both the manifest's own metadata-size
+/// total and the total bytes actually streamed over `CONTENT_CHUNK`
+/// frames — the two independent numbers [`self_test_vss_query_metadata`]
+/// cross-checks against ground truth.
+///
+/// Deliberately duplicated from [`decode_single_file_content`] rather than
+/// generalizing that one: this decoder sums across an arbitrary number of
+/// candidates and never buffers content bytes, while that one is scoped
+/// to exactly one candidate and returns its buffered content — different
+/// enough shapes that a shared abstraction would obscure both.
+fn summarize_query_outcome(
+    manifest_bytes: &[u8],
+    frames: &[Vec<u8>],
+) -> Result<QueryOutcomeSummary> {
+    let mut manifest_reader = WireReader::new(manifest_bytes);
+    let header = ManifestHeader::decode(&mut manifest_reader)
+        .map_err(|err| anyhow::anyhow!("decode manifest header: {err}"))?;
+
+    let mut metadata_total_bytes: u64 = 0;
+    for _ in 0..header.candidate_count {
+        let record = CandidateRecord::decode(&mut manifest_reader)
+            .map_err(|err| anyhow::anyhow!("decode candidate record: {err}"))?;
+        metadata_total_bytes += record.logical_size;
+    }
+
+    let mut content_total_bytes: u64 = 0;
+    for frame_bytes in frames {
+        let mut frame_reader = WireReader::new(frame_bytes);
+        let (envelope, payload) = FrameEnvelope::decode(&mut frame_reader, u64::MAX)
+            .map_err(|err| anyhow::anyhow!("decode frame envelope: {err}"))?;
+        if envelope.frame_type != FrameType::ContentChunk {
+            continue;
+        }
+        let mut payload_reader = WireReader::new(&payload);
+        let chunk = ContentChunk::decode(&mut payload_reader, u32::MAX)
+            .map_err(|err| anyhow::anyhow!("decode CONTENT_CHUNK: {err}"))?;
+        content_total_bytes += chunk.payload.len() as u64;
+    }
+
+    Ok(QueryOutcomeSummary {
+        metadata_total_bytes,
+        content_total_bytes,
+    })
 }
 
 /// Decode a manifest + frame stream that is known to describe exactly

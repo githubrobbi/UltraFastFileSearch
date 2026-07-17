@@ -139,6 +139,7 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         source_id: "test-source".to_owned(),
         root: source_dir.path().to_path_buf(),
         query: "*".to_owned(),
+        ..Default::default()
     };
 
     let outcome = run_job(

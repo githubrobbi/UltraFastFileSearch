@@ -49,8 +49,7 @@ pub fn run_vss_job(request: &JobRequest, run_dir: &Path) -> Result<JobOutcome> {
         .iter()
         .map(|lease| (lease.drive_letter, lease.lease_id))
         .collect();
-    let candidate_source =
-        VssCandidateSource::new(request.query.clone(), &resources.daemon, drive_to_lease);
+    let candidate_source = VssCandidateSource::new(request, &resources.daemon, drive_to_lease);
 
     let devices_for_reader: Vec<(String, u64)> = resources
         .leases

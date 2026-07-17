@@ -11,14 +11,22 @@ use std::path::PathBuf;
 /// Docenta-facing frame protocol, which uses the explicit binary codec
 /// (addendum §5.4).
 ///
-/// `query` carries the UFFS query expression (e.g. `"*.txt"`, or `"*"`
-/// to match everything), matching the daemon's own query grammar so the
-/// real, VSS+MFT-query-backed `CandidateSource` can forward it verbatim
-/// to an ephemeral `uffsd` instance rather than re-implementing query
-/// parsing in this crate. [`super::candidate_source::DirWalkCandidateSource`]
-/// (the fake backend) ignores this field entirely — it always matches
-/// every regular file under `root`, equivalent to `query: "*"`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+/// `query` carries the UFFS name/path pattern (glob, regex with a `>`
+/// prefix, or substring — e.g. `"*.txt"`, or `"*"` to match everything).
+/// The remaining fields mirror a narrow, deliberately curated subset of
+/// the daemon's own `SearchParams` filter surface (`uffs-client`'s
+/// `search` method — the same one the CLI's `--ext`/`--min-size`/etc.
+/// flags and `scripts/windows/api-validation.rs` exercise) so a job can
+/// express the size/extension/date-bounded queries a real content-ingest
+/// consumer (e.g. Docenta) actually needs, without this crate
+/// re-implementing query parsing. All are forwarded verbatim to an
+/// ephemeral `uffsd` instance by the real,
+/// VSS+MFT-query-backed `super::candidate_source::VssCandidateSource`.
+/// [`super::candidate_source::DirWalkCandidateSource`] (the fake,
+/// cross-platform backend) ignores every filter field — it always
+/// matches every regular file under `root`, equivalent to `query: "*"`
+/// with no other filters set.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
 pub struct JobRequest {
     /// Identifier for the source this job's candidates came from.
     /// `ManifestHeader::source_id` is derived deterministically from this
@@ -26,7 +34,32 @@ pub struct JobRequest {
     pub source_id: String,
     /// Root directory to enumerate candidates under.
     pub root: PathBuf,
-    /// UFFS query expression to evaluate against the snapshot's MFT
+    /// UFFS name/path pattern to evaluate against the snapshot's MFT
     /// (e.g. `"*.txt"`); `"*"` matches every regular file.
     pub query: String,
+    /// Comma-separated extension filter (e.g. `"txt"` or `"rs,toml,md"`).
+    /// Mirrors `SearchParams::ext`.
+    #[serde(default)]
+    pub ext: Option<String>,
+    /// Minimum file size in bytes. Mirrors `SearchParams::min_size`.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// Maximum file size in bytes. Mirrors `SearchParams::max_size`.
+    #[serde(default)]
+    pub max_size: Option<u64>,
+    /// Modified-time lower bound (e.g. `"7d"`, `"24h"`, `"2026-01-15"`).
+    /// Mirrors `SearchParams::newer`.
+    #[serde(default)]
+    pub newer: Option<String>,
+    /// Modified-time upper bound. Mirrors `SearchParams::older`.
+    #[serde(default)]
+    pub older: Option<String>,
+    /// Exclude glob pattern (e.g. `"backup*"`). Mirrors
+    /// `SearchParams::exclude`.
+    #[serde(default)]
+    pub exclude: Option<String>,
+    /// Attribute filter spec (e.g. `"hidden,compressed,!system"`).
+    /// Mirrors `SearchParams::attr`.
+    #[serde(default)]
+    pub attr: Option<String>,
 }

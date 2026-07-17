@@ -84,6 +84,7 @@ mod tests {
             source_id: "fixture-source".to_owned(),
             root: source_dir.path().to_path_buf(),
             query: "*".to_owned(),
+            ..Default::default()
         };
         let outcome = run_job(
             &request,

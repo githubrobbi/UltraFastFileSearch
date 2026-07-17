@@ -80,4 +80,33 @@ mod windows_tests {
         uffs_content::job::self_test::self_test_vss_playback(test_dir.path())
             .expect("real VSS snapshot + Reader playback round trip must succeed");
     }
+
+    /// An extension-filtered query against a real, pre-existing directory
+    /// (an arbitrary number of real files, not a synthetic sample) must
+    /// report metadata and streamed-content totals that exactly match an
+    /// independent ground-truth filesystem walk.
+    ///
+    /// The root directory is necessarily machine-specific (a real drive
+    /// with real files already on it), so it can't be hardcoded here —
+    /// set `UFFS_CONTENT_QUERY_TEST_ROOT` (e.g. `G:\`) and, optionally,
+    /// `UFFS_CONTENT_QUERY_TEST_EXT` (default `txt`).
+    ///
+    /// # Requirements
+    /// See this file's module doc comment, plus `UFFS_CONTENT_QUERY_TEST_ROOT`
+    /// above.
+    #[test]
+    #[ignore = "requires Windows, elevation, an installed uffs-broker, \
+                uffsd/uffs-content-reader built alongside the test binary, and \
+                UFFS_CONTENT_QUERY_TEST_ROOT set to a real directory"]
+    fn real_vss_query_metadata_matches_ground_truth_disk_walk() {
+        let root = std::env::var("UFFS_CONTENT_QUERY_TEST_ROOT")
+            .expect("set UFFS_CONTENT_QUERY_TEST_ROOT to a real directory, e.g. G:\\");
+        let extension =
+            std::env::var("UFFS_CONTENT_QUERY_TEST_EXT").unwrap_or_else(|_| "txt".to_owned());
+        uffs_content::job::self_test::self_test_vss_query_metadata(
+            std::path::Path::new(&root),
+            &extension,
+        )
+        .expect("real VSS query metadata/content totals must match ground truth");
+    }
 }

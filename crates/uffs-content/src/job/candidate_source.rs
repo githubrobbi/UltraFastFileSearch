@@ -132,9 +132,27 @@ const fn file_identity(_metadata: &fs::Metadata) -> u64 {
 /// [`super::ephemeral_daemon`]'s own scoping.
 #[cfg(windows)]
 pub struct VssCandidateSource<'a> {
-    /// UFFS query expression (`JobRequest::query`), forwarded verbatim
+    /// UFFS name/path pattern (`JobRequest::query`), forwarded verbatim
     /// to the daemon as `SearchParams::pattern`.
-    query: String,
+    pattern: String,
+    // Remaining filter fields, forwarded verbatim to the matching
+    // `SearchParams` field — see `JobRequest`'s doc comment for why
+    // this is a deliberately curated subset, not the full daemon
+    // filter surface.
+    /// Mirrors `SearchParams::ext`.
+    ext: Option<String>,
+    /// Mirrors `SearchParams::min_size`.
+    min_size: Option<u64>,
+    /// Mirrors `SearchParams::max_size`.
+    max_size: Option<u64>,
+    /// Mirrors `SearchParams::newer`.
+    newer: Option<String>,
+    /// Mirrors `SearchParams::older`.
+    older: Option<String>,
+    /// Mirrors `SearchParams::exclude`.
+    exclude: Option<String>,
+    /// Mirrors `SearchParams::attr`.
+    attr: Option<String>,
     /// The already-spawned, already-`Ready` ephemeral daemon covering
     /// every drive this job leased.
     daemon: &'a super::ephemeral_daemon::EphemeralDaemon,
@@ -147,15 +165,23 @@ pub struct VssCandidateSource<'a> {
 
 #[cfg(windows)]
 impl<'a> VssCandidateSource<'a> {
-    /// Wrap an already-spawned, already-`Ready` ephemeral daemon.
+    /// Wrap an already-spawned, already-`Ready` ephemeral daemon,
+    /// copying every filter field off `request`.
     #[must_use]
-    pub(crate) const fn new(
-        query: String,
+    pub(crate) fn new(
+        request: &super::intake::JobRequest,
         daemon: &'a super::ephemeral_daemon::EphemeralDaemon,
         drive_to_lease: std::collections::HashMap<char, u64>,
     ) -> Self {
         Self {
-            query,
+            pattern: request.query.clone(),
+            ext: request.ext.clone(),
+            min_size: request.min_size,
+            max_size: request.max_size,
+            newer: request.newer.clone(),
+            older: request.older.clone(),
+            exclude: request.exclude.clone(),
+            attr: request.attr.clone(),
             daemon,
             drive_to_lease,
         }
@@ -176,10 +202,17 @@ impl CandidateSource for VssCandidateSource<'_> {
         // needing this crate to walk anything itself.
         let root_glob = format!("{}*", root.display());
         let params = uffs_client::protocol::SearchParams {
-            pattern: self.query.clone(),
+            pattern: self.pattern.clone(),
             filter_mode: Some(uffs_client::protocol::SearchFilterMode::Files),
             path_contains: Some(root_glob),
             limit: None,
+            ext: self.ext.clone(),
+            min_size: self.min_size,
+            max_size: self.max_size,
+            newer: self.newer.clone(),
+            older: self.older.clone(),
+            exclude: self.exclude.clone(),
+            attr: self.attr.clone(),
             ..Default::default()
         };
         let response = client

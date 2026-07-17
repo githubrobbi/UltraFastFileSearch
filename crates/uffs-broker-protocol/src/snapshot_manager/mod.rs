@@ -22,7 +22,7 @@ mod codec;
 mod messages;
 
 pub use codec::SnapshotProtocolError;
-use codec::{Reader, write_i64_le, write_string_u16_prefixed};
+use codec::{Reader, write_i64_le, write_optional_i32, write_string_u16_prefixed};
 pub use messages::{
     CreateSnapshotLease, CreateSnapshotLeaseResult, DuplicateSnapshotHandle, QuerySnapshotLease,
     ReleaseSnapshotLease, RenewSnapshotLease, SnapshotLeaseState, SnapshotLeaseStatus,
@@ -149,6 +149,13 @@ pub enum SnapshotManagerResponse {
     Error {
         /// Stable error code.
         code: SnapshotManagerErrorCode,
+        /// The underlying `HRESULT`, when the failure came from a VSS
+        /// call and one is available (e.g. `VSS_E_VOLUME_NOT_SUPPORTED`
+        /// for a [`SnapshotManagerErrorCode::SnapshotCreateFailed`] on a
+        /// volume VSS doesn't support, such as removable media) — lets
+        /// callers distinguish specific, permanent VSS failure reasons
+        /// from `message`'s free text instead of string-matching it.
+        hresult: Option<i32>,
         /// Human-readable diagnostic message.
         message: String,
     },
@@ -192,9 +199,14 @@ impl SnapshotManagerResponse {
                 out.push(response_tag::STATUS);
                 out.extend_from_slice(&status.encode());
             }
-            Self::Error { code, message } => {
+            Self::Error {
+                code,
+                hresult,
+                message,
+            } => {
                 out.push(response_tag::ERROR);
                 out.push(code.encode());
+                write_optional_i32(&mut out, *hresult);
                 write_string_u16_prefixed(&mut out, message);
             }
         }
@@ -226,8 +238,13 @@ impl SnapshotManagerResponse {
                         value: u64::from(byte),
                     }
                 })?;
+                let hresult = reader.read_optional_i32()?;
                 let message = reader.read_string_u16_prefixed("message", MAX_MESSAGE_BYTES)?;
-                Ok(Self::Error { code, message })
+                Ok(Self::Error {
+                    code,
+                    hresult,
+                    message,
+                })
             }
             other => Err(SnapshotProtocolError::UnknownDiscriminant {
                 field: "response_tag",

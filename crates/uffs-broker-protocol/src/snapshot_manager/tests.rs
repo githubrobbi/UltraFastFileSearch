@@ -153,7 +153,20 @@ fn status_response_round_trips_for_every_state() {
 fn error_response_round_trips() {
     let wrapped = SnapshotManagerResponse::Error {
         code: SnapshotManagerErrorCode::LeaseNotFound,
+        hresult: None,
         message: "no such lease".to_owned(),
+    };
+    let bytes = wrapped.encode();
+    let decoded = SnapshotManagerResponse::decode(&bytes).unwrap();
+    assert_eq!(decoded, wrapped);
+}
+
+#[test]
+fn error_response_with_hresult_round_trips() {
+    let wrapped = SnapshotManagerResponse::Error {
+        code: SnapshotManagerErrorCode::SnapshotCreateFailed,
+        hresult: Some(0x8004_230C_u32.cast_signed()),
+        message: "stage=6 hresult=0x8004230c: AddToSnapshotSet failed".to_owned(),
     };
     let bytes = wrapped.encode();
     let decoded = SnapshotManagerResponse::decode(&bytes).unwrap();

@@ -180,6 +180,7 @@ fn handle_one_request(pipe: HANDLE, manager: &SnapshotLeaseManager<WindowsVssPro
         Ok(request) => dispatch_request(request, manager),
         Err(decode_err) => SnapshotManagerResponse::Error {
             code: SnapshotManagerErrorCode::InternalError,
+            hresult: None,
             message: format!("malformed request: {decode_err}"),
         },
     };
@@ -290,6 +291,7 @@ fn handle_duplicate(
     else {
         return SnapshotManagerResponse::Error {
             code: SnapshotManagerErrorCode::ReaderIdentityRejected,
+            hresult: None,
             message: "could not open the approved reader process".to_owned(),
         };
     };
@@ -297,6 +299,7 @@ fn handle_duplicate(
     if !verify_reader_identity(reader_exe.as_deref()) {
         return SnapshotManagerResponse::Error {
             code: SnapshotManagerErrorCode::ReaderIdentityRejected,
+            hresult: None,
             message: "reader process failed identity verification".to_owned(),
         };
     }
@@ -305,6 +308,7 @@ fn handle_duplicate(
         Ok(()) => SnapshotManagerResponse::Duplicated,
         Err(err) => SnapshotManagerResponse::Error {
             code: SnapshotManagerErrorCode::InternalError,
+            hresult: None,
             message: err.to_string(),
         },
     }
@@ -369,13 +373,20 @@ fn lease_error_response(err: &LeaseError) -> SnapshotManagerResponse {
         LeaseError::Vss(VssError::InvalidVolume(_)) => {
             SnapshotManagerErrorCode::VolumeValidationFailed
         }
-        LeaseError::Vss(VssError::CreateFailed(_)) => {
+        LeaseError::Vss(VssError::CreateFailed { .. }) => {
             SnapshotManagerErrorCode::SnapshotCreateFailed
         }
         LeaseError::Vss(VssError::DeleteFailed(_)) => SnapshotManagerErrorCode::InternalError,
     };
+    let hresult = match err {
+        LeaseError::Vss(VssError::CreateFailed { hresult, .. }) => *hresult,
+        LeaseError::NotFound
+        | LeaseError::NotActive
+        | LeaseError::Vss(VssError::InvalidVolume(_) | VssError::DeleteFailed(_)) => None,
+    };
     SnapshotManagerResponse::Error {
         code,
+        hresult,
         message: err.to_string(),
     }
 }

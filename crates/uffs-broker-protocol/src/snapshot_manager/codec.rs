@@ -124,6 +124,21 @@ impl<'a> Reader<'a> {
         Ok(self.read_u64_le()?.cast_signed())
     }
 
+    /// Read a little-endian `i32`.
+    pub(crate) fn read_i32_le(&mut self) -> Result<i32, SnapshotProtocolError> {
+        Ok(self.read_u32_le()?.cast_signed())
+    }
+
+    /// Read a presence-byte-prefixed optional `i32`: `0` means absent,
+    /// `1` means present followed by a little-endian `i32`.
+    pub(crate) fn read_optional_i32(&mut self) -> Result<Option<i32>, SnapshotProtocolError> {
+        if self.read_u8()? == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(self.read_i32_le()?))
+        }
+    }
+
     /// Read a `u32`-length-prefixed byte string, rejecting (before any
     /// allocation) a declared length exceeding `max_len` or the bytes
     /// actually remaining.
@@ -181,6 +196,23 @@ pub(crate) fn write_u64_le(out: &mut Vec<u8>, value: u64) {
 /// Append a little-endian `i64` to `out`.
 pub(crate) fn write_i64_le(out: &mut Vec<u8>, value: i64) {
     out.extend_from_slice(&value.cast_unsigned().to_le_bytes());
+}
+
+/// Append a little-endian `i32` to `out`.
+pub(crate) fn write_i32_le(out: &mut Vec<u8>, value: i32) {
+    out.extend_from_slice(&value.cast_unsigned().to_le_bytes());
+}
+
+/// Append a presence-byte-prefixed optional `i32` to `out`: `0` for
+/// `None`, or `1` followed by the little-endian `i32` for `Some`.
+pub(crate) fn write_optional_i32(out: &mut Vec<u8>, value: Option<i32>) {
+    match value {
+        None => out.push(0),
+        Some(present) => {
+            out.push(1);
+            write_i32_le(out, present);
+        }
+    }
 }
 
 /// Append a `u32`-length-prefixed byte string to `out`.

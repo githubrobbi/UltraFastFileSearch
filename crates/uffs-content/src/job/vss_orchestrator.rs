@@ -13,10 +13,18 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use uffs_broker_protocol::snapshot_manager::VolumeIdentity;
+use uffs_broker_protocol::snapshot_manager::{SnapshotManagerErrorCode, VolumeIdentity};
 
 use super::ephemeral_daemon::EphemeralDaemon;
-use super::snapshot_client;
+use super::snapshot_client::{self, BrokerRejectedCreate};
+
+/// `VSS_E_VOLUME_NOT_SUPPORTED` — VSS permanently refuses to snapshot
+/// this volume (observed in practice on removable/USB media). Distinct
+/// from `uffs-vss-requestor`'s `RETRYABLE_HRESULTS`: this is
+/// deliberately *not* in that list, and a job should skip the drive
+/// rather than fail outright, since it will never become supported by
+/// retrying.
+const VSS_E_VOLUME_NOT_SUPPORTED: i32 = 0x8004_230C_u32.cast_signed();
 
 /// Default VSS snapshot lease lifetime.
 ///
@@ -89,11 +97,18 @@ impl EphemeralJobResources {
 /// Coordinator already knows which drive it's snapshotting, per the
 /// user's explicit correction during design.
 ///
+/// A drive VSS permanently refuses to snapshot (`VSS_E_VOLUME_NOT_SUPPORTED`
+/// — seen in practice on removable/USB media) is skipped, not fatal: it is
+/// warn-logged and left out of the returned leases/daemon devices, so the
+/// rest of a multi-drive "all drives" job still completes. Any other lease
+/// failure still aborts the whole job.
+///
 /// # Errors
-/// Returns an error if any root has no drive-letter prefix, any lease
-/// request fails, or the ephemeral daemon fails to spawn or become
-/// ready. On error, any leases already taken out are released
-/// best-effort before returning.
+/// Returns an error if any root has no drive-letter prefix, a lease
+/// request fails for a reason other than `VSS_E_VOLUME_NOT_SUPPORTED`,
+/// or the ephemeral daemon fails to spawn or become ready. On error,
+/// any leases already taken out are released best-effort before
+/// returning.
 pub(crate) fn prepare_ephemeral_daemon_for_roots(
     job_id: [u8; 16],
     roots: &[&Path],
@@ -128,6 +143,14 @@ pub(crate) fn prepare_ephemeral_daemon_for_roots(
 
         let lease = match lease_result {
             Ok(lease) => lease,
+            Err(err) if is_volume_not_supported(&err) => {
+                tracing::warn!(
+                    drive = %letter,
+                    "skipping drive: VSS does not support snapshotting this volume \
+                     (VSS_E_VOLUME_NOT_SUPPORTED — typically removable/USB media)"
+                );
+                continue;
+            }
             Err(err) => {
                 release_all_leases(&lease_ids(&leases));
                 return Err(
@@ -154,6 +177,19 @@ pub(crate) fn prepare_ephemeral_daemon_for_roots(
             Err(err)
         }
     }
+}
+
+/// Whether `err` is a [`BrokerRejectedCreate`] specifically reporting
+/// `VSS_E_VOLUME_NOT_SUPPORTED` for a snapshot-creation failure — the
+/// one lease-failure reason a multi-drive job should skip past rather
+/// than abort on (see [`prepare_ephemeral_daemon_for_roots`]'s doc
+/// comment).
+fn is_volume_not_supported(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<BrokerRejectedCreate>()
+        .is_some_and(|rejected| {
+            rejected.code == SnapshotManagerErrorCode::SnapshotCreateFailed
+                && rejected.hresult == Some(VSS_E_VOLUME_NOT_SUPPORTED)
+        })
 }
 
 /// Extract just the lease ids from `leases`, for [`release_all_leases`].

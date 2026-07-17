@@ -54,7 +54,10 @@ impl VssProvider for FakeVssProvider {
         _requested_root: &[u8],
     ) -> Result<SnapshotHandle, VssError> {
         if self.fail_create {
-            return Err(VssError::CreateFailed("forced test failure".to_owned()));
+            return Err(VssError::CreateFailed {
+                hresult: None,
+                message: "forced test failure".to_owned(),
+            });
         }
         let id = self.next_snapshot_id.fetch_add(1, Ordering::Relaxed);
         Ok(SnapshotHandle {
@@ -105,7 +108,10 @@ fn create_failure_propagates_vss_error() {
     let err = manager
         .create_lease(&sample_volume(), b"C:\\data", 300, 0)
         .expect_err("create must fail");
-    assert!(matches!(err, LeaseError::Vss(VssError::CreateFailed(_))));
+    assert!(matches!(
+        err,
+        LeaseError::Vss(VssError::CreateFailed { .. })
+    ));
 }
 
 #[test]

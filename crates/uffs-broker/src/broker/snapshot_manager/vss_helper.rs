@@ -294,12 +294,14 @@ impl WindowsVssProvider {
                 stage,
                 hresult,
                 message,
-            } => Err(VssError::CreateFailed(format!(
-                "stage={stage} hresult={hresult:#x}: {message}"
-            ))),
-            HelperEvent::Released | HelperEvent::Pong => Err(VssError::CreateFailed(
-                "unexpected event from helper before Ready".to_owned(),
-            )),
+            } => Err(VssError::CreateFailed {
+                hresult: Some(hresult),
+                message: format!("stage={stage} hresult={hresult:#x}: {message}"),
+            }),
+            HelperEvent::Released | HelperEvent::Pong => Err(VssError::CreateFailed {
+                hresult: None,
+                message: "unexpected event from helper before Ready".to_owned(),
+            }),
         }
     }
 }
@@ -317,9 +319,10 @@ fn wait_for_helper_ready(
     tracing::info!("vss: waiting for helper to connect to the control pipe");
     if let Err(err) = connect_pipe(pipe_handle) {
         close_pipe_handle(pipe_handle);
-        return Err(VssError::CreateFailed(format!(
-            "helper did not connect to control pipe: {err}"
-        )));
+        return Err(VssError::CreateFailed {
+            hresult: None,
+            message: format!("helper did not connect to control pipe: {err}"),
+        });
     }
     tracing::info!("vss: helper connected");
 
@@ -328,16 +331,21 @@ fn wait_for_helper_ready(
     let pipe_file = unsafe { File::from_raw_handle(pipe_handle.0.cast::<core::ffi::c_void>()) };
     let writer = pipe_file
         .try_clone()
-        .map_err(|err| VssError::CreateFailed(format!("failed to clone pipe handle: {err}")))?;
+        .map_err(|err| VssError::CreateFailed {
+            hresult: None,
+            message: format!("failed to clone pipe handle: {err}"),
+        })?;
     let mut reader = BufReader::new(pipe_file);
 
     tracing::info!("vss: waiting for Ready/Failed from helper");
     let event = read_helper_event(&mut reader)
-        .map_err(|err| VssError::CreateFailed(format!("failed to read helper event: {err}")))?
-        .ok_or_else(|| {
-            VssError::CreateFailed(
-                "helper closed the control pipe before reporting readiness".to_owned(),
-            )
+        .map_err(|err| VssError::CreateFailed {
+            hresult: None,
+            message: format!("failed to read helper event: {err}"),
+        })?
+        .ok_or_else(|| VssError::CreateFailed {
+            hresult: None,
+            message: "helper closed the control pipe before reporting readiness".to_owned(),
         })?;
 
     Ok((reader, writer, event))
@@ -357,14 +365,18 @@ impl VssProvider for WindowsVssProvider {
         let pipe_name = format!(r"\\.\pipe\uffs-vss-requestor-{pipe_id:016x}");
         tracing::info!(volume = %volume_path, pipe = %pipe_name, "vss: creating control pipe");
 
-        let pipe_handle = create_control_pipe(&pipe_name).map_err(|err| {
-            VssError::CreateFailed(format!("failed to create control pipe: {err}"))
-        })?;
+        let pipe_handle =
+            create_control_pipe(&pipe_name).map_err(|err| VssError::CreateFailed {
+                hresult: None,
+                message: format!("failed to create control pipe: {err}"),
+            })?;
 
         tracing::info!(volume = %volume_path, "vss: spawning uffs-vss-requestor");
-        let pending = spawn_helper(&pipe_name, &volume_path).map_err(|err| {
-            VssError::CreateFailed(format!("failed to spawn uffs-vss-requestor: {err}"))
-        })?;
+        let pending =
+            spawn_helper(&pipe_name, &volume_path).map_err(|err| VssError::CreateFailed {
+                hresult: None,
+                message: format!("failed to spawn uffs-vss-requestor: {err}"),
+            })?;
 
         let (reader, writer, event) = wait_for_helper_ready(pipe_handle)?;
         self.finish_create_snapshot(pending, reader, writer, event)

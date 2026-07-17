@@ -27,8 +27,45 @@ use std::io::{Read as _, Write as _};
 use anyhow::Context as _;
 use uffs_broker_protocol::snapshot_manager::{
     CreateSnapshotLease, CreateSnapshotLeaseResult, ReleaseSnapshotLease, SNAPSHOT_PIPE_NAME,
-    SnapshotManagerRequest, SnapshotManagerResponse, VolumeIdentity,
+    SnapshotManagerErrorCode, SnapshotManagerRequest, SnapshotManagerResponse, VolumeIdentity,
 };
+
+/// A structured `Create` rejection from the Broker, as opposed to a
+/// transport-level failure (pipe unreachable, malformed response, …).
+///
+/// Kept separate from a plain `anyhow::bail!` string so callers (see
+/// [`super::vss_orchestrator::prepare_ephemeral_daemon_for_roots`]) can
+/// `downcast_ref` and branch on `code`/`hresult` — e.g. skipping a
+/// drive VSS permanently refuses (`VSS_E_VOLUME_NOT_SUPPORTED` for
+/// removable media) instead of string-matching `message`.
+#[derive(Debug)]
+pub(crate) struct BrokerRejectedCreate {
+    /// Stable error code the Broker reported.
+    pub(crate) code: SnapshotManagerErrorCode,
+    /// The underlying `HRESULT`, when the Broker's failure came from a
+    /// VSS call and one was available.
+    pub(crate) hresult: Option<i32>,
+    /// Human-readable diagnostic message.
+    pub(crate) message: String,
+}
+
+impl core::fmt::Display for BrokerRejectedCreate {
+    #[expect(
+        clippy::use_debug,
+        reason = "SnapshotManagerErrorCode has no Display impl (it's a wire enum, not \
+                  user-facing text) — Debug is the only formatting available, and this \
+                  is itself a diagnostic-only error message"
+    )]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Broker rejected Create: {:?}: {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl core::error::Error for BrokerRejectedCreate {}
 
 /// Matches the Broker's own `MAX_REQUEST_BYTES` — a response this large
 /// would indicate a protocol desync, not a legitimate reply.
@@ -91,9 +128,16 @@ pub(crate) fn create_lease(
             snapshot_created_at_unix_ms,
             expires_at_unix_ms,
         }),
-        SnapshotManagerResponse::Error { code, message } => {
-            anyhow::bail!("Broker rejected Create: {code:?}: {message}")
+        SnapshotManagerResponse::Error {
+            code,
+            hresult,
+            message,
+        } => Err(BrokerRejectedCreate {
+            code,
+            hresult,
+            message,
         }
+        .into()),
         other @ (SnapshotManagerResponse::Duplicated
         | SnapshotManagerResponse::Renewed { .. }
         | SnapshotManagerResponse::Released
@@ -112,7 +156,7 @@ pub(crate) fn release_lease(snapshot_lease_id: u64) -> anyhow::Result<()> {
     let request = SnapshotManagerRequest::Release(ReleaseSnapshotLease { snapshot_lease_id });
     match round_trip(&request)? {
         SnapshotManagerResponse::Released => Ok(()),
-        SnapshotManagerResponse::Error { code, message } => {
+        SnapshotManagerResponse::Error { code, message, .. } => {
             anyhow::bail!("Broker rejected Release: {code:?}: {message}")
         }
         other @ (SnapshotManagerResponse::Created(_)

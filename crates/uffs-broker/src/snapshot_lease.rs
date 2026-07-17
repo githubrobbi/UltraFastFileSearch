@@ -62,8 +62,17 @@ pub(crate) enum VssError {
     #[error("volume validation failed: {0}")]
     InvalidVolume(String),
     /// Snapshot creation failed.
-    #[error("snapshot creation failed: {0}")]
-    CreateFailed(String),
+    #[error("snapshot creation failed: {message}")]
+    CreateFailed {
+        /// The underlying `HRESULT`, when the failure came from a real
+        /// VSS call and one is available — lets callers (the Snapshot
+        /// Manager's wire layer) distinguish specific, permanent
+        /// failure reasons (e.g. `VSS_E_VOLUME_NOT_SUPPORTED` for
+        /// removable media) from this message's free text.
+        hresult: Option<i32>,
+        /// Diagnostic message.
+        message: String,
+    },
     /// Snapshot deletion failed.
     #[error("snapshot deletion failed: {0}")]
     DeleteFailed(String),

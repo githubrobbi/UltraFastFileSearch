@@ -29,11 +29,13 @@
 //!                                                 # extension-filtered query against
 //!                                                 # an existing directory, verified
 //!                                                 # against a ground-truth disk walk
-//! uffs-content --self-test-reader-benchmark <roots> [query] # Elevated: measure real
-//!                                                 # content-read throughput. <roots> is
-//!                                                 # "all" (every local NTFS drive) or a
-//!                                                 # comma-separated list; [query] defaults
-//!                                                 # to "*"
+//! uffs-content --self-test-reader-benchmark [query] [--drive C,D,E] # Elevated:
+//!                                                 # measure real content-read throughput.
+//!                                                 # [query] defaults to "*"; --drive takes
+//!                                                 # a comma-separated list (C or C: form,
+//!                                                 # matching uffs.exe's own --drive flag)
+//!                                                 # and defaults to every local NTFS drive
+//!                                                 # when omitted
 //! ```
 
 // Reserved for the wire types the bin will emit once job intake is wired
@@ -279,26 +281,53 @@ const fn run_self_test_vss_query(_root: &std::path::Path, _extension: &str) -> i
 }
 
 /// Return the `(roots, query)` arguments following
-/// `--self-test-reader-benchmark`, if present. `roots` is `all` (case
-/// insensitive, resolved to an empty `Vec` — every local NTFS drive, see
-/// [`uffs_content::job::vss_job::run_vss_job`]) or a comma-separated
-/// path list; `query` defaults to `"*"` if omitted.
+/// `--self-test-reader-benchmark`, if present. `query` is the one bare
+/// (non-`--drive`) positional argument, defaulting to `"*"` if omitted.
+/// `--drive` takes a comma-separated drive-letter list — each entry in
+/// `C` or `C:` form, exactly matching `uffs.exe`'s own `--drive` flag
+/// (see [`parse_drive_list`]) — resolved to `<letter>:\\` roots.
+/// Omitting `--drive` resolves to an empty `Vec` — every local NTFS
+/// drive, see [`uffs_content::job::vss_job::run_vss_job`].
 #[cfg(windows)]
 fn self_test_reader_benchmark_args(args: &[String]) -> Option<(Vec<std::path::PathBuf>, String)> {
     let flag_index = args
         .iter()
         .position(|arg| arg == "--self-test-reader-benchmark")?;
-    let roots_arg = args.get(flag_index + 1)?;
-    let roots = if roots_arg.eq_ignore_ascii_case("all") {
-        Vec::new()
-    } else {
-        roots_arg.split(',').map(std::path::PathBuf::from).collect()
-    };
-    let query = args
-        .get(flag_index + 2)
-        .cloned()
-        .unwrap_or_else(|| "*".to_owned());
-    Some((roots, query))
+    let rest = args.get(flag_index + 1..)?;
+
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    let mut query: Option<String> = None;
+    let mut rest_iter = rest.iter();
+    while let Some(arg) = rest_iter.next() {
+        if arg == "--drive" {
+            if let Some(value) = rest_iter.next() {
+                roots.extend(parse_drive_list(value));
+            }
+        } else if query.is_none() {
+            query = Some(arg.clone());
+        }
+    }
+    Some((roots, query.unwrap_or_else(|| "*".to_owned())))
+}
+
+/// Parse a comma-separated drive-letter list (each entry `C` or `C:`,
+/// case-insensitive, matching `uffs.exe`'s own `--drive` flag) into
+/// `<LETTER>:\\` roots. Entries that aren't exactly one ASCII letter
+/// (once a trailing `:` is stripped) are silently skipped, matching
+/// `uffs.exe`'s own tolerant `--drive` parsing.
+#[cfg(windows)]
+fn parse_drive_list(value: &str) -> Vec<std::path::PathBuf> {
+    value
+        .split(',')
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let letter = trimmed.strip_suffix(':').unwrap_or(trimmed);
+            let mut chars = letter.chars();
+            let ch = chars.next()?;
+            (chars.next().is_none() && ch.is_ascii_alphabetic())
+                .then(|| std::path::PathBuf::from(format!("{}:\\", ch.to_ascii_uppercase())))
+        })
+        .collect()
 }
 
 /// Non-Windows stub: `--self-test-reader-benchmark` needs a real VSS

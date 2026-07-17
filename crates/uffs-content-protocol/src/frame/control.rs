@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `PROGRESS`, `HEARTBEAT`, `JOB_CANCEL`, and `WINDOW_UPDATE` payloads
-//! (design-doc §12.2).
+//! `PROGRESS`, `HEARTBEAT`, `JOB_CANCEL`, `WINDOW_UPDATE`, `JOB_RESUME`,
+//! and `JOB_SUBMIT` payloads (design-doc §12.2, plus this crate's own
+//! `JOB_RESUME`/`JOB_SUBMIT` additions — see [`super::FrameType`]'s doc
+//! comment).
 
 use super::{FrameError, read_message, write_message};
 use crate::codec::{Reader, write_u64_le};
@@ -119,6 +121,38 @@ impl JobResume {
     #[must_use]
     pub const fn decode() -> Self {
         Self
+    }
+}
+
+/// `JOB_SUBMIT` payload: a JSON-encoded job spec.
+///
+/// Deliberately opaque bytes rather than a structured wire layout this
+/// crate parses field-by-field: the job spec is UFFS-side application
+/// data (`uffs_content::job::intake::JobRequest`, outside this crate),
+/// not part of the UFFS/Docenta content-stream contract itself. This
+/// frame only needs to get those bytes from the consumer to the
+/// producer intact; the envelope's own checksums already guard that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobSubmit {
+    /// The job spec, as UTF-8 JSON bytes.
+    pub job_spec_json: Vec<u8>,
+}
+
+impl JobSubmit {
+    /// Encode this payload (the JSON bytes verbatim).
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        self.job_spec_json.clone()
+    }
+
+    /// Decode this payload: the entire frame payload is the JSON bytes,
+    /// so this takes the raw payload directly rather than a [`Reader`]
+    /// (there are no further sub-fields to walk).
+    #[must_use]
+    pub fn decode(payload: &[u8]) -> Self {
+        Self {
+            job_spec_json: payload.to_vec(),
+        }
     }
 }
 

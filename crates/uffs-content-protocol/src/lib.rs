@@ -40,3 +40,24 @@ pub mod frame;
 pub mod manifest;
 pub mod path_encoding;
 pub mod state;
+
+/// Named pipe the Content Coordinator's **data** channel listens on.
+///
+/// `JOB_BEGIN`/`FILE_BEGIN`/`CONTENT_CHUNK`/`FILE_END`/`FILE_FAILED`/
+/// `FILE_DEFERRED`/`JOB_END` — the content stream itself, producer to
+/// consumer. Kept on a separate pipe from [`COMMAND_PIPE_NAME`] so a
+/// large in-flight `CONTENT_CHUNK` write can never head-of-line-block a
+/// `WINDOW_UPDATE`/`FILE_ACK`/`JOB_CANCEL` the consumer needs to send
+/// promptly (named pipes have no per-message-type multiplexing the way
+/// HTTP/2 streams do, so that separation has to be a second pipe).
+pub const DATA_PIPE_NAME: &str = r"\\.\pipe\uffs-content-data";
+
+/// Named pipe the Content Coordinator's **command** channel listens on.
+///
+/// Job submission/[`frame::JobResume`] (consumer to producer),
+/// [`frame::WindowUpdate`]/[`frame::FileAck`]/[`frame::JobCancel`]
+/// (consumer to producer), and [`frame::Progress`]/[`frame::Heartbeat`]
+/// (producer to consumer). Always low-volume regardless of job size, so
+/// it stays responsive even while [`DATA_PIPE_NAME`] is saturated with a
+/// huge file's content.
+pub const COMMAND_PIPE_NAME: &str = r"\\.\pipe\uffs-content-command";

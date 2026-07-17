@@ -146,6 +146,7 @@ fn apply_frame(
         | FrameType::JobEnd
         | FrameType::JobCancel
         | FrameType::WindowUpdate
-        | FrameType::JobResume => {}
+        | FrameType::JobResume
+        | FrameType::JobSubmit => {}
     }
 }

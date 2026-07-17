@@ -417,7 +417,8 @@ fn decode_single_file_content(manifest_bytes: &[u8], frames: &[Vec<u8>]) -> Resu
             | FrameType::JobEnd
             | FrameType::JobCancel
             | FrameType::WindowUpdate
-            | FrameType::JobResume => {}
+            | FrameType::JobResume
+            | FrameType::JobSubmit => {}
         }
     }
     anyhow::ensure!(

@@ -29,7 +29,7 @@ mod job_begin;
 mod job_end;
 
 pub use content_chunk::ContentChunk;
-pub use control::{Heartbeat, JobCancel, JobResume, Progress, WindowUpdate};
+pub use control::{Heartbeat, JobCancel, JobResume, JobSubmit, Progress, WindowUpdate};
 pub use file_ack::FileAck;
 pub use file_begin::FileBegin;
 pub use file_deferred::FileDeferred;
@@ -109,13 +109,17 @@ pub enum FrameError {
     },
 }
 
-/// The 12 required frame types (design-doc §12.2), plus [`Self::JobResume`].
+/// The 12 required frame types (design-doc §12.2), plus
+/// [`Self::JobResume`] and [`Self::JobSubmit`].
 ///
-/// `JobResume` is a reconnect-after-a-transport-blip mechanism this
-/// crate adds on top of the design doc's transport model (the doc
-/// leaves how a consumer reconnects to an in-flight job unspecified).
-/// Empty payload: the envelope's own `job_id` already names which job to
-/// resume.
+/// Both additions cover ground the design doc leaves unspecified: how a
+/// consumer starts a job and how it reconnects to one after a transport
+/// blip (§10 "Transport model" names the channels but not a submission/
+/// reconnect handshake). `JobResume` has an empty payload — the frame
+/// envelope's own `job_id` already names which job to resume.
+/// `JobSubmit`'s payload is a JSON-encoded job spec; the consumer
+/// chooses the `job_id` up front (in the envelope) and the producer
+/// adopts it for the whole job, including its own `JOB_BEGIN`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum FrameType {
@@ -147,6 +151,9 @@ pub enum FrameType {
     /// frame's envelope `job_id`, skipping any candidate already
     /// acknowledged before the connection dropped.
     JobResume = 13,
+    /// Consumer-initiated job submission: payload is a JSON job spec;
+    /// the envelope's `job_id` is the consumer-chosen id for the new job.
+    JobSubmit = 14,
 }
 
 impl FrameType {
@@ -175,6 +182,8 @@ impl FrameType {
             10 => Ok(Self::JobEnd),
             11 => Ok(Self::JobCancel),
             12 => Ok(Self::WindowUpdate),
+            13 => Ok(Self::JobResume),
+            14 => Ok(Self::JobSubmit),
             other => Err(other),
         }
     }

@@ -7,7 +7,7 @@ use super::{
     ConsumerAckStatus, ContentChunk, ContentSemantics, DigestAlgorithm, FailedOutcome,
     FailureStage, FileAck, FileBegin, FileDeferred, FileEnd, FileFailed, FrameEnvelope, FrameError,
     FrameOrdering, FrameType, Heartbeat, JobBegin, JobCancel, JobEnd, JobResume, JobStatus,
-    Progress, ReadMode, RetryClass, WindowUpdate,
+    JobSubmit, Progress, ReadMode, RetryClass, WindowUpdate,
 };
 use crate::codec::Reader;
 use crate::error::ErrorCode;
@@ -135,12 +135,12 @@ fn envelope_rejects_unknown_frame_type() {
 
 #[test]
 fn frame_type_round_trips_all_variants() {
-    for value in 1_u16..=12 {
+    for value in 1_u16..=14 {
         let frame_type = FrameType::decode(value).unwrap();
         assert_eq!(frame_type.encode(), value);
     }
     assert_eq!(FrameType::decode(0), Err(0));
-    assert_eq!(FrameType::decode(13), Err(13));
+    assert_eq!(FrameType::decode(15), Err(15));
 }
 
 fn sample_job_begin() -> JobBegin {
@@ -503,6 +503,24 @@ fn job_resume_encodes_to_empty_bytes() {
     assert!(payload.encode().is_empty());
     let decoded = JobResume::decode();
     assert_eq!(decoded, JobResume);
+}
+
+#[test]
+fn job_submit_round_trips_arbitrary_json_bytes() {
+    let payload = JobSubmit {
+        job_spec_json: br#"{"source_id":"s","root":"C:\\","query":"*.txt"}"#.to_vec(),
+    };
+    let bytes = payload.encode();
+    let decoded = JobSubmit::decode(&bytes);
+    assert_eq!(decoded, payload);
+}
+
+#[test]
+fn job_submit_decodes_empty_payload_as_empty_json_bytes() {
+    let decoded = JobSubmit::decode(&[]);
+    assert_eq!(decoded, JobSubmit {
+        job_spec_json: Vec::new()
+    });
 }
 
 #[test]

@@ -250,7 +250,7 @@ impl CandidateSource for VssCandidateSource<'_> {
 
         // TEMP DEBUG (2026-07-17): see the comment above — this is the
         // fully resolved row list (post shmem-read if applicable), i.e.
-        // exactly what becomes this job's CandidateEntry list.
+        // exactly what becomes this job's CandidateEntry list (pre-dedup).
         eprintln!(
             "=== DEBUG VssCandidateSource: resolved rows ({}) ===\n{}",
             rows.len(),
@@ -258,8 +258,16 @@ impl CandidateSource for VssCandidateSource<'_> {
                 .unwrap_or_else(|err| format!("<encode error: {err}>"))
         );
 
-        let mut entries = Vec::with_capacity(rows.len());
-        for row in rows {
+        let deduped = dedup_rows_by_file_reference_and_path(rows);
+
+        // TEMP DEBUG (2026-07-17): see the comment above.
+        eprintln!(
+            "=== DEBUG VssCandidateSource: after dedup ({} rows) ===",
+            deduped.len()
+        );
+
+        let mut entries = Vec::with_capacity(deduped.len());
+        for row in deduped {
             let letter = row.drive.as_char();
             let Some(&lease_id) = self.drive_to_lease.get(&letter) else {
                 return Err(io::Error::other(format!(
@@ -304,4 +312,33 @@ fn resolve_rows(
             "daemon returned a pre-formatted text blob instead of structured rows",
         )),
     }
+}
+
+/// Collapse exact-duplicate rows the daemon's search occasionally returns
+/// for the same physical file. Seen on real hardware: a fresh, uncached
+/// VSS-device MFT parse returned two byte-for-byte identical rows (same
+/// `file_reference`, same path, same everything) for files that have no
+/// NTFS extension record and (for 3 of the 4 observed) only a single
+/// on-disk `$FILE_NAME` attribute — ruling out extension-record/attribute-
+/// list double-counting as the cause. Root cause not yet pinned down
+/// (suspected: a chunk-scheduling double-read in the sliding-window I/O
+/// reader); this dedup is a defensive guard on this crate's own
+/// consumption of the daemon's response, independent of wherever the
+/// duplication actually originates.
+///
+/// Keyed on `(file_reference, path)`, not `file_reference` alone: a
+/// genuine hard link shares the same `file_reference` across multiple
+/// *different* paths, and those must stay as separate candidates (that's
+/// the whole point of `expand_links`). Only a row that is identical in
+/// both file identity *and* path — which is what a spurious double-count
+/// produces — gets collapsed. Preserves input order (first occurrence of
+/// each key wins).
+#[cfg(windows)]
+fn dedup_rows_by_file_reference_and_path(
+    rows: Vec<uffs_client::protocol::response::SearchRow>,
+) -> Vec<uffs_client::protocol::response::SearchRow> {
+    let mut seen: std::collections::HashSet<(u64, String)> = std::collections::HashSet::new();
+    rows.into_iter()
+        .filter(|row| seen.insert((row.file_reference, row.path.clone())))
+        .collect()
 }

@@ -17,7 +17,13 @@ use super::candidate_source::CandidateEntry;
 /// reads the live file directly with `std::fs`. See
 /// [`super::candidate_source::CandidateSource`] for why that's the right
 /// trade-off for this crate's own fast, cross-platform test harness.
-pub trait ContentSource {
+///
+/// `Sync`: `workflow::run_job` reads several candidates' content
+/// concurrently (one `std::thread::scope` thread each, sharing one
+/// `&dyn ContentSource` — see that module's "Concurrent reads,
+/// sequential emission" doc section), so any implementation must
+/// tolerate concurrent `read_at` calls from different threads.
+pub trait ContentSource: Sync {
     /// Read up to `max_len` bytes starting at `offset` from `candidate`.
     ///
     /// `candidate_id` is the same id `manifest_builder::build_manifest`

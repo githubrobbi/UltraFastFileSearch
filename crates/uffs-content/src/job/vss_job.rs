@@ -80,11 +80,16 @@ where
         .context("failed to spawn the content reader")?;
     let content_source = VssContentSource::new(content_reader);
 
+    // One concurrent content-read per leased drive — see
+    // `workflow::run_job`'s "Concurrent reads, sequential emission" doc
+    // section for why this is safe/correct at any value.
+    let concurrency = resources.leases.len();
     let result = run_job(
         &resolved_request,
         &candidate_source,
         &content_source,
         run_dir,
+        concurrency,
         emit_frame,
     )
     .context("run_job failed");

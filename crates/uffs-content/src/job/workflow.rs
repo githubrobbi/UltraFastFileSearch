@@ -9,6 +9,22 @@
 //! those traits' docs for what "swappable" means today (a real vs. fake
 //! backing).
 //!
+//! # Concurrent reads, sequential emission
+//!
+//! Candidates are read `concurrency`-at-a-time (see [`run_job`]): each
+//! batch's candidates are read on their own `std::thread::scope` thread
+//! —  concurrently, so reads for candidates on different drives (each
+//! routed to its own connection by `reader_client::ContentReader`, see
+//! that module's doc comment) actually overlap instead of serializing —
+//! but every batch's frames are still *emitted* strictly in original
+//! candidate order, on the caller's own thread, exactly matching the
+//! fully-sequential emission order this function has always produced.
+//! `emit_frame`/`frame_sequence`/`counters`/`failure_log` are therefore
+//! still only ever touched from one thread; no synchronization was
+//! added to any of them, and downstream consumers of the frame stream
+//! (`crate::serve::stream::Grouped`) see exactly the same per-candidate-
+//! contiguous ordering as the fully-sequential (`concurrency == 1`) case.
+//!
 //! # Why `emit_frame` is a callback, not a returned `Vec`
 //!
 //! Earlier revisions of this function collected every emitted frame into
@@ -74,6 +90,14 @@ pub struct JobOutcome {
 /// `JOB_END`) is passed to `emit_frame` in emission order as soon as it
 /// exists — see the module doc comment.
 ///
+/// `concurrency` is how many candidates are read concurrently per batch
+/// (see the module doc's "Concurrent reads, sequential emission"
+/// section) — clamped to at least `1`. Pass the number of drives a job
+/// actually leased (or `1` for the fully-sequential, deterministic-order
+/// behavior tests rely on) — this function has no way to know that
+/// itself, since drive leasing happens in the caller
+/// (`super::vss_job::run_vss_job`).
+///
 /// # Errors
 /// Returns an [`io::Error`] for any filesystem failure enumerating
 /// candidates, writing the failure log, or finalizing the summary, or
@@ -86,11 +110,13 @@ pub fn run_job<F>(
     candidate_source: &dyn CandidateSource,
     content_source: &dyn ContentSource,
     run_dir: &Path,
+    concurrency: usize,
     mut emit_frame: F,
 ) -> io::Result<JobOutcome>
 where
     F: FnMut(Vec<u8>) -> io::Result<()>,
 {
+    let batch_size = concurrency.max(1_usize);
     let job_id = *uuid::Uuid::new_v4().as_bytes();
     let source_id = source_id_bytes(&request.source_id);
     // No query filtering is wired up yet (see `JobRequest` docs) — every
@@ -134,60 +160,36 @@ where
     let failures_path = run_dir.join(format!("run-{run_id}.failures.jsonl"));
     let mut failure_log = FailureLogWriter::open(&failures_path)?;
 
-    for (entry, &candidate_id) in entries.iter().zip(&built.candidate_ids) {
-        stream_one_candidate(
-            entry,
-            candidate_id,
-            content_source,
-            DEFAULT_MAX_CHUNK_BYTES,
-            &mut counters,
-            &mut failure_log,
-            job_id,
-            &mut frame_sequence,
-            &mut emit_frame,
-        )?;
+    let candidates: Vec<(&CandidateEntry, u64)> = entries
+        .iter()
+        .zip(built.candidate_ids.iter().copied())
+        .collect();
+    for batch in candidates.chunks(batch_size) {
+        let read_results = read_candidate_batch(batch, content_source, DEFAULT_MAX_CHUNK_BYTES);
+        for ((entry, candidate_id), read_result) in batch.iter().copied().zip(read_results) {
+            emit_candidate(
+                entry,
+                candidate_id,
+                read_result,
+                &mut counters,
+                &mut failure_log,
+                job_id,
+                &mut frame_sequence,
+                &mut emit_frame,
+            )?;
+        }
     }
     drop(failure_log);
 
-    let job_status = if counters.failed_retryable_count == 0
-        && counters.failed_terminal_count == 0
-        && counters.deferred_manual_count == 0
-    {
-        JobStatus::Completed
-    } else {
-        JobStatus::CompletedWithFailures
-    };
-
-    let failure_log_bytes = std::fs::read(&failures_path).unwrap_or_default();
-    let failure_bucket_id = failures_path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned().into_bytes())
-        .unwrap_or_default();
-    let job_end = JobEnd {
+    emit_job_end(
+        &counters,
+        built.manifest_digest,
         candidate_count,
-        succeeded_count: counters.succeeded_count,
-        failed_retryable_count: counters.failed_retryable_count,
-        failed_terminal_count: counters.failed_terminal_count,
-        deferred_manual_count: counters.deferred_manual_count,
-        // No FILE_ACK loop is modeled by this fake-reader harness yet
-        // (UFI.2 scheduler work) — every success is treated as
-        // immediately acknowledged.
-        acknowledged_success_count: counters.succeeded_count,
-        logical_bytes_succeeded: counters.logical_bytes_succeeded,
-        failure_bucket_id,
-        manifest_digest: built.manifest_digest,
-        outcome_ledger_digest: digest(&failure_log_bytes),
-        job_status,
-    };
-    let job_end_bytes = job_end
-        .encode()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
-    emit_frame(encode_frame(
+        &failures_path,
         job_id,
         &mut frame_sequence,
-        FrameType::JobEnd,
-        &job_end_bytes,
-    ))?;
+        &mut emit_frame,
+    )?;
 
     let now_ms = unix_ms_now();
     let summary_path = run_dir.join(format!("run-{run_id}.summary.json"));
@@ -222,22 +224,189 @@ fn encode_frame(
     envelope.encode(payload)
 }
 
-/// Streams one candidate's content, emitting `FILE_BEGIN`, zero or more
-/// `CONTENT_CHUNK`s, and exactly one of `FILE_END`/`FILE_FAILED` through
-/// `emit_frame` as each is produced — never buffering more than one
-/// chunk's worth of this candidate's content at a time. Updates
-/// `counters` and appends to `failure_log` for a non-success outcome.
+/// Build and emit `JOB_END`: `job_status` is derived from `counters`,
+/// `failure_bucket_id`/`outcome_ledger_digest` from the failure log file
+/// at `failures_path`.
+fn emit_job_end(
+    counters: &RunCounters,
+    manifest_digest: Digest,
+    candidate_count: u64,
+    failures_path: &Path,
+    job_id: [u8; 16],
+    frame_sequence: &mut u64,
+    emit_frame: &mut dyn FnMut(Vec<u8>) -> io::Result<()>,
+) -> io::Result<()> {
+    let job_status = if counters.failed_retryable_count == 0
+        && counters.failed_terminal_count == 0
+        && counters.deferred_manual_count == 0
+    {
+        JobStatus::Completed
+    } else {
+        JobStatus::CompletedWithFailures
+    };
+
+    let failure_log_bytes = std::fs::read(failures_path).unwrap_or_default();
+    let failure_bucket_id = failures_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned().into_bytes())
+        .unwrap_or_default();
+    let job_end = JobEnd {
+        candidate_count,
+        succeeded_count: counters.succeeded_count,
+        failed_retryable_count: counters.failed_retryable_count,
+        failed_terminal_count: counters.failed_terminal_count,
+        deferred_manual_count: counters.deferred_manual_count,
+        // No FILE_ACK loop is modeled by this fake-reader harness yet
+        // (UFI.2 scheduler work) — every success is treated as
+        // immediately acknowledged.
+        acknowledged_success_count: counters.succeeded_count,
+        logical_bytes_succeeded: counters.logical_bytes_succeeded,
+        failure_bucket_id,
+        manifest_digest,
+        outcome_ledger_digest: digest(&failure_log_bytes),
+        job_status,
+    };
+    let job_end_bytes = job_end
+        .encode()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    emit_frame(encode_frame(
+        job_id,
+        frame_sequence,
+        FrameType::JobEnd,
+        &job_end_bytes,
+    ))
+}
+
+/// One candidate's content, fully read into memory by
+/// [`read_candidate_batch`]/[`read_one_candidate`] and consumed by
+/// [`emit_candidate`]. Bounded to exactly one candidate's content per
+/// instance — never the whole batch or job — since the batch itself
+/// bounds how many of these exist in memory at once (see the module
+/// doc's "Concurrent reads, sequential emission" section).
+struct CandidateContent {
+    /// Every `CONTENT_CHUNK` this candidate's content produced, in order.
+    chunks: Vec<ContentChunk>,
+    /// Sum of every chunk's payload length.
+    total_read: u64,
+    /// BLAKE3 digest over every chunk's payload, in order.
+    digest: Digest,
+    /// Set only if a read failed partway through; `None` means every
+    /// byte up to `entry.logical_size` was read successfully.
+    read_error: Option<io::Error>,
+}
+
+/// Read every candidate in `batch` concurrently — one
+/// [`std::thread::scope`] thread each — returning each candidate's
+/// [`CandidateContent`] in the same order as `batch` itself. Bounds how
+/// far ahead of frame emission reading can get to `batch.len()`
+/// candidates' content, never the whole job's.
+fn read_candidate_batch(
+    batch: &[(&CandidateEntry, u64)],
+    content_source: &dyn ContentSource,
+    max_chunk_bytes: u32,
+) -> Vec<CandidateContent> {
+    std::thread::scope(|scope| {
+        // The intermediate `Vec` is semantically required, not needless:
+        // it forces every thread to be spawned before any is joined.
+        // Fusing this into one `.map(spawn).map(join)` chain would join
+        // each thread immediately after spawning it, one at a time —
+        // exactly the sequential behavior this function exists to avoid.
+        #[expect(
+            clippy::needless_collect,
+            reason = "see the comment above — collecting here is what makes every spawn \
+                      happen before any join, not an accident"
+        )]
+        let handles: Vec<_> = batch
+            .iter()
+            .map(|&(entry, candidate_id)| {
+                scope.spawn(move || {
+                    read_one_candidate(entry, candidate_id, content_source, max_chunk_bytes)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic_payload| CandidateContent {
+                        chunks: Vec::new(),
+                        total_read: 0,
+                        digest: IncrementalDigest::new().finalize(),
+                        read_error: Some(io::Error::other(format!(
+                            "content-read thread panicked: {panic_payload:?}"
+                        ))),
+                    })
+            })
+            .collect()
+    })
+}
+
+/// Read one candidate's content into memory, up to `entry.logical_size`
+/// or the first read error. Never touches `emit_frame`/`frame_sequence`/
+/// `counters`/`failure_log` — those stay single-threaded, touched only
+/// by [`emit_candidate`] afterward.
+fn read_one_candidate(
+    entry: &CandidateEntry,
+    candidate_id: u64,
+    content_source: &dyn ContentSource,
+    max_chunk_bytes: u32,
+) -> CandidateContent {
+    let mut hasher = IncrementalDigest::new();
+    let mut offset = 0_u64;
+    let mut chunk_sequence = 0_u64;
+    let mut total_read = 0_u64;
+    let mut chunks = Vec::new();
+    let mut read_error = None;
+
+    while offset < entry.logical_size {
+        match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
+            Ok(bytes) if bytes.is_empty() => break,
+            Ok(bytes) => {
+                let read_len = len_as_u64(bytes.len());
+                hasher.update(&bytes);
+                total_read += read_len;
+                chunks.push(ContentChunk {
+                    candidate_id,
+                    chunk_sequence,
+                    logical_offset: offset,
+                    logical_length: read_len,
+                    payload: bytes,
+                });
+                offset += read_len;
+                chunk_sequence += 1;
+            }
+            Err(err) => {
+                read_error = Some(err);
+                break;
+            }
+        }
+    }
+
+    CandidateContent {
+        chunks,
+        total_read,
+        digest: hasher.finalize(),
+        read_error,
+    }
+}
+
+/// Emit one already-read candidate's `FILE_BEGIN`, its `CONTENT_CHUNK`s,
+/// and its terminal frame (`FILE_END`/`FILE_FAILED`), in that order, on
+/// the caller's own thread — see the module doc's "Concurrent reads,
+/// sequential emission" section for why this step is never
+/// parallelized. Updates `counters` and appends to `failure_log` for a
+/// non-success outcome.
 #[expect(
     clippy::too_many_arguments,
     reason = "the alternative is a bespoke context struct bundling job_id/frame_sequence/ \
               emit_frame purely to satisfy this lint, for a private helper with exactly one \
               call site; not worth the indirection"
 )]
-fn stream_one_candidate(
+fn emit_candidate(
     entry: &CandidateEntry,
     candidate_id: u64,
-    content_source: &dyn ContentSource,
-    max_chunk_bytes: u32,
+    content: CandidateContent,
     counters: &mut RunCounters,
     failure_log: &mut FailureLogWriter,
     job_id: [u8; 16],
@@ -263,22 +432,22 @@ fn stream_one_candidate(
         &file_begin.encode(),
     ))?;
 
-    let (chunk_count, total_read, content_digest, read_error) = stream_content_chunks(
-        entry,
-        candidate_id,
-        content_source,
-        max_chunk_bytes,
-        job_id,
-        frame_sequence,
-        emit_frame,
-    )?;
+    let chunk_count = len_as_u64(content.chunks.len());
+    for chunk in &content.chunks {
+        emit_frame(encode_frame(
+            job_id,
+            frame_sequence,
+            FrameType::ContentChunk,
+            &chunk.encode(),
+        ))?;
+    }
 
-    match read_error {
+    match content.read_error {
         None => {
             let file_end = FileEnd {
                 candidate_id,
-                total_logical_bytes: total_read,
-                content_digest: Some(content_digest),
+                total_logical_bytes: content.total_read,
+                content_digest: Some(content.digest),
                 read_mode: ReadMode::LogicalSnapshot,
                 chunk_count,
                 elapsed_ms: 0,
@@ -290,7 +459,7 @@ fn stream_one_candidate(
                 FrameType::FileEnd,
                 &file_end.encode(),
             ))?;
-            counters.record_succeeded(total_read);
+            counters.record_succeeded(content.total_read);
         }
         Some(err) => {
             let os_error_code = err.raw_os_error().map(i64::from);
@@ -302,7 +471,7 @@ fn stream_one_candidate(
                 error_code: ErrorCode::ReadIoTransient,
                 os_error_code,
                 retry_class: RetryClass::RetryNewSnapshot,
-                bytes_emitted_before_failure: total_read,
+                bytes_emitted_before_failure: content.total_read,
                 message: message.clone(),
             };
             emit_frame(encode_frame(
@@ -319,68 +488,13 @@ fn stream_one_candidate(
                 ErrorCode::ReadIoTransient,
                 os_error_code,
                 RetryClass::RetryNewSnapshot,
-                total_read,
+                content.total_read,
                 message,
             ))?;
         }
     }
 
     Ok(())
-}
-
-/// Read and emit every `CONTENT_CHUNK` frame for one candidate, in
-/// order, up to `entry.logical_size` or the first read error — never
-/// buffering more than one chunk's worth of content at a time (the
-/// running digest is incremental; see [`IncrementalDigest`]).
-///
-/// Returns `(chunk_count, total_read, digest, read_error)`; `read_error`
-/// is `Some` only if a read failed partway, letting the caller decide
-/// the candidate's terminal outcome.
-fn stream_content_chunks(
-    entry: &CandidateEntry,
-    candidate_id: u64,
-    content_source: &dyn ContentSource,
-    max_chunk_bytes: u32,
-    job_id: [u8; 16],
-    frame_sequence: &mut u64,
-    emit_frame: &mut dyn FnMut(Vec<u8>) -> io::Result<()>,
-) -> io::Result<(u64, u64, Digest, Option<io::Error>)> {
-    let mut hasher = IncrementalDigest::new();
-    let mut offset = 0_u64;
-    let mut chunk_sequence = 0_u64;
-    let mut total_read = 0_u64;
-    let mut read_error = None;
-
-    while offset < entry.logical_size {
-        match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
-            Ok(bytes) if bytes.is_empty() => break,
-            Ok(bytes) => {
-                let read_len = len_as_u64(bytes.len());
-                hasher.update(&bytes);
-                total_read += read_len;
-                let chunk = ContentChunk {
-                    candidate_id,
-                    chunk_sequence,
-                    logical_offset: offset,
-                    logical_length: read_len,
-                    payload: bytes,
-                };
-                emit_frame(encode_frame(
-                    job_id,
-                    frame_sequence,
-                    FrameType::ContentChunk,
-                    &chunk.encode(),
-                ))?;
-                offset += read_len;
-                chunk_sequence += 1;
-            }
-            Err(err) => {
-                read_error = Some(err);
-                break;
-            }
-        }
-    }
-    Ok((chunk_sequence, total_read, hasher.finalize(), read_error))
 }
 
 /// Deterministically derives a manifest `source_id` from an arbitrary

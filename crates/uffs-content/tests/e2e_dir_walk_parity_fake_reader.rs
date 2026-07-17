@@ -98,6 +98,10 @@ mod tests {
             &DirWalkCandidateSource,
             &FsContentSource,
             run_dir.path(),
+            // >1, and smaller than the fixture's own file count, so this
+            // parity check also exercises multiple concurrent-read
+            // batches (`read_candidate_batch`), not just one.
+            3,
             |frame| {
                 frames.push(frame);
                 Ok(())

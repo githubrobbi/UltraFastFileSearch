@@ -623,7 +623,9 @@ fn set_active(state: &Arc<ServerState>, active: Option<ActiveJob>) {
 
 #[cfg(test)]
 mod tests {
-    use uffs_content_protocol::frame::{FileBegin, FrameEnvelope, FrameType, JobBegin, ReadMode};
+    use uffs_content_protocol::frame::{
+        FileBegin, FrameEnvelope, FrameType, JobBegin, PROTOCOL_VERSION, ReadMode,
+    };
     use uffs_content_protocol::manifest::AuthorizationMode;
     use uffs_content_protocol::path_encoding::WindowsPath;
 
@@ -633,7 +635,7 @@ mod tests {
 
     fn encode(frame_sequence: u64, frame_type: FrameType, payload: &[u8]) -> Vec<u8> {
         FrameEnvelope {
-            protocol_version: 2,
+            protocol_version: PROTOCOL_VERSION,
             frame_type,
             flags: 0,
             job_id: JOB_ID,

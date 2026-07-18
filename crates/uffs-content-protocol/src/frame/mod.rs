@@ -41,6 +41,16 @@ pub use job_end::JobEnd;
 /// Frame envelope magic (design-doc §12.1).
 pub const FRAME_MAGIC: [u8; 4] = *b"UFS2";
 
+/// Wire format version this build produces and requires on decode.
+///
+/// Every [`FrameEnvelope`] encoded by this crate sets `protocol_version`
+/// to this value, and [`FrameEnvelope::decode`] rejects any other value
+/// explicitly (see [`FrameError::ProtocolVersionMismatch`]) rather than
+/// attempting to parse a header shape it was never validated against —
+/// a future wire-breaking change should bump this constant, not
+/// silently reinterpret old bytes under a new layout.
+pub const PROTOCOL_VERSION: u16 = 2;
+
 /// Bytes of the fixed envelope header preceding `header_checksum`:
 /// magic(4) + `protocol_version`(2) + `frame_type`(2) + flags(4) +
 /// `header_length`(4) + `payload_length`(8) + `job_id`(16) +
@@ -60,6 +70,17 @@ pub enum FrameError {
     /// Envelope magic did not match [`FRAME_MAGIC`].
     #[error("bad frame magic: {0:?}")]
     BadMagic([u8; 4]),
+    /// `protocol_version` did not match [`PROTOCOL_VERSION`] — a peer
+    /// speaking a different wire format, not a corrupt frame. Rejected
+    /// before any version-shape-dependent field is parsed, so a future
+    /// breaking wire change fails loud instead of misparsing.
+    #[error("protocol_version mismatch: expected {expected}, got {actual}")]
+    ProtocolVersionMismatch {
+        /// This build's [`PROTOCOL_VERSION`].
+        expected: u16,
+        /// The version the peer actually sent.
+        actual: u16,
+    },
     /// The declared `header_length` did not match bytes actually consumed.
     #[error("header_length mismatch: declared {declared}, actual {actual}")]
     HeaderLengthMismatch {
@@ -258,6 +279,12 @@ impl FrameEnvelope {
             return Err(FrameError::BadMagic(magic));
         }
         let protocol_version = reader.read_u16_le()?;
+        if protocol_version != PROTOCOL_VERSION {
+            return Err(FrameError::ProtocolVersionMismatch {
+                expected: PROTOCOL_VERSION,
+                actual: protocol_version,
+            });
+        }
         let frame_type_raw = reader.read_u16_le()?;
         let frame_type = FrameType::decode(frame_type_raw).map_err(FrameError::UnknownFrameType)?;
         let flags = reader.read_u32_le()?;

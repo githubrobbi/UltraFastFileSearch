@@ -86,7 +86,8 @@ use uffs_content_protocol::codec::{Digest, digest};
 use uffs_content_protocol::error::ErrorCode;
 use uffs_content_protocol::frame::{
     ContentSemantics, DigestAlgorithm, FailedOutcome, FailureStage, FileBegin, FileEnd, FileFailed,
-    FrameEnvelope, FrameOrdering, FrameType, JobBegin, JobEnd, JobStatus, ReadMode, RetryClass,
+    FrameEnvelope, FrameOrdering, FrameType, JobBegin, JobEnd, JobStatus, PROTOCOL_VERSION,
+    ReadMode, RetryClass,
 };
 use uffs_content_protocol::manifest::AuthorizationMode;
 use uffs_content_protocol::path_encoding::WindowsPath;
@@ -402,7 +403,7 @@ fn encode_frame(
     payload: &[u8],
 ) -> Vec<u8> {
     let envelope = FrameEnvelope {
-        protocol_version: 2,
+        protocol_version: PROTOCOL_VERSION,
         frame_type,
         flags: 0,
         job_id,

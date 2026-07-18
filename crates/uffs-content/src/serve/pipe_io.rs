@@ -183,7 +183,7 @@ pub(super) fn hex_job_id(job_id: [u8; 16]) -> String {
 #[cfg(test)]
 mod tests {
     use uffs_content_protocol::frame::{
-        ContentChunk, FileBegin, FrameEnvelope, FrameType, ReadMode,
+        ContentChunk, FileBegin, FrameEnvelope, FrameType, PROTOCOL_VERSION, ReadMode,
     };
     use uffs_content_protocol::manifest::MAX_PATH_BYTES;
     use uffs_content_protocol::path_encoding::WindowsPath;
@@ -193,7 +193,7 @@ mod tests {
 
     fn encoded_len(frame_type: FrameType, payload: &[u8]) -> u32 {
         let bytes = FrameEnvelope {
-            protocol_version: 2,
+            protocol_version: PROTOCOL_VERSION,
             frame_type,
             flags: 0,
             job_id: [0; 16],

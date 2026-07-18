@@ -7,7 +7,7 @@ use super::{
     ConsumerAckStatus, ContentChunk, ContentSemantics, DigestAlgorithm, FailedOutcome,
     FailureStage, FileAck, FileBegin, FileDeferred, FileEnd, FileFailed, FrameEnvelope, FrameError,
     FrameOrdering, FrameType, Heartbeat, JobBegin, JobCancel, JobEnd, JobResume, JobStatus,
-    JobSubmit, Progress, ReadMode, RetryClass, WindowUpdate,
+    JobSubmit, PROTOCOL_VERSION, Progress, ReadMode, RetryClass, WindowUpdate,
 };
 use crate::codec::Reader;
 use crate::error::ErrorCode;
@@ -16,7 +16,7 @@ use crate::path_encoding::WindowsPath;
 
 fn sample_envelope(frame_type: FrameType, frame_sequence: u64) -> FrameEnvelope {
     FrameEnvelope {
-        protocol_version: 2,
+        protocol_version: PROTOCOL_VERSION,
         frame_type,
         flags: 0,
         job_id: [3_u8; 16],
@@ -131,6 +131,30 @@ fn envelope_rejects_unknown_frame_type() {
     let mut reader = Reader::new(&bytes);
     let err = FrameEnvelope::decode(&mut reader, 1_000_000).unwrap_err();
     assert!(matches!(err, FrameError::UnknownFrameType(999)));
+}
+
+#[test]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test mutation of a known, already-validated buffer range; \
+              clippy::get_unwrap is also denied, so a scoped exception on \
+              direct indexing is the established pattern for this \
+              conflict (see crates/uffs-daemon/tests/ipc_integration.rs)"
+)]
+fn envelope_rejects_mismatched_protocol_version() {
+    // Patch the protocol_version field bytes directly (offset 4-5:
+    // magic(4), before frame_type at offset 6-7) rather than constructing
+    // an envelope with the "wrong" version, since `FrameEnvelope` only
+    // has one field for it and this crate defines what "right" means.
+    let envelope = sample_envelope(FrameType::Heartbeat, 1);
+    let mut bytes = envelope.encode(&[]);
+    bytes[4..6].copy_from_slice(&99_u16.to_le_bytes());
+    let mut reader = Reader::new(&bytes);
+    let err = FrameEnvelope::decode(&mut reader, 1_000_000).unwrap_err();
+    assert!(matches!(err, FrameError::ProtocolVersionMismatch {
+        expected: PROTOCOL_VERSION,
+        actual: 99
+    }));
 }
 
 #[test]

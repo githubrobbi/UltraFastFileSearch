@@ -44,7 +44,12 @@ use std::collections::HashMap;
 #[cfg(windows)]
 use uffs_content_reader_protocol::{ReadRequest, ReadResponse, ReaderErrorCode};
 
-/// Dispatch one decoded `ReadRequest` into a `ReadResponse`.
+/// Dispatch one decoded `ReadRequest` into a `ReadResponse`, threading
+/// this connection's [`logical::ReadHandleCache`] through the call —
+/// see that type's own doc comment for why. Always returns a fresh
+/// cache: `Some` (the possibly-reused-or-reopened handle) on success,
+/// `ReadHandleCache::empty()` on any failure, since a failed read leaves
+/// the cached handle's state unknown.
 ///
 /// Every failure mode (unknown lease, open failure, read failure,
 /// invalid VDL/EOF metadata) is caught here and turned into a typed
@@ -52,15 +57,22 @@ use uffs_content_reader_protocol::{ReadRequest, ReadResponse, ReaderErrorCode};
 /// `Err` up to its caller, since a malformed *single* request must not
 /// tear down the whole connection.
 #[cfg(windows)]
-fn dispatch_request(request: &ReadRequest, devices: &HashMap<u64, String>) -> ReadResponse {
+fn dispatch_request(
+    request: &ReadRequest,
+    devices: &HashMap<u64, String>,
+    cache: logical::ReadHandleCache,
+) -> (ReadResponse, logical::ReadHandleCache) {
     let Some(device_path) = devices.get(&request.snapshot_lease_id) else {
-        return ReadResponse::Error {
-            code: ReaderErrorCode::LeaseInvalid,
-            message: format!(
-                "snapshot_lease_id {} is not one of this process's --device leases",
-                request.snapshot_lease_id
-            ),
-        };
+        return (
+            ReadResponse::Error {
+                code: ReaderErrorCode::LeaseInvalid,
+                message: format!(
+                    "snapshot_lease_id {} is not one of this process's --device leases",
+                    request.snapshot_lease_id
+                ),
+            },
+            logical::ReadHandleCache::empty(),
+        );
     };
 
     match logical::read_logical(
@@ -68,16 +80,23 @@ fn dispatch_request(request: &ReadRequest, devices: &HashMap<u64, String>) -> Re
         request.full_file_reference,
         request.logical_offset,
         request.maximum_logical_length,
+        cache,
     ) {
-        Ok((payload, actual_mode)) => ReadResponse::Bytes {
-            logical_offset: request.logical_offset,
-            actual_mode,
-            payload,
-        },
-        Err(err) => ReadResponse::Error {
-            code: ReaderErrorCode::ReadIoTransient,
-            message: format!("{err:#}"),
-        },
+        Ok((payload, actual_mode, updated_cache)) => (
+            ReadResponse::Bytes {
+                logical_offset: request.logical_offset,
+                actual_mode,
+                payload,
+            },
+            updated_cache,
+        ),
+        Err(err) => (
+            ReadResponse::Error {
+                code: ReaderErrorCode::ReadIoTransient,
+                message: format!("{err:#}"),
+            },
+            logical::ReadHandleCache::empty(),
+        ),
     }
 }
 

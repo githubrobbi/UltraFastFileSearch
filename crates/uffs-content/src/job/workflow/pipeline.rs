@@ -374,6 +374,25 @@ fn read_one_candidate(
     }
     log_candidate_size_if_notable(entry, candidate_id);
 
+    let mut session = match content_source.begin_read(entry, candidate_id) {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::warn!(
+                candidate_id,
+                path = %entry.relative_path.display(),
+                error = %err,
+                "content read: failed to begin read session"
+            );
+            return CandidateContent {
+                chunks: Vec::new(),
+                total_read: 0,
+                digest: IncrementalDigest::new().finalize(),
+                read_error: Some(err),
+                read_mode: ReadMode::LogicalSnapshot,
+            };
+        }
+    };
+
     let mut hasher = IncrementalDigest::new();
     let mut offset = 0_u64;
     let mut chunk_sequence = 0_u64;
@@ -391,7 +410,7 @@ fn read_one_candidate(
             read_started_at,
             &mut last_stall_warning_at,
         );
-        match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
+        match session.read_at(offset, max_chunk_bytes) {
             Ok(bytes) if bytes.is_empty() => break,
             Ok(bytes) => {
                 let read_len = super::len_as_u64(bytes.len());
@@ -420,6 +439,8 @@ fn read_one_candidate(
             }
         }
     }
+    // `session` drops here, returning its pinned connection (if still
+    // framing-aligned) to the pool.
 
     CandidateContent {
         chunks,

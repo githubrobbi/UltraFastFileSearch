@@ -90,12 +90,21 @@ async fn serve(devices: &HashMap<u64, String>) -> anyhow::Result<()> {
 /// [`read_one_request`]). Every request's blocking disk I/O runs via
 /// `spawn_blocking`, so a slow read on one connection never blocks any
 /// other connection.
+///
+/// Owns this connection's [`super::logical::ReadHandleCache`] for the
+/// connection's whole lifetime, starting empty and threading the
+/// updated cache back out of every `dispatch_request_blocking` call —
+/// see that type's own doc comment for why a per-connection cache is
+/// safe and effective here (the Coordinator pins one connection per
+/// candidate's whole sequential read).
 async fn serve_requests(server: &mut NamedPipeServer, devices: &Arc<HashMap<u64, String>>) {
+    let mut cache = super::logical::ReadHandleCache::empty();
     loop {
         match read_one_request(server).await {
             Ok(Some(request)) => {
-                if !respond_to_one_request(server, request, devices).await {
-                    return;
+                match respond_to_one_request(server, request, devices, cache).await {
+                    Some(updated_cache) => cache = updated_cache,
+                    None => return,
                 }
             }
             Ok(None) => {
@@ -110,36 +119,47 @@ async fn serve_requests(server: &mut NamedPipeServer, devices: &Arc<HashMap<u64,
     }
 }
 
-/// Dispatch one request and write its response. Returns `false` if the
-/// connection should close (a write failure — the read side already
-/// handles its own EOF/malformed-request cases in [`serve_requests`]).
+/// Dispatch one request and write its response. Returns the updated
+/// [`super::logical::ReadHandleCache`] for the caller to keep using on
+/// this connection's next request, or `None` if the connection should
+/// close (a write failure — the read side already handles its own
+/// EOF/malformed-request cases in [`serve_requests`]).
 async fn respond_to_one_request(
     server: &mut NamedPipeServer,
     request: ReadRequest,
     devices: &Arc<HashMap<u64, String>>,
-) -> bool {
-    let response = dispatch_request_blocking(request, Arc::clone(devices)).await;
+    cache: super::logical::ReadHandleCache,
+) -> Option<super::logical::ReadHandleCache> {
+    let (response, updated_cache) =
+        dispatch_request_blocking(request, Arc::clone(devices), cache).await;
     if let Err(err) = write_one_response(server, &response).await {
         tracing::warn!(error = %err, "failed to write response; closing connection");
-        return false;
+        return None;
     }
-    true
+    Some(updated_cache)
 }
 
 /// Run [`super::dispatch_request`]'s blocking disk I/O on tokio's
 /// blocking thread pool, turning a panic there into a
-/// [`ReaderErrorCode::InternalError`] response rather than propagating
-/// it (a single request's panic must not tear down the whole
-/// connection, matching `dispatch_request`'s own never-panics contract).
+/// [`ReaderErrorCode::InternalError`] response (with an emptied cache)
+/// rather than propagating it (a single request's panic must not tear
+/// down the whole connection, matching `dispatch_request`'s own
+/// never-panics contract).
 async fn dispatch_request_blocking(
     request: ReadRequest,
     devices: Arc<HashMap<u64, String>>,
-) -> ReadResponse {
-    tokio::task::spawn_blocking(move || super::dispatch_request(&request, &devices))
+    cache: super::logical::ReadHandleCache,
+) -> (ReadResponse, super::logical::ReadHandleCache) {
+    tokio::task::spawn_blocking(move || super::dispatch_request(&request, &devices, cache))
         .await
-        .unwrap_or_else(|join_err| ReadResponse::Error {
-            code: ReaderErrorCode::InternalError,
-            message: format!("read task panicked: {join_err}"),
+        .unwrap_or_else(|join_err| {
+            (
+                ReadResponse::Error {
+                    code: ReaderErrorCode::InternalError,
+                    message: format!("read task panicked: {join_err}"),
+                },
+                super::logical::ReadHandleCache::empty(),
+            )
         })
 }
 

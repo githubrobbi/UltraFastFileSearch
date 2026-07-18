@@ -11,6 +11,24 @@
 //! ([`super::read_plan::read_plan`]), and reads real bytes via
 //! `ReadFile` at the requested offset.
 //!
+//! # Handle caching across a connection's consecutive requests
+//!
+//! `open_file_by_id` is not cheap: `OpenFileById` has to resolve/validate
+//! the target FRS against the MFT, and against a VSS snapshot's
+//! copy-on-write device that cost varies a lot request to request.
+//! Real-hardware benchmarking found this dominating read time on large
+//! files far more than actual disk throughput did — a 2.76 GB file at
+//! the old 64 KiB chunk size needed roughly 42,000 full open/close
+//! cycles, one per chunk. [`ReadHandleCache`] lets [`read_logical`] reuse
+//! the same open file handle across consecutive requests for the same
+//! `full_file_reference`, opening fresh only when the target file
+//! actually changes. The caller (`pipe_server`) owns one cache per
+//! connection and threads it through every request on that connection —
+//! this only pays off because the Coordinator now pins one connection
+//! per candidate's whole sequential read (see
+//! `uffs-content::job::reader_client`'s module doc) rather than
+//! round-robining a chunk at a time across the pool.
+//!
 //! # v1 simplifications (documented, not silent)
 //!
 //! - **VDL is treated as equal to EOF.** Getting the true NTFS valid data
@@ -66,6 +84,51 @@ impl Drop for OwnedHandle {
             drop(CloseHandle(self.0));
         }
     }
+}
+
+#[expect(
+    unsafe_code,
+    reason = "windows file handles are thread-safe kernel objects, not thread-affine"
+)]
+// SAFETY: `OwnedHandle` owns a Windows `HANDLE` to a kernel-managed file
+// object with no thread affinity and no unsynchronized interior
+// mutability of its own — moving ownership to another thread (as
+// `ReadHandleCache` does across a `spawn_blocking` boundary in
+// `pipe_server`) does not invalidate any aliasing assumptions. Handle
+// cleanup remains centralized in `Drop`, above.
+unsafe impl Send for OwnedHandle {}
+
+/// A previously-opened file handle, cached across a connection's
+/// consecutive requests — see this module's doc comment for why.
+/// `pub(crate)` (rather than living entirely inside this module) because
+/// `pipe_server` owns one instance per connection and threads it through
+/// every request on that connection, across a `spawn_blocking` boundary.
+#[derive(Default)]
+pub(crate) struct ReadHandleCache(Option<CachedFileHandle>);
+
+impl ReadHandleCache {
+    /// A fresh cache holding nothing — one per new connection.
+    pub(crate) const fn empty() -> Self {
+        Self(None)
+    }
+}
+
+/// One cached open file handle plus the file reference and `EOF` it was
+/// opened/resolved for — [`read_logical`] reuses it only when a new
+/// request's `full_file_reference` matches exactly.
+struct CachedFileHandle {
+    /// The file reference this handle was opened against.
+    full_file_reference: u64,
+    /// The open handle itself.
+    handle: OwnedHandle,
+    /// `EOF` as resolved when this handle was opened. Deliberately not
+    /// re-queried on every cached-hit read: the file is being read
+    /// against a frozen VSS snapshot, not the live volume, so its size
+    /// cannot legitimately change for the life of that snapshot — a
+    /// changed `EOF` on a subsequent query would indicate something has
+    /// gone wrong (a corrupted snapshot, a bug), not a real update to
+    /// react to.
+    eof: u64,
 }
 
 /// Encode `text` as a NUL-terminated UTF-16 buffer for `PCWSTR` FFI calls.
@@ -187,26 +250,45 @@ fn read_exact(handle: &OwnedHandle, buf: &mut [u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Perform one logical read: open by file reference, re-resolve `EOF`,
-/// apply the VDL/EOF rule, and read the resulting real-byte range
-/// (zero-extending per the plan).
+/// Perform one logical read: reuse `cache`'s open handle if it's already
+/// open against `full_file_reference` (see this module's doc comment),
+/// else open fresh by file reference and re-resolve `EOF`; apply the
+/// VDL/EOF rule, and read the resulting real-byte range (zero-extending
+/// per the plan).
+///
+/// Returns the (possibly newly-opened) handle back as an updated
+/// [`ReadHandleCache`] for the caller to reuse on its next call — on
+/// success this always holds `Some`, even when nothing changed, so the
+/// caller never has to special-case "cache unchanged" against "cache
+/// now empty".
 ///
 /// # Errors
 /// Returns an error if the device/file can't be opened, the read fails,
 /// or the resolved metadata is invalid (`vdl > eof` — never possible
 /// here since VDL is derived from EOF, but `read_plan`'s contract keeps
-/// that check in one place regardless of caller).
+/// that check in one place regardless of caller). The returned error
+/// carries no cache — the caller must treat the connection's cache as
+/// empty afterward, matching how a round-trip failure already discards
+/// the connection itself one level up.
 pub(crate) fn read_logical(
     device_path: &str,
     full_file_reference: u64,
     logical_offset: u64,
     maximum_logical_length: u32,
-) -> anyhow::Result<(Vec<u8>, ActualReadMode)> {
-    let volume_hint = open_volume_hint(device_path)?;
-    let file_handle = open_file_by_id(&volume_hint, full_file_reference)?;
-    drop(volume_hint);
-
-    let eof = file_size(&file_handle)?;
+    cache: ReadHandleCache,
+) -> anyhow::Result<(Vec<u8>, ActualReadMode, ReadHandleCache)> {
+    let (file_handle, eof) = match cache.0 {
+        Some(cached) if cached.full_file_reference == full_file_reference => {
+            (cached.handle, cached.eof)
+        }
+        _ => {
+            let volume_hint = open_volume_hint(device_path)?;
+            let file_handle = open_file_by_id(&volume_hint, full_file_reference)?;
+            drop(volume_hint);
+            let eof = file_size(&file_handle)?;
+            (file_handle, eof)
+        }
+    };
     let vdl = eof; // v1 simplification — see module doc.
 
     let plan = read_plan(vdl, eof, logical_offset, maximum_logical_length)
@@ -221,5 +303,11 @@ pub(crate) fn read_logical(
     }
     payload.resize(payload.len() + plan.zero_bytes as usize, 0);
 
-    Ok((payload, ActualReadMode::Logical))
+    let updated_cache = ReadHandleCache(Some(CachedFileHandle {
+        full_file_reference,
+        handle: file_handle,
+        eof,
+    }));
+
+    Ok((payload, ActualReadMode::Logical, updated_cache))
 }

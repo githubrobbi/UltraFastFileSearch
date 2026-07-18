@@ -76,18 +76,18 @@ fn fs_content_source_reads_bounded_ranges_and_reports_eof() {
         .expect("enumerate must succeed");
     let entry = entries.first().expect("one entry expected");
 
-    let first_half = FsContentSource
-        .read_at(entry, 0, 0, 5)
-        .expect("read first half");
+    let mut session = FsContentSource
+        .begin_read(entry, 0)
+        .expect("begin_read must succeed");
+
+    let first_half = session.read_at(0, 5).expect("read first half");
     assert_eq!(first_half, b"01234");
 
-    let second_half = FsContentSource
-        .read_at(entry, 0, 5, 5)
-        .expect("read second half");
+    let second_half = session.read_at(5, 5).expect("read second half");
     assert_eq!(second_half, b"56789");
 
-    let past_eof = FsContentSource
-        .read_at(entry, 0, 10, 5)
+    let past_eof = session
+        .read_at(10, 5)
         .expect("read past EOF must not error");
     assert!(past_eof.is_empty(), "read at EOF must return no bytes");
 }

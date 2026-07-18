@@ -19,9 +19,17 @@
 //! on each other's pool regardless of size.
 //!
 //! Each pool is a bounded [`crossbeam_channel`] of already-open
-//! connections: checking one out is a blocking `recv` (waits for a
-//! connection to free up rather than erroring), and a connection that
-//! survives its round trip unscathed is sent back for reuse. A
+//! connections. A candidate's whole sequential read pins exactly one
+//! connection for its entire duration — see [`ContentReader::begin_read`]/
+//! [`ReaderSession`] — rather than checking one out fresh per chunk:
+//! real-hardware benchmarking found `uffs-content-reader` caches its
+//! open NTFS file handle per connection across consecutive requests for
+//! the same file (see that crate's `reader/logical.rs`), so consecutive
+//! chunks of one candidate landing on *different* connections (which a
+//! per-chunk checkout would do, round-robin) would defeat that cache
+//! entirely. Checking out a connection is a blocking `recv` (waits for
+//! one to free up rather than erroring); a connection that survives its
+//! session unscathed is returned for reuse when the session drops. A
 //! connection that errors mid-round-trip (frame desync, pipe reset) is
 //! deliberately *not* returned — better to shrink that drive's pool by
 //! one than serve subsequent reads over a connection in an unknown
@@ -32,6 +40,7 @@
 //! (`[u32 LE length][payload]`) exactly — see that module's doc comment
 //! for the rationale.
 
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use std::collections::HashMap;
@@ -46,6 +55,8 @@ use uffs_content_reader_protocol::{
     MAX_RESPONSE_PAYLOAD_BYTES, READER_PIPE_NAME, ReadRequest, ReadResponse, RequestedReadMode,
     StreamKind, VolumeIdentity,
 };
+
+use super::content_source::ReadSession;
 
 /// How long to retry connecting to the freshly spawned Reader's pipe
 /// while it finishes binding it.
@@ -91,7 +102,9 @@ pub(crate) struct ContentReader {
     /// This job's id, echoed into every `ReadRequest`.
     job_id: [u8; 16],
     /// Monotonically increasing nonce for request/response correlation.
-    next_nonce: AtomicU64,
+    /// Shared (not per-session) via `Arc` so every session drawn from
+    /// every drive's pool still produces globally unique nonces.
+    next_nonce: Arc<AtomicU64>,
 }
 
 /// A bounded pool of already-open pipe connections for one drive.
@@ -181,109 +194,47 @@ impl ContentReader {
             child,
             connections,
             job_id,
-            next_nonce: AtomicU64::new(1),
+            next_nonce: Arc::new(AtomicU64::new(1)),
         })
     }
 
-    /// Read up to `maximum_logical_length` bytes at `logical_offset`
-    /// from the file identified by `full_file_reference`, scoped to
-    /// `snapshot_lease_id`.
+    /// Begin a session for reading one candidate's entire content,
+    /// checking out one of `snapshot_lease_id`'s pooled connections and
+    /// pinning it for the session's whole lifetime — see the module doc
+    /// comment for why pinning (rather than checking a connection out
+    /// fresh per chunk) matters. Blocks until a connection is available
+    /// if every connection in this drive's pool is currently checked
+    /// out.
     ///
     /// # Errors
-    /// Returns an error if the round trip fails or the Reader reports
-    /// failure.
-    pub(crate) fn read_at(
+    /// Returns an error if `snapshot_lease_id` has no pool, or every
+    /// connection in that pool has already failed and been dropped.
+    pub(crate) fn begin_read(
         &self,
         snapshot_lease_id: u64,
         candidate_id: u64,
         full_file_reference: u64,
-        logical_offset: u64,
-        maximum_logical_length: u32,
-    ) -> Result<Vec<u8>> {
-        let request = ReadRequest {
-            job_id: self.job_id,
-            snapshot_lease_id,
-            candidate_id,
-            // Presently inert on the Reader side — v1's `OpenFileById`
-            // locates the file by `full_file_reference` alone, no
-            // volume cross-check. See
-            // `uffs-content-reader/src/reader/logical.rs`'s module doc.
-            volume_identity: VolumeIdentity {
-                volume_serial: 0,
-                volume_guid: Vec::new(),
-            },
-            full_file_reference,
-            stream_kind: StreamKind::UnnamedData,
-            logical_offset,
-            maximum_logical_length,
-            requested_mode: RequestedReadMode::Logical,
-            request_nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
-        };
-
-        match self.round_trip(snapshot_lease_id, &request) {
-            Ok(ReadResponse::Bytes { payload, .. }) => Ok(payload),
-            Ok(ReadResponse::Error { code, message }) => {
-                tracing::warn!(
-                    snapshot_lease_id,
-                    candidate_id,
-                    logical_offset,
-                    ?code,
-                    message = %message,
-                    "content reader: read rejected"
-                );
-                anyhow::bail!("Reader rejected read: {code:?}: {message}")
-            }
-            Err(err) => {
-                tracing::warn!(
-                    snapshot_lease_id,
-                    candidate_id,
-                    logical_offset,
-                    error = %err,
-                    "content reader: round trip failed"
-                );
-                Err(err)
-            }
-        }
-    }
-
-    /// Send one framed [`ReadRequest`] and read back one framed
-    /// [`ReadResponse`], over one of `snapshot_lease_id`'s own pooled
-    /// connections — never contending with a different drive's pool.
-    /// Blocks until a connection is available if every connection in
-    /// this drive's pool is currently checked out.
-    fn round_trip(&self, snapshot_lease_id: u64, request: &ReadRequest) -> Result<ReadResponse> {
+    ) -> Result<ReaderSession> {
         let pool = self.connections.get(&snapshot_lease_id).ok_or_else(|| {
             anyhow::anyhow!(
                 "no content reader connection pool for snapshot_lease_id {snapshot_lease_id}"
             )
         })?;
-        let mut pipe = pool.checkout.recv().map_err(|err| {
+        let pipe = pool.checkout.recv().map_err(|err| {
             anyhow::anyhow!(
                 "connection pool for lease {snapshot_lease_id} is exhausted \
                  (every connection failed): {err}"
             )
         })?;
-
-        let result = (|| -> Result<ReadResponse> {
-            write_framed_message(&mut pipe, &request.encode())?;
-            let response_bytes = read_framed_message(&mut pipe)?;
-            let mut wire_reader = WireReader::new(&response_bytes);
-            ReadResponse::decode(&mut wire_reader, MAX_RESPONSE_PAYLOAD_BYTES)
-                .map_err(|err| anyhow::anyhow!("malformed Reader response: {err}"))
-        })();
-
-        if result.is_ok() {
-            // Still framing-aligned — return it for reuse. Best-effort:
-            // the pool never holds more than its original connection
-            // count, so this can't actually overflow; `try_send` is
-            // just the non-panicking way to express "give it back", and
-            // a failure here just means one fewer pooled connection.
-            drop(pool.checkin.try_send(pipe));
-        }
-        // On error, `pipe` is dropped here instead of returned — see
-        // the module doc comment for why a connection that failed
-        // mid-round-trip must not be reused.
-        result
+        Ok(ReaderSession {
+            pipe: Some(pipe),
+            checkin: pool.checkin.clone(),
+            job_id: self.job_id,
+            snapshot_lease_id,
+            candidate_id,
+            full_file_reference,
+            next_nonce: Arc::clone(&self.next_nonce),
+        })
     }
 
     /// Tear down this instance: kill the spawned process. The pipe
@@ -305,6 +256,135 @@ impl Drop for ContentReader {
     /// explicitly, don't leak the child process.
     fn drop(&mut self) {
         drop(self.child.kill());
+    }
+}
+
+/// One candidate's whole sequential read session: a pinned pooled
+/// connection plus the fields every one of that candidate's requests
+/// shares — see [`ContentReader::begin_read`]'s doc comment and the
+/// module doc comment for why pinning one connection for the whole
+/// session (rather than checking one out fresh per chunk) matters.
+///
+/// Checks the connection back in on drop if it's still framing-aligned
+/// (`pipe` is `Some`); a connection that failed mid-round-trip is left
+/// as `None` and simply not returned, shrinking that drive's pool by
+/// one — same contract [`ContentReader`]'s old per-call `round_trip`
+/// used to implement.
+pub(crate) struct ReaderSession {
+    /// The pinned connection, or `None` once a round trip on it has
+    /// failed (see the struct doc comment).
+    pipe: Option<std::fs::File>,
+    /// Returns `pipe` to its pool's checkout queue on drop.
+    checkin: Sender<std::fs::File>,
+    /// This job's id, echoed into every `ReadRequest`.
+    job_id: [u8; 16],
+    /// This session's drive, echoed into every `ReadRequest`.
+    snapshot_lease_id: u64,
+    /// This session's candidate, echoed into every `ReadRequest`.
+    candidate_id: u64,
+    /// This session's file, echoed into every `ReadRequest`.
+    full_file_reference: u64,
+    /// Shared with every other live session (see
+    /// [`ContentReader::next_nonce`]'s own doc comment).
+    next_nonce: Arc<AtomicU64>,
+}
+
+impl ReaderSession {
+    /// Send one framed [`ReadRequest`] for this session's candidate/file
+    /// and read back one framed [`ReadResponse`], over this session's
+    /// pinned connection.
+    fn round_trip(
+        &mut self,
+        logical_offset: u64,
+        maximum_logical_length: u32,
+    ) -> Result<ReadResponse> {
+        let Some(pipe) = self.pipe.as_mut() else {
+            anyhow::bail!(
+                "read session for candidate {} already lost its connection to an earlier \
+                 round-trip failure",
+                self.candidate_id
+            );
+        };
+        let request = ReadRequest {
+            job_id: self.job_id,
+            snapshot_lease_id: self.snapshot_lease_id,
+            candidate_id: self.candidate_id,
+            // Presently inert on the Reader side — v1's `OpenFileById`
+            // locates the file by `full_file_reference` alone, no
+            // volume cross-check. See
+            // `uffs-content-reader/src/reader/logical.rs`'s module doc.
+            volume_identity: VolumeIdentity {
+                volume_serial: 0,
+                volume_guid: Vec::new(),
+            },
+            full_file_reference: self.full_file_reference,
+            stream_kind: StreamKind::UnnamedData,
+            logical_offset,
+            maximum_logical_length,
+            requested_mode: RequestedReadMode::Logical,
+            request_nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
+        };
+
+        let result = (|| -> Result<ReadResponse> {
+            write_framed_message(pipe, &request.encode())?;
+            let response_bytes = read_framed_message(pipe)?;
+            let mut wire_reader = WireReader::new(&response_bytes);
+            ReadResponse::decode(&mut wire_reader, MAX_RESPONSE_PAYLOAD_BYTES)
+                .map_err(|err| anyhow::anyhow!("malformed Reader response: {err}"))
+        })();
+        if result.is_err() {
+            // Framing state is now unknown — see the struct doc comment
+            // for why this session's connection must not be reused
+            // again, by this or any future chunk.
+            self.pipe = None;
+        }
+        result
+    }
+}
+
+impl ReadSession for ReaderSession {
+    fn read_at(&mut self, offset: u64, max_len: u32) -> std::io::Result<Vec<u8>> {
+        let snapshot_lease_id = self.snapshot_lease_id;
+        let candidate_id = self.candidate_id;
+        match self.round_trip(offset, max_len) {
+            Ok(ReadResponse::Bytes { payload, .. }) => Ok(payload),
+            Ok(ReadResponse::Error { code, message }) => {
+                tracing::warn!(
+                    snapshot_lease_id,
+                    candidate_id,
+                    offset,
+                    ?code,
+                    message = %message,
+                    "content reader: read rejected"
+                );
+                Err(std::io::Error::other(format!(
+                    "Reader rejected read: {code:?}: {message}"
+                )))
+            }
+            Err(err) => {
+                tracing::warn!(
+                    snapshot_lease_id,
+                    candidate_id,
+                    offset,
+                    error = %err,
+                    "content reader: round trip failed"
+                );
+                Err(std::io::Error::other(err.to_string()))
+            }
+        }
+    }
+}
+
+impl Drop for ReaderSession {
+    fn drop(&mut self) {
+        if let Some(pipe) = self.pipe.take() {
+            // Best-effort, matching the pool's own established contract
+            // (see the module doc comment): this can't actually
+            // overflow since the pool never holds more than its
+            // original connection count, and a failure here just means
+            // one fewer pooled connection.
+            drop(self.checkin.try_send(pipe));
+        }
     }
 }
 

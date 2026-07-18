@@ -13,7 +13,7 @@ use std::io;
 
 use crossbeam_channel::{Receiver, Sender};
 use uffs_content_protocol::codec::{Digest, IncrementalDigest};
-use uffs_content_protocol::frame::ContentChunk;
+use uffs_content_protocol::frame::{ContentChunk, ReadMode};
 
 use crate::job::candidate_source::CandidateEntry;
 use crate::job::content_source::ContentSource;
@@ -64,14 +64,25 @@ pub(super) fn lease_runs<'entries>(
 /// sequential emission" section).
 pub(super) struct CandidateContent {
     /// Every `CONTENT_CHUNK` this candidate's content produced, in order.
+    /// Empty when `read_mode == MetadataOnly`.
     pub(super) chunks: Vec<ContentChunk>,
-    /// Sum of every chunk's payload length.
+    /// Sum of every chunk's payload length. `0` when `read_mode ==
+    /// MetadataOnly`.
     pub(super) total_read: u64,
-    /// BLAKE3 digest over every chunk's payload, in order.
+    /// BLAKE3 digest over every chunk's payload, in order. Only
+    /// meaningful when `read_mode != MetadataOnly` — the parent module's
+    /// `emit_candidate` reports `content_digest: None` on `FILE_END` for
+    /// a metadata-only candidate regardless of this value.
     pub(super) digest: Digest,
     /// Set only if a read failed partway through; `None` means every
-    /// byte up to `entry.logical_size` was read successfully.
+    /// byte up to `entry.logical_size` was read successfully (or the
+    /// read was skipped entirely because `read_mode == MetadataOnly`).
     pub(super) read_error: Option<io::Error>,
+    /// Whether this candidate's body was actually streamed
+    /// (`LogicalSnapshot`) or skipped because `entry.logical_size`
+    /// exceeded the job's `max_content_delivery_bytes` ceiling
+    /// (`MetadataOnly`) — see [`read_one_candidate`]'s doc comment.
+    pub(super) read_mode: ReadMode,
 }
 
 /// Read every candidate in `run` through a bounded sliding-window
@@ -117,6 +128,7 @@ pub(super) fn read_lease_run_pipelined(
     concurrency: usize,
     content_source: &dyn ContentSource,
     max_chunk_bytes: u32,
+    max_content_delivery_bytes: Option<u64>,
     mut on_ready: impl FnMut(usize, CandidateContent) -> io::Result<()>,
 ) -> io::Result<()> {
     if run.is_empty() {
@@ -149,8 +161,13 @@ pub(super) fn read_lease_run_pipelined(
                     let Some(&(entry, candidate_id)) = run.get(index) else {
                         continue;
                     };
-                    let content =
-                        read_one_candidate(entry, candidate_id, content_source, max_chunk_bytes);
+                    let content = read_one_candidate_catch_panic(
+                        entry,
+                        candidate_id,
+                        content_source,
+                        max_chunk_bytes,
+                        max_content_delivery_bytes,
+                    );
                     if worker_output_tx.send((index, content)).is_err() {
                         break;
                     }
@@ -214,16 +231,77 @@ fn drain_pipelined_output(
     first_error.map_or(Ok(()), Err)
 }
 
+/// [`read_one_candidate`], guarded against a panic partway through:
+/// `content_source` is a `&dyn ContentSource` trait object this crate
+/// doesn't control every implementation of (see that trait's own doc
+/// comment), so a third-party impl panicking must not take down this
+/// candidate's entire worker thread — and, transitively, every other
+/// candidate's read still in flight on this same `thread::scope` (a
+/// spawned thread's panic propagates when the scope joins it). A caught
+/// panic is reported the same way an `io::Error` from a normal read
+/// failure is: as a retryable `FILE_FAILED`, via `read_error`.
+///
+/// Mirrors the panic-to-`read_error` conversion the earlier fixed-batch
+/// design got for free from `JoinHandle::join()` returning `Err` on a
+/// panicked thread — this pipeline's workers are fire-and-forget
+/// (`scope.spawn` without a retained handle), so that safety net has to
+/// be reintroduced explicitly here instead.
+fn read_one_candidate_catch_panic(
+    entry: &CandidateEntry,
+    candidate_id: u64,
+    content_source: &dyn ContentSource,
+    max_chunk_bytes: u32,
+    max_content_delivery_bytes: Option<u64>,
+) -> CandidateContent {
+    let outcome = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+        read_one_candidate(
+            entry,
+            candidate_id,
+            content_source,
+            max_chunk_bytes,
+            max_content_delivery_bytes,
+        )
+    }));
+    outcome.unwrap_or_else(|panic_payload| CandidateContent {
+        chunks: Vec::new(),
+        total_read: 0,
+        digest: IncrementalDigest::new().finalize(),
+        read_error: Some(io::Error::other(format!(
+            "content-read thread panicked: {panic_payload:?}"
+        ))),
+        read_mode: ReadMode::LogicalSnapshot,
+    })
+}
+
 /// Read one candidate's content into memory, up to `entry.logical_size`
-/// or the first read error. Never touches `emit_frame`/`frame_sequence`/
-/// `counters`/`failure_log` — those stay single-threaded, touched only
-/// by the parent module's `emit_candidate` afterward.
+/// or the first read error — or, if `entry.logical_size` exceeds
+/// `max_content_delivery_bytes`, skip the read entirely and report
+/// `read_mode: MetadataOnly` with no bytes read at all. This is the only
+/// place the delivery ceiling is enforced; the query filters
+/// (`ext`/`min_size`/etc.) that decide which files become candidates at
+/// all are evaluated earlier, by the daemon — this is a second,
+/// independent gate on an already-matched candidate's body.
+///
+/// Never touches `emit_frame`/`frame_sequence`/`counters`/`failure_log`
+/// — those stay single-threaded, touched only by the parent module's
+/// `emit_candidate` afterward.
 fn read_one_candidate(
     entry: &CandidateEntry,
     candidate_id: u64,
     content_source: &dyn ContentSource,
     max_chunk_bytes: u32,
+    max_content_delivery_bytes: Option<u64>,
 ) -> CandidateContent {
+    if max_content_delivery_bytes.is_some_and(|ceiling| entry.logical_size > ceiling) {
+        return CandidateContent {
+            chunks: Vec::new(),
+            total_read: 0,
+            digest: IncrementalDigest::new().finalize(),
+            read_error: None,
+            read_mode: ReadMode::MetadataOnly,
+        };
+    }
+
     let mut hasher = IncrementalDigest::new();
     let mut offset = 0_u64;
     let mut chunk_sequence = 0_u64;
@@ -267,5 +345,6 @@ fn read_one_candidate(
         total_read,
         digest: hasher.finalize(),
         read_error,
+        read_mode: ReadMode::LogicalSnapshot,
     }
 }

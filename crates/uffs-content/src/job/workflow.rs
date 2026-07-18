@@ -261,7 +261,7 @@ where
         content_semantics: ContentSemantics::UnnamedLogicalStream,
         digest_algorithm: DigestAlgorithm::Blake3,
         max_chunk_bytes: DEFAULT_MAX_CHUNK_BYTES,
-        max_content_delivery_bytes: None,
+        max_content_delivery_bytes: request.max_content_delivery_bytes,
     };
     emit_frame(encode_frame(
         job_id,
@@ -283,6 +283,7 @@ where
         &candidates,
         read_concurrency,
         content_source,
+        request.max_content_delivery_bytes,
         job_id,
         &mut counters,
         &mut failure_log,
@@ -342,6 +343,7 @@ fn read_and_emit_all_candidates<F>(
     candidates: &[(&CandidateEntry, u64)],
     read_concurrency: &ReadConcurrency,
     content_source: &dyn ContentSource,
+    max_content_delivery_bytes: Option<u64>,
     job_id: [u8; 16],
     counters: &mut RunCounters,
     failure_log: &mut FailureLogWriter,
@@ -361,6 +363,7 @@ where
             concurrency,
             content_source,
             DEFAULT_MAX_CHUNK_BYTES,
+            max_content_delivery_bytes,
             |index, read_result| {
                 let Some(&(entry, candidate_id)) = run.get(index) else {
                     return Ok(());
@@ -483,7 +486,7 @@ fn emit_candidate(
         path,
         logical_size: entry.logical_size,
         mtime: entry.mtime_unix_ms,
-        read_mode: ReadMode::LogicalSnapshot,
+        read_mode: content.read_mode,
         attempt_number: 1,
         content_object_id: None,
     };
@@ -504,13 +507,24 @@ fn emit_candidate(
         ))?;
     }
 
+    let read_mode = content.read_mode;
     match content.read_error {
         None => {
+            // A metadata-only candidate never had real bytes read (see
+            // `pipeline::read_one_candidate`'s doc comment), so its
+            // digest is meaningless — report `None`, matching the wire
+            // contract `ReadMode::MetadataOnly`'s own doc comment
+            // documents (design-doc's two-tier delivery-ceiling model).
+            let content_digest = if read_mode == ReadMode::MetadataOnly {
+                None
+            } else {
+                Some(content.digest)
+            };
             let file_end = FileEnd {
                 candidate_id,
                 total_logical_bytes: content.total_read,
-                content_digest: Some(content.digest),
-                read_mode: ReadMode::LogicalSnapshot,
+                content_digest,
+                read_mode,
                 chunk_count,
                 elapsed_ms: 0,
                 warning_flags: 0,

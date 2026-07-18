@@ -71,4 +71,20 @@ pub struct JobRequest {
     /// Mirrors `SearchParams::attr`.
     #[serde(default)]
     pub attr: Option<String>,
+    /// Content-delivery ceiling: a candidate whose `logical_size` exceeds
+    /// this is still enumerated in the manifest (so reap/tombstone
+    /// completeness holds — see
+    /// [`uffs_content_protocol::frame::ReadMode::MetadataOnly`]'s own doc
+    /// comment) but its body is not streamed. `None` means no ceiling —
+    /// every matched candidate's content is delivered regardless of size.
+    ///
+    /// Independent of `query`/`ext`/`min_size`/etc.: those decide which
+    /// files become candidates at all; this decides which already-
+    /// matched candidates are worth paying to stream, e.g. so a consumer
+    /// doesn't wait on a 100 GB file it has no intention of extracting
+    /// text from. Forwarded verbatim into
+    /// `JOB_BEGIN.max_content_delivery_bytes`
+    /// (see [`super::workflow::run_job`]).
+    #[serde(default)]
+    pub max_content_delivery_bytes: Option<u64>,
 }

@@ -10,7 +10,7 @@
 use std::fs;
 
 use uffs_content_protocol::codec::Reader;
-use uffs_content_protocol::frame::{FrameEnvelope, FrameType};
+use uffs_content_protocol::frame::{FileEnd, FrameEnvelope, FrameType, ReadMode};
 use uffs_content_protocol::manifest::{CandidateRecord, ManifestHeader, ManifestTrailer};
 
 use super::candidate_source::{CandidateSource as _, DirWalkCandidateSource};
@@ -185,4 +185,64 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         .filter(|frame_type| **frame_type == FrameType::FileEnd)
         .count();
     assert_eq!(file_end_count, 2, "both candidates must reach FILE_END");
+}
+
+#[test]
+fn candidates_over_the_delivery_ceiling_are_reported_metadata_only() {
+    let source_dir = tempfile::tempdir().expect("create source temp dir");
+    fs::write(source_dir.path().join("small.txt"), b"tiny").expect("write small.txt");
+    fs::write(source_dir.path().join("big.bin"), vec![0_u8; 64]).expect("write big.bin");
+
+    let run_dir = tempfile::tempdir().expect("create run temp dir");
+    let request = JobRequest {
+        source_id: "ceiling-source".to_owned(),
+        roots: vec![source_dir.path().to_path_buf()],
+        query: "*".to_owned(),
+        max_content_delivery_bytes: Some(10),
+        ..Default::default()
+    };
+
+    let mut frames = Vec::new();
+    let outcome = run_job(
+        &request,
+        &DirWalkCandidateSource,
+        &FsContentSource,
+        run_dir.path(),
+        &ReadConcurrency::flat(2),
+        |frame| {
+            frames.push(frame);
+            Ok(())
+        },
+    )
+    .expect("run_job must succeed");
+
+    assert_eq!(outcome.run_summary.candidate_count, 2);
+    assert_eq!(outcome.run_summary.succeeded_count, 2);
+
+    let mut file_ends = Vec::new();
+    for frame_bytes in &frames {
+        let mut reader = Reader::new(frame_bytes);
+        let (envelope, payload) =
+            FrameEnvelope::decode(&mut reader, u64::MAX).expect("decode frame envelope");
+        if envelope.frame_type == FrameType::FileEnd {
+            let mut payload_reader = Reader::new(&payload);
+            file_ends.push(FileEnd::decode(&mut payload_reader).expect("decode file end"));
+        }
+    }
+    assert_eq!(file_ends.len(), 2);
+
+    let big_end = file_ends
+        .iter()
+        .find(|end| end.total_logical_bytes == 0)
+        .expect("big file's FILE_END must report zero delivered bytes");
+    assert_eq!(big_end.read_mode, ReadMode::MetadataOnly);
+    assert!(big_end.content_digest.is_none());
+    assert_eq!(big_end.chunk_count, 0);
+
+    let small_end = file_ends
+        .iter()
+        .find(|end| end.total_logical_bytes == 4)
+        .expect("small file's FILE_END must report its actual byte count");
+    assert_eq!(small_end.read_mode, ReadMode::LogicalSnapshot);
+    assert!(small_end.content_digest.is_some());
 }

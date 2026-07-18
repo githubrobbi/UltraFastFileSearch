@@ -22,9 +22,9 @@ use anyhow::{Context as _, Result};
 use super::candidate_source::VssCandidateSource;
 use super::content_source::VssContentSource;
 use super::intake::JobRequest;
-use super::reader_client::ContentReader;
+use super::reader_client::{CONNECTIONS_PER_DRIVE, ContentReader};
 use super::vss_orchestrator;
-use super::workflow::{JobOutcome, run_job};
+use super::workflow::{JobOutcome, ReadConcurrency, run_job};
 
 /// Run `request` end to end against a real VSS snapshot.
 ///
@@ -71,25 +71,38 @@ where
     let candidate_source =
         VssCandidateSource::new(&resolved_request, &resources.daemon, drive_to_lease);
 
-    let devices_for_reader: Vec<(String, u64)> = resources
-        .leases
-        .iter()
-        .map(|lease| (lease.device_path.clone(), lease.lease_id))
-        .collect();
+    // Per-drive read concurrency: an HDD gets exactly one connection
+    // (read its candidates strictly one at a time, in the order they
+    // were enumerated — approximating sequential disk access instead of
+    // seek-thrashing between concurrent reads on a spinning disk), an
+    // NVMe/SSD gets `CONNECTIONS_PER_DRIVE` (no seek penalty to protect,
+    // and it benefits from many reads in flight). See
+    // `reader_client::CONNECTIONS_PER_DRIVE` and
+    // `workflow::ReadConcurrency`'s doc comments for both sides of this.
+    let mut devices_for_reader: Vec<(String, u64, usize)> =
+        Vec::with_capacity(resources.leases.len());
+    let mut read_concurrency = ReadConcurrency::new(1);
+    for lease in &resources.leases {
+        let connections = drive_read_connections(lease.drive_letter);
+        tracing::info!(
+            drive = %lease.drive_letter,
+            connections,
+            "content read: per-drive connection count"
+        );
+        read_concurrency.set(lease.lease_id, connections);
+        devices_for_reader.push((lease.device_path.clone(), lease.lease_id, connections));
+    }
+
     let content_reader = ContentReader::spawn(job_id, &devices_for_reader)
         .context("failed to spawn the content reader")?;
     let content_source = VssContentSource::new(content_reader);
 
-    // One concurrent content-read per leased drive — see
-    // `workflow::run_job`'s "Concurrent reads, sequential emission" doc
-    // section for why this is safe/correct at any value.
-    let concurrency = resources.leases.len();
     let result = run_job(
         &resolved_request,
         &candidate_source,
         &content_source,
         run_dir,
-        concurrency,
+        &read_concurrency,
         emit_frame,
     )
     .context("run_job failed");
@@ -108,6 +121,27 @@ where
     }
 
     result
+}
+
+/// How many concurrent content-read connections `drive_letter`'s lease
+/// should get: [`CONNECTIONS_PER_DRIVE`] for a high-performance medium
+/// (NVMe/SSD — no seek penalty, benefits from many reads in flight), or
+/// exactly `1` for anything else (HDD, removable, virtual, or a type
+/// that couldn't be determined) — see [`CONNECTIONS_PER_DRIVE`]'s doc
+/// comment for why concurrency `1` is the correct choice for a
+/// seek-bound medium, not just a conservative fallback.
+fn drive_read_connections(drive_letter: char) -> usize {
+    let Ok(letter) = uffs_mft::platform::DriveLetter::parse(drive_letter) else {
+        // Unreachable in practice: `drive_letter` came from a lease VSS
+        // already accepted for this exact letter. Fall back to the safe
+        // (sequential) choice rather than panicking.
+        return 1;
+    };
+    if uffs_mft::platform::detect_drive_type(letter).is_high_performance() {
+        CONNECTIONS_PER_DRIVE
+    } else {
+        1
+    }
 }
 
 /// Resolve `request.roots`: as given if non-empty, else one root per

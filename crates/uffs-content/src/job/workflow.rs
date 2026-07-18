@@ -11,19 +11,30 @@
 //!
 //! # Concurrent reads, sequential emission
 //!
-//! Candidates are read `concurrency`-at-a-time (see [`run_job`]): each
-//! batch's candidates are read on their own `std::thread::scope` thread
-//! —  concurrently, so reads for candidates on different drives (each
-//! routed to its own connection by `reader_client::ContentReader`, see
-//! that module's doc comment) actually overlap instead of serializing —
-//! but every batch's frames are still *emitted* strictly in original
-//! candidate order, on the caller's own thread, exactly matching the
-//! fully-sequential emission order this function has always produced.
-//! `emit_frame`/`frame_sequence`/`counters`/`failure_log` are therefore
-//! still only ever touched from one thread; no synchronization was
-//! added to any of them, and downstream consumers of the frame stream
-//! (`crate::serve::stream::Grouped`) see exactly the same per-candidate-
-//! contiguous ordering as the fully-sequential (`concurrency == 1`) case.
+//! Candidates are read in batches, each batch's size chosen per-drive by
+//! [`ReadConcurrency`] (see [`run_job`]): each batch's candidates are
+//! read on their own `std::thread::scope` thread — concurrently, routed
+//! to that drive's own connection pool by `reader_client::ContentReader`
+//! (see that module's doc comment) — but every batch's frames are still
+//! *emitted* strictly in original candidate order, on the caller's own
+//! thread, exactly matching the fully-sequential emission order this
+//! function has always produced. `emit_frame`/`frame_sequence`/
+//! `counters`/`failure_log` are therefore still only ever touched from
+//! one thread; no synchronization was added to any of them, and
+//! downstream consumers of the frame stream (`crate::serve::stream::
+//! Grouped`) see exactly the same per-candidate-contiguous ordering as
+//! the fully-sequential (every lease at concurrency `1`) case.
+//!
+//! A batch never spans two different `snapshot_lease_id`s — candidates
+//! are collected one root/drive at a time (see `run_job`'s enumeration
+//! loop), so they already arrive grouped contiguously by drive, and
+//! [`run_job`]'s batching stops at a lease boundary rather than
+//! overshooting into the next drive's own concurrency setting. This is
+//! what makes an HDD-backed lease's concurrency-`1` setting actually
+//! mean "read every candidate strictly one at a time, in the order they
+//! were enumerated" — the same order the MFT (and therefore, roughly,
+//! on-disk position) produced them in — rather than being diluted by
+//! whatever other drives happen to be in the same job.
 //!
 //! # Why `emit_frame` is a callback, not a returned `Vec`
 //!
@@ -66,6 +77,109 @@ use crate::run::{FailureLogWriter, FailureRecord, RunCounters, RunSummary};
 /// concern, not something this workflow needs to get "right" yet.
 pub const DEFAULT_MAX_CHUNK_BYTES: u32 = 64 * 1024;
 
+/// Per-drive (per `snapshot_lease_id`) content-read concurrency.
+///
+/// An HDD-backed lease should read its candidates one at a time, in the
+/// order [`CandidateSource::enumerate`] returned them: candidates come
+/// off the MFT roughly in on-disk order, so reading them strictly in
+/// sequence approximates sequential disk access; racing several
+/// concurrent reads against the same spinning disk instead scatters its
+/// head across every in-flight read's location — pure seek-time waste.
+/// An NVMe/SSD-backed lease has no seek penalty to protect and benefits
+/// from many candidates in flight at once (see `reader_client`'s
+/// `ConnectionPool`, which is what actually backs this concurrency on
+/// the wire — this type only controls how many threads
+/// [`run_job`] fans a given lease's reads out to).
+///
+/// `snapshot_lease_id == 0` (never a real Broker-assigned lease id — see
+/// [`CandidateEntry::snapshot_lease_id`]) always falls through to
+/// `default`, which is what the cross-platform fake/test harness (no
+/// drive-type concept at all) relies on via [`Self::flat`].
+#[derive(Debug, Clone)]
+pub struct ReadConcurrency {
+    /// Concurrency overrides, keyed by `snapshot_lease_id`.
+    per_lease: std::collections::HashMap<u64, usize>,
+    /// Concurrency for any lease not present in `per_lease`.
+    default: usize,
+}
+
+impl ReadConcurrency {
+    /// A single flat concurrency for every lease — for callers with no
+    /// per-drive concurrency to report (the cross-platform fake/test
+    /// harness). `1` gives the fully-sequential, deterministic-order
+    /// behavior some tests rely on.
+    #[must_use]
+    pub fn flat(concurrency: usize) -> Self {
+        Self {
+            per_lease: std::collections::HashMap::new(),
+            default: concurrency.max(1),
+        }
+    }
+
+    /// Start from `default` (used for any lease [`Self::set`] hasn't
+    /// overridden) with no per-lease overrides yet.
+    #[must_use]
+    pub fn new(default: usize) -> Self {
+        Self {
+            per_lease: std::collections::HashMap::new(),
+            default: default.max(1),
+        }
+    }
+
+    /// Override `lease_id`'s own concurrency.
+    pub fn set(&mut self, lease_id: u64, concurrency: usize) {
+        self.per_lease.insert(lease_id, concurrency.max(1));
+    }
+
+    /// The concurrency to use for a candidate from `lease_id`.
+    fn for_lease(&self, lease_id: u64) -> usize {
+        self.per_lease
+            .get(&lease_id)
+            .copied()
+            .unwrap_or(self.default)
+    }
+}
+
+/// Split `candidates` into batches for [`read_candidate_batch`]: each
+/// batch holds only candidates from one `snapshot_lease_id`, sized by
+/// that lease's own [`ReadConcurrency::for_lease`] — never more, and
+/// never spilling into the next lease's candidates even if this lease's
+/// own concurrency would allow a larger batch. See the module doc's
+/// "Concurrent reads, sequential emission" section for why staying
+/// within one lease per batch matters.
+///
+/// Candidates already arrive grouped contiguously by lease (`run_job`'s
+/// enumeration loop appends one root/drive at a time), so a single
+/// linear scan suffices — no need to look ahead past the current run.
+fn batches_by_lease<'entries>(
+    candidates: &'entries [(&'entries CandidateEntry, u64)],
+    read_concurrency: &ReadConcurrency,
+) -> Vec<&'entries [(&'entries CandidateEntry, u64)]> {
+    let mut batches = Vec::new();
+    let mut start = 0_usize;
+    while start < candidates.len() {
+        let Some((first_entry, _)) = candidates.get(start) else {
+            break;
+        };
+        let lease_id = first_entry.snapshot_lease_id;
+        let max_batch = read_concurrency.for_lease(lease_id);
+        let cap = (start + max_batch).min(candidates.len());
+        let Some(window) = candidates.get(start..cap) else {
+            break;
+        };
+        let end = window
+            .iter()
+            .position(|(entry, _)| entry.snapshot_lease_id != lease_id)
+            .map_or(cap, |offset| start + offset);
+        let Some(batch) = candidates.get(start..end) else {
+            break;
+        };
+        batches.push(batch);
+        start = end;
+    }
+    batches
+}
+
 /// Everything one completed job produced, aside from the frames
 /// themselves (see the module doc for why those are emitted through a
 /// callback instead of collected here).
@@ -90,13 +204,16 @@ pub struct JobOutcome {
 /// `JOB_END`) is passed to `emit_frame` in emission order as soon as it
 /// exists — see the module doc comment.
 ///
-/// `concurrency` is how many candidates are read concurrently per batch
-/// (see the module doc's "Concurrent reads, sequential emission"
-/// section) — clamped to at least `1`. Pass the number of drives a job
-/// actually leased (or `1` for the fully-sequential, deterministic-order
-/// behavior tests rely on) — this function has no way to know that
-/// itself, since drive leasing happens in the caller
-/// (`super::vss_job::run_vss_job`).
+/// `read_concurrency` is how many candidates are read concurrently per
+/// batch, per drive (see the module doc's "Concurrent reads, sequential
+/// emission" section and [`ReadConcurrency`]'s own doc comment for why
+/// this varies by drive rather than being one flat number). Pass
+/// [`ReadConcurrency::flat`] for the fully-sequential, deterministic-
+/// order behavior tests rely on, or a per-lease-tuned one built from
+/// each leased drive's actual `uffs_mft::platform::DriveType` (see
+/// `super::vss_job::run_vss_job`, the real caller) — this function has
+/// no way to know drive types itself, since drive leasing happens in
+/// the caller.
 ///
 /// # Errors
 /// Returns an [`io::Error`] for any filesystem failure enumerating
@@ -110,13 +227,12 @@ pub fn run_job<F>(
     candidate_source: &dyn CandidateSource,
     content_source: &dyn ContentSource,
     run_dir: &Path,
-    concurrency: usize,
+    read_concurrency: &ReadConcurrency,
     mut emit_frame: F,
 ) -> io::Result<JobOutcome>
 where
     F: FnMut(Vec<u8>) -> io::Result<()>,
 {
-    let batch_size = concurrency.max(1_usize);
     let job_id = *uuid::Uuid::new_v4().as_bytes();
     let source_id = source_id_bytes(&request.source_id);
     // No query filtering is wired up yet (see `JobRequest` docs) — every
@@ -126,7 +242,6 @@ where
     tracing::info!(
         job_id = %uuid::Uuid::from_bytes(job_id),
         root_count = request.roots.len(),
-        concurrency = batch_size,
         "job: starting candidate enumeration"
     );
     let mut entries = Vec::new();
@@ -174,7 +289,7 @@ where
         .iter()
         .zip(built.candidate_ids.iter().copied())
         .collect();
-    for batch in candidates.chunks(batch_size) {
+    for batch in batches_by_lease(&candidates, read_concurrency) {
         let read_results = read_candidate_batch(batch, content_source, DEFAULT_MAX_CHUNK_BYTES);
         for ((entry, candidate_id), read_result) in batch.iter().copied().zip(read_results) {
             emit_candidate(

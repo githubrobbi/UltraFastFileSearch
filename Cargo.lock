@@ -4486,6 +4486,7 @@ version = "0.6.27"
 dependencies = [
  "anyhow",
  "blake3",
+ "crossbeam-channel",
  "serde",
  "serde_json",
  "tempfile",

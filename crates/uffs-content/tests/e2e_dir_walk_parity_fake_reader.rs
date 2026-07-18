@@ -37,6 +37,8 @@ mod support;
 // per-target rationale (each test binary is its own compilation unit).
 #[cfg(windows)]
 use anyhow as _;
+#[cfg(windows)]
+use crossbeam_channel as _;
 use serde as _;
 use serde_json as _;
 #[cfg(windows)]
@@ -64,7 +66,7 @@ mod tests {
     use uffs_content::job::candidate_source::DirWalkCandidateSource;
     use uffs_content::job::content_source::FsContentSource;
     use uffs_content::job::intake::JobRequest;
-    use uffs_content::job::workflow::{JobOutcome, run_job};
+    use uffs_content::job::workflow::{JobOutcome, ReadConcurrency, run_job};
 
     use crate::support;
     use crate::support::fixture_tree::FixtureFile;
@@ -104,7 +106,7 @@ mod tests {
             // >1, and smaller than the fixture's own file count, so this
             // parity check also exercises multiple concurrent-read
             // batches (`read_candidate_batch`), not just one.
-            3,
+            &ReadConcurrency::flat(3),
             |frame| {
                 frames.push(frame);
                 Ok(())

@@ -129,6 +129,11 @@ tokio = { workspace = true, features = ["net"] }
 # transport server (`src/serve/pipe_io.rs`) — the same primitives
 # `uffs-daemon`'s and `uffs-content-reader`'s named-pipe servers use.
 uffs-security.workspace = true
+# Per-drive content-reader connection pool (`src/job/reader_client.rs`):
+# a bounded channel of open pipe connections doubles as a checkout/
+# check-in pool with free blocking-wait-for-availability semantics.
+# Already a workspace dependency (`uffs-mft` uses it the same way).
+crossbeam-channel.workspace = true
 
 [build-dependencies]
 uffs-version = { workspace = true, features = ["build"] }

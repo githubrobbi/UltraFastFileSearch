@@ -43,6 +43,8 @@
 #[cfg(windows)]
 use anyhow as _;
 use blake3 as _;
+#[cfg(windows)]
+use crossbeam_channel as _;
 use serde as _;
 use serde_json as _;
 // Used only inside the `#[cfg(windows)] mod windows_tests` below — the

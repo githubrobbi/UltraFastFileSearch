@@ -17,7 +17,7 @@ use super::candidate_source::{CandidateSource as _, DirWalkCandidateSource};
 use super::content_source::{ContentSource as _, FsContentSource};
 use super::intake::JobRequest;
 use super::manifest_builder::build_manifest;
-use super::workflow::run_job;
+use super::workflow::{ReadConcurrency, run_job};
 
 #[test]
 fn dir_walk_candidate_source_enumerates_files_not_directories() {
@@ -151,7 +151,7 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         // >1 so this test also exercises the concurrent-read batching
         // path (`read_candidate_batch`), not just the fully-sequential
         // (`concurrency == 1`) case.
-        4,
+        &ReadConcurrency::flat(4),
         |frame| {
             frames.push(frame);
             Ok(())

@@ -873,10 +873,18 @@ impl VolumeHandle {
     pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
 
-        // Broker-backed: `\\.\X:` can't be re-opened here (non-elevated →
-        // access-denied).  The broker handle is already overlapped, so hand
-        // back an independent duplicate the caller can close on its own.
-        if self.broker_backed {
+        // Duplicate instead of re-opening `\\.\<letter>:` whenever that
+        // would be wrong or unsafe to do:
+        // - `broker_backed`: this process isn't elevated enough to `CreateFileW` the
+        //   volume itself (non-elevated → access-denied); the broker/adopted handle is
+        //   already overlapped, so hand back an independent duplicate the caller can
+        //   close on its own.
+        // - `!is_live_letter`: this handle doesn't correspond to the live volume at all
+        //   (e.g. a VSS snapshot device from `open_device_path`) — re-deriving
+        //   `\\.\<letter>:` here would silently open the *live* volume instead, the
+        //   same class of bug already fixed in
+        //   `get_mft_extents`/`get_mft_bitmap_internal`.
+        if self.broker_backed || !self.is_live_letter {
             return self.duplicate();
         }
 
@@ -1286,6 +1294,28 @@ impl VolumeHandle {
         use windows::Win32::Storage::FileSystem::{
             FILE_BEGIN, GetFileSizeEx, ReadFile, SYNCHRONIZE, SetFilePointerEx,
         };
+
+        // Same rationale as `get_mft_extents`: `"{volume}:\$MFT::$BITMAP"`
+        // re-derives a *live* drive-letter path from `self.volume` (a bare
+        // label), entirely independent of `self.handle` — for a VSS
+        // snapshot device handle this would silently query the *live*
+        // volume's current allocation bitmap instead of the snapshot's.
+        // The bitmap is advisory-only (chunk generation always reads full
+        // chunks regardless — see `chunking.rs`'s "reading full chunk for
+        // correctness" comments), so skipping straight to the safe
+        // all-valid fallback is exactly as correct as a genuine snapshot
+        // bitmap would be, without the live-volume query at all.
+        if !self.is_live_letter {
+            if verbose {
+                tracing::info!(
+                    volume = %self.volume,
+                    "Non-live-letter handle: skipping live $BITMAP query, using all-valid bitmap"
+                );
+            }
+            return Ok(MftBitmap::new_all_valid(frs_to_usize(
+                self.estimated_record_count(),
+            )));
+        }
 
         let bitmap_path_str = format!("{}:\\$MFT::$BITMAP", self.volume);
         let bitmap_path: Vec<u16> = bitmap_path_str

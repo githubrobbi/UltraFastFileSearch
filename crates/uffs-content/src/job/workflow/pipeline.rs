@@ -25,13 +25,23 @@ use crate::job::content_source::ContentSource;
 /// legitimately exceed this.
 const IMPLAUSIBLE_LOGICAL_SIZE_BYTES: u64 = 1024 * 1024 * 1024 * 1024; // 1 TiB
 
+/// A declared `logical_size` at or above this is worth announcing
+/// *before* reading it (see [`read_one_candidate`]) — real hardware has
+/// shown large/fragmented files reading dramatically slower toward
+/// their end than a small-file baseline would predict, without any
+/// single candidate ever crossing [`STALL_WARNING_INTERVAL`] on its own.
+/// Logging every such candidate up front means a run's throughput dip
+/// can always be attributed to a named file, not just inferred after
+/// the fact from progress-heartbeat arithmetic.
+const NOTABLY_LARGE_LOGICAL_SIZE_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
+
 /// How often [`read_one_candidate`] re-warns about a single candidate
-/// still being read, once it's been in progress this long. Chosen to be
-/// well above normal per-file read latency (even a large legitimate
-/// file should clear this comfortably) but short enough that a genuinely
-/// stuck candidate is visible in the log within one interval, not after
-/// an hour of silence.
-const STALL_WARNING_INTERVAL: core::time::Duration = core::time::Duration::from_secs(30);
+/// still being read, once it's been in progress this long. Shorter than
+/// might seem necessary on purpose: real hardware has shown a single
+/// large/fragmented file's read throughput can collapse well before 30s
+/// of elapsed time on that one candidate, so a shorter interval catches
+/// a slow candidate sooner without waiting for it to look fully stuck.
+const STALL_WARNING_INTERVAL: core::time::Duration = core::time::Duration::from_secs(10);
 
 /// Split `candidates` into contiguous same-`snapshot_lease_id` runs for
 /// [`read_lease_run_pipelined`] — unlike a fixed batch size, a run is
@@ -316,18 +326,7 @@ fn read_one_candidate(
             read_mode: ReadMode::MetadataOnly,
         };
     }
-    if entry.logical_size > IMPLAUSIBLE_LOGICAL_SIZE_BYTES {
-        tracing::warn!(
-            candidate_id,
-            path = %entry.relative_path.display(),
-            declared_logical_size = entry.logical_size,
-            "content read: candidate's declared logical_size is implausibly large -- this \
-             usually means corrupted/stale MFT metadata for this file (e.g. a reused FRS or a \
-             race with the file being resized around snapshot time), not a genuinely huge file; \
-             the read below is bounded by this declared size regardless, so a corrupted value \
-             here can make one candidate consume a very long time and a lot of memory"
-        );
-    }
+    log_candidate_size_if_notable(entry, candidate_id);
 
     let mut hasher = IncrementalDigest::new();
     let mut offset = 0_u64;
@@ -382,6 +381,41 @@ fn read_one_candidate(
         digest: hasher.finalize(),
         read_error,
         read_mode: ReadMode::LogicalSnapshot,
+    }
+}
+
+/// Logs a warning if `entry.logical_size` is implausibly large (likely
+/// corrupted MFT metadata), or an informational note if it's merely
+/// notably large (a real, sizeable file worth naming up front) —
+/// extracted from [`read_one_candidate`] purely to keep that function's
+/// cognitive complexity down; see [`IMPLAUSIBLE_LOGICAL_SIZE_BYTES`] and
+/// [`NOTABLY_LARGE_LOGICAL_SIZE_BYTES`]'s own doc comments for why both
+/// exist.
+fn log_candidate_size_if_notable(entry: &CandidateEntry, candidate_id: u64) {
+    if entry.logical_size > IMPLAUSIBLE_LOGICAL_SIZE_BYTES {
+        tracing::warn!(
+            candidate_id,
+            path = %entry.relative_path.display(),
+            declared_logical_size = entry.logical_size,
+            "content read: candidate's declared logical_size is implausibly large -- this \
+             usually means corrupted/stale MFT metadata for this file (e.g. a reused FRS or a \
+             race with the file being resized around snapshot time), not a genuinely huge file; \
+             the read below is bounded by this declared size regardless, so a corrupted value \
+             here can make one candidate consume a very long time and a lot of memory"
+        );
+    } else if entry.logical_size >= NOTABLY_LARGE_LOGICAL_SIZE_BYTES {
+        // Announced up front, before any bytes are read, so a later
+        // throughput dip can always be traced back to a named candidate
+        // instead of only inferred from progress-heartbeat arithmetic
+        // after the fact -- real hardware has shown a large/fragmented
+        // file's read slow down well before it individually crosses
+        // STALL_WARNING_INTERVAL.
+        tracing::info!(
+            candidate_id,
+            path = %entry.relative_path.display(),
+            declared_logical_size = entry.logical_size,
+            "content read: about to read a notably large candidate"
+        );
     }
 }
 

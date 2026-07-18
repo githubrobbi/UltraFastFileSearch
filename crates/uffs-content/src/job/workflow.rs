@@ -103,10 +103,25 @@ use crate::run::{FailureLogWriter, FailureRecord, RunCounters, RunSummary};
 
 /// One `CONTENT_CHUNK`'s maximum payload size for a job run.
 ///
-/// Deliberately small so even modest fixture files exercise multiple
-/// chunks — production tuning of this value is a UFI.2 scheduler
-/// concern, not something this workflow needs to get "right" yet.
-pub const DEFAULT_MAX_CHUNK_BYTES: u32 = 64 * 1024;
+/// Real-hardware benchmarking found `uffs-content-reader`'s
+/// `read_logical` (`crates/uffs-content-reader/src/reader/logical.rs`)
+/// does a full `CreateFileW`+`OpenFileById`+`GetFileSizeEx`+`ReadFile`+
+/// close-both-handles cycle on *every single* `ReadRequest` — i.e. once
+/// per chunk, with no handle caching across a file's sequential reads.
+/// At the previous `64 * 1024` default, a 2.76 GB file needed roughly
+/// 42,000 of those full open/close cycles; per-`OpenFileById` cost
+/// against a VSS snapshot device varied wildly file to file in a way
+/// that didn't correlate with file size, which is exactly what you'd
+/// expect from open/close overhead rather than genuine streaming
+/// throughput. `1 MiB` cuts that count 16x with no protocol risk — it
+/// stays far under `uffs_content_reader_protocol::MAX_RESPONSE_PAYLOAD_BYTES`
+/// (64 MiB), and `serve::pipe_io::MAX_MESSAGE_BYTES` is derived from
+/// this constant, so it grows with it automatically.
+///
+/// This does not fix the underlying per-chunk open/close cost, only
+/// reduces how often it's paid; caching the open handle across a
+/// candidate's whole read (a bigger, separate change) is the deeper fix.
+pub const DEFAULT_MAX_CHUNK_BYTES: u32 = 1024 * 1024;
 
 /// Per-drive (per `snapshot_lease_id`) content-read concurrency.
 ///

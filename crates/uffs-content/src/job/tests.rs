@@ -148,9 +148,9 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         &DirWalkCandidateSource,
         &FsContentSource,
         run_dir.path(),
-        // >1 so this test also exercises the concurrent-read batching
-        // path (`read_candidate_batch`), not just the fully-sequential
-        // (`concurrency == 1`) case.
+        // >1 so this test also exercises the sliding-window concurrent-
+        // read path (`read_lease_run_pipelined`), not just the fully-
+        // sequential (`concurrency == 1`) case.
         &ReadConcurrency::flat(4),
         |frame| {
             frames.push(frame);

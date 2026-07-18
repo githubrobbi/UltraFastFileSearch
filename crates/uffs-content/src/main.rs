@@ -47,9 +47,9 @@
 use anyhow as _;
 #[cfg(test)]
 use blake3 as _;
-// Used by `uffs_content::job::reader_client`'s per-drive connection
-// pool, not by this thin entry point directly.
-#[cfg(windows)]
+// Used by `uffs_content::job::workflow`'s pipelined content reader and
+// `uffs_content::job::reader_client`'s per-drive connection pool, not
+// by this thin entry point directly.
 use crossbeam_channel as _;
 // Used by `uffs_content::run` (failure log + summary serialization), not
 // by this thin entry point directly.

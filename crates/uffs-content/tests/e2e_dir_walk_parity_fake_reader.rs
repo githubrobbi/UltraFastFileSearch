@@ -37,7 +37,8 @@ mod support;
 // per-target rationale (each test binary is its own compilation unit).
 #[cfg(windows)]
 use anyhow as _;
-#[cfg(windows)]
+// Used by `uffs_content::job::workflow`'s pipelined content reader,
+// exercised by this cross-platform test via `run_job` itself.
 use crossbeam_channel as _;
 use serde as _;
 use serde_json as _;
@@ -104,8 +105,9 @@ mod tests {
             &FsContentSource,
             run_dir.path(),
             // >1, and smaller than the fixture's own file count, so this
-            // parity check also exercises multiple concurrent-read
-            // batches (`read_candidate_batch`), not just one.
+            // parity check also exercises the sliding-window concurrent-
+            // read path (`read_lease_run_pipelined`) with more candidates
+            // than the window is wide, not just a single pass.
             &ReadConcurrency::flat(3),
             |frame| {
                 frames.push(frame);

@@ -73,6 +73,15 @@ uuid.workspace = true
 # only installing a subscriber to consume them (`tracing-subscriber`,
 # Windows-only below) is Windows-specific.
 tracing.workspace = true
+# `workflow::read_lease_run_pipelined`'s bounded sliding-window content
+# reader: a per-lease-run pool of worker threads pulling candidate
+# indices off a bounded input channel and returning results through a
+# bounded output channel, so it stays unconditional the same way
+# `workflow.rs` itself does (exercised by both the cross-platform fake
+# harness and the real Windows VSS pipeline). Already a workspace
+# dependency (`uffs-mft`/this crate's own `reader_client.rs` use it the
+# same way).
+crossbeam-channel.workspace = true
 
 # Windows-only deps: the real Snapshot Manager pipe client
 # (`src/job/snapshot_client.rs`) and the real VSS+MFT-query
@@ -129,11 +138,6 @@ tokio = { workspace = true, features = ["net"] }
 # transport server (`src/serve/pipe_io.rs`) — the same primitives
 # `uffs-daemon`'s and `uffs-content-reader`'s named-pipe servers use.
 uffs-security.workspace = true
-# Per-drive content-reader connection pool (`src/job/reader_client.rs`):
-# a bounded channel of open pipe connections doubles as a checkout/
-# check-in pool with free blocking-wait-for-availability semantics.
-# Already a workspace dependency (`uffs-mft` uses it the same way).
-crossbeam-channel.workspace = true
 
 [build-dependencies]
 uffs-version = { workspace = true, features = ["build"] }

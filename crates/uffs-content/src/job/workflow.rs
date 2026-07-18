@@ -11,30 +11,57 @@
 //!
 //! # Concurrent reads, sequential emission
 //!
-//! Candidates are read in batches, each batch's size chosen per-drive by
-//! [`ReadConcurrency`] (see [`run_job`]): each batch's candidates are
-//! read on their own `std::thread::scope` thread — concurrently, routed
-//! to that drive's own connection pool by `reader_client::ContentReader`
-//! (see that module's doc comment) — but every batch's frames are still
-//! *emitted* strictly in original candidate order, on the caller's own
-//! thread, exactly matching the fully-sequential emission order this
-//! function has always produced. `emit_frame`/`frame_sequence`/
-//! `counters`/`failure_log` are therefore still only ever touched from
-//! one thread; no synchronization was added to any of them, and
-//! downstream consumers of the frame stream (`crate::serve::stream::
-//! Grouped`) see exactly the same per-candidate-contiguous ordering as
-//! the fully-sequential (every lease at concurrency `1`) case.
+//! Candidates are read through a bounded pipeline, one per contiguous
+//! `snapshot_lease_id` run (see `lease_runs`), sized by that lease's
+//! own [`ReadConcurrency`] — routed to that drive's own connection pool
+//! by `reader_client::ContentReader` (see that module's doc comment).
+//! `read_lease_run_pipelined` is a genuine sliding window, not a
+//! fixed-size batch that waits for its slowest member before starting
+//! the next one: as soon as any of the `concurrency` worker threads
+//! finishes a candidate, it immediately claims the next not-yet-started
+//! one from the same run, regardless of whether earlier candidates are
+//! still in flight. This matters in practice — a real-hardware run
+//! mixing a handful of multi-gigabyte files into tens of thousands of
+//! tiny ones showed the earlier fixed-batch design stalling *every*
+//! connection in a batch for as long as its one large straggler took,
+//! since the next batch could never start until the current one's
+//! `std::thread::scope` join completed. The sliding window instead keeps
+//! the other `concurrency - 1` connections working through subsequent
+//! candidates for the whole time the straggler is still streaming.
 //!
-//! A batch never spans two different `snapshot_lease_id`s — candidates
+//! Despite the out-of-order reads, frames are still *emitted* strictly
+//! in original candidate order, on the caller's own thread, exactly
+//! matching the fully-sequential emission order this function has always
+//! produced: `read_lease_run_pipelined`'s coordinator loop buffers an
+//! out-of-order completion in a small reorder map and only calls the
+//! caller's `on_ready` once every earlier candidate in the run has
+//! already been handed back. `emit_frame`/`frame_sequence`/`counters`/
+//! `failure_log` are therefore still only ever touched from one thread;
+//! no synchronization was added to any of them, and downstream consumers
+//! of the frame stream (`crate::serve::stream::Grouped`) see exactly the
+//! same per-candidate-contiguous ordering as the fully-sequential (every
+//! lease at concurrency `1`) case.
+//!
+//! The reorder map's size — and therefore how far the sliding window can
+//! run ahead of a straggler — is self-bounding to a small constant
+//! multiple of `concurrency`, never the run's total length: candidates
+//! are dispatched to workers through an input channel bounded to
+//! `concurrency` slots, and completed results flow back through an
+//! output channel of the same bound, so a worker that finishes early
+//! blocks on its next claim (or its result send) once the pipeline is
+//! full, rather than racing arbitrarily far ahead and buffering the rest
+//! of the job's content in memory behind one slow file.
+//!
+//! A run never spans two different `snapshot_lease_id`s — candidates
 //! are collected one root/drive at a time (see `run_job`'s enumeration
 //! loop), so they already arrive grouped contiguously by drive, and
-//! [`run_job`]'s batching stops at a lease boundary rather than
-//! overshooting into the next drive's own concurrency setting. This is
-//! what makes an HDD-backed lease's concurrency-`1` setting actually
-//! mean "read every candidate strictly one at a time, in the order they
-//! were enumerated" — the same order the MFT (and therefore, roughly,
-//! on-disk position) produced them in — rather than being diluted by
-//! whatever other drives happen to be in the same job.
+//! `lease_runs` splits at each lease boundary rather than letting one
+//! drive's run absorb another's candidates under the wrong concurrency
+//! setting. This is what makes an HDD-backed lease's concurrency-`1`
+//! setting actually mean "read every candidate strictly one at a time,
+//! in the order they were enumerated" — the same order the MFT (and
+//! therefore, roughly, on-disk position) produced them in — rather than
+//! being diluted by whatever other drives happen to be in the same job.
 //!
 //! # Why `emit_frame` is a callback, not a returned `Vec`
 //!
@@ -51,23 +78,26 @@
 //! send-window size rather than the job size — see that module's own doc
 //! comment for the consumer side of this.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use uffs_content_protocol::codec::{Digest, IncrementalDigest, digest};
+use uffs_content_protocol::codec::{Digest, digest};
 use uffs_content_protocol::error::ErrorCode;
 use uffs_content_protocol::frame::{
-    ContentChunk, ContentSemantics, DigestAlgorithm, FailedOutcome, FailureStage, FileBegin,
-    FileEnd, FileFailed, FrameEnvelope, FrameOrdering, FrameType, JobBegin, JobEnd, JobStatus,
-    ReadMode, RetryClass,
+    ContentSemantics, DigestAlgorithm, FailedOutcome, FailureStage, FileBegin, FileEnd, FileFailed,
+    FrameEnvelope, FrameOrdering, FrameType, JobBegin, JobEnd, JobStatus, ReadMode, RetryClass,
 };
 use uffs_content_protocol::manifest::AuthorizationMode;
 use uffs_content_protocol::path_encoding::WindowsPath;
 
+use self::pipeline::{CandidateContent, lease_runs, read_lease_run_pipelined};
 use super::candidate_source::{CandidateEntry, CandidateSource};
 use super::content_source::ContentSource;
 use super::intake::JobRequest;
 use super::manifest_builder::build_manifest;
+
+mod pipeline;
 use crate::run::{FailureLogWriter, FailureRecord, RunCounters, RunSummary};
 
 /// One `CONTENT_CHUNK`'s maximum payload size for a job run.
@@ -98,7 +128,7 @@ pub const DEFAULT_MAX_CHUNK_BYTES: u32 = 64 * 1024;
 #[derive(Debug, Clone)]
 pub struct ReadConcurrency {
     /// Concurrency overrides, keyed by `snapshot_lease_id`.
-    per_lease: std::collections::HashMap<u64, usize>,
+    per_lease: HashMap<u64, usize>,
     /// Concurrency for any lease not present in `per_lease`.
     default: usize,
 }
@@ -111,7 +141,7 @@ impl ReadConcurrency {
     #[must_use]
     pub fn flat(concurrency: usize) -> Self {
         Self {
-            per_lease: std::collections::HashMap::new(),
+            per_lease: HashMap::new(),
             default: concurrency.max(1),
         }
     }
@@ -121,7 +151,7 @@ impl ReadConcurrency {
     #[must_use]
     pub fn new(default: usize) -> Self {
         Self {
-            per_lease: std::collections::HashMap::new(),
+            per_lease: HashMap::new(),
             default: default.max(1),
         }
     }
@@ -138,46 +168,6 @@ impl ReadConcurrency {
             .copied()
             .unwrap_or(self.default)
     }
-}
-
-/// Split `candidates` into batches for [`read_candidate_batch`]: each
-/// batch holds only candidates from one `snapshot_lease_id`, sized by
-/// that lease's own [`ReadConcurrency::for_lease`] — never more, and
-/// never spilling into the next lease's candidates even if this lease's
-/// own concurrency would allow a larger batch. See the module doc's
-/// "Concurrent reads, sequential emission" section for why staying
-/// within one lease per batch matters.
-///
-/// Candidates already arrive grouped contiguously by lease (`run_job`'s
-/// enumeration loop appends one root/drive at a time), so a single
-/// linear scan suffices — no need to look ahead past the current run.
-fn batches_by_lease<'entries>(
-    candidates: &'entries [(&'entries CandidateEntry, u64)],
-    read_concurrency: &ReadConcurrency,
-) -> Vec<&'entries [(&'entries CandidateEntry, u64)]> {
-    let mut batches = Vec::new();
-    let mut start = 0_usize;
-    while start < candidates.len() {
-        let Some((first_entry, _)) = candidates.get(start) else {
-            break;
-        };
-        let lease_id = first_entry.snapshot_lease_id;
-        let max_batch = read_concurrency.for_lease(lease_id);
-        let cap = (start + max_batch).min(candidates.len());
-        let Some(window) = candidates.get(start..cap) else {
-            break;
-        };
-        let end = window
-            .iter()
-            .position(|(entry, _)| entry.snapshot_lease_id != lease_id)
-            .map_or(cap, |offset| start + offset);
-        let Some(batch) = candidates.get(start..end) else {
-            break;
-        };
-        batches.push(batch);
-        start = end;
-    }
-    batches
 }
 
 /// Everything one completed job produced, aside from the frames
@@ -289,21 +279,16 @@ where
         .iter()
         .zip(built.candidate_ids.iter().copied())
         .collect();
-    for batch in batches_by_lease(&candidates, read_concurrency) {
-        let read_results = read_candidate_batch(batch, content_source, DEFAULT_MAX_CHUNK_BYTES);
-        for ((entry, candidate_id), read_result) in batch.iter().copied().zip(read_results) {
-            emit_candidate(
-                entry,
-                candidate_id,
-                read_result,
-                &mut counters,
-                &mut failure_log,
-                job_id,
-                &mut frame_sequence,
-                &mut emit_frame,
-            )?;
-        }
-    }
+    read_and_emit_all_candidates(
+        &candidates,
+        read_concurrency,
+        content_source,
+        job_id,
+        &mut counters,
+        &mut failure_log,
+        &mut frame_sequence,
+        &mut emit_frame,
+    )?;
     drop(failure_log);
 
     tracing::info!(
@@ -335,6 +320,65 @@ where
         manifest_bytes: built.bytes,
         run_summary,
     })
+}
+
+/// Read and emit every candidate's content, one [`read_lease_run_pipelined`]
+/// call per contiguous [`lease_runs`] group. Extracted from [`run_job`]
+/// itself so that function stays under the workspace's `too_many_lines`
+/// budget — every parameter here is `run_job`'s own local state, threaded
+/// through unchanged.
+///
+/// # Errors
+/// Propagates the first error from enumerating a lease run's content or
+/// from `emit_frame` itself, exactly as `run_job`'s own doc comment
+/// describes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the alternative is a bespoke context struct bundling counters/failure_log/ \
+              frame_sequence/emit_frame purely to satisfy this lint, for a private helper \
+              extracted from run_job with exactly one call site; not worth the indirection"
+)]
+fn read_and_emit_all_candidates<F>(
+    candidates: &[(&CandidateEntry, u64)],
+    read_concurrency: &ReadConcurrency,
+    content_source: &dyn ContentSource,
+    job_id: [u8; 16],
+    counters: &mut RunCounters,
+    failure_log: &mut FailureLogWriter,
+    frame_sequence: &mut u64,
+    emit_frame: &mut F,
+) -> io::Result<()>
+where
+    F: FnMut(Vec<u8>) -> io::Result<()>,
+{
+    for run in lease_runs(candidates) {
+        let Some(&(first_entry, _)) = run.first() else {
+            continue;
+        };
+        let concurrency = read_concurrency.for_lease(first_entry.snapshot_lease_id);
+        read_lease_run_pipelined(
+            run,
+            concurrency,
+            content_source,
+            DEFAULT_MAX_CHUNK_BYTES,
+            |index, read_result| {
+                let Some(&(entry, candidate_id)) = run.get(index) else {
+                    return Ok(());
+                };
+                emit_candidate(
+                    entry,
+                    candidate_id,
+                    read_result,
+                    counters,
+                    failure_log,
+                    job_id,
+                    frame_sequence,
+                    emit_frame,
+                )
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Wrap `payload` in a `FrameEnvelope` for `job_id`, assigning and
@@ -407,127 +451,6 @@ fn emit_job_end(
         FrameType::JobEnd,
         &job_end_bytes,
     ))
-}
-
-/// One candidate's content, fully read into memory by
-/// [`read_candidate_batch`]/[`read_one_candidate`] and consumed by
-/// [`emit_candidate`]. Bounded to exactly one candidate's content per
-/// instance — never the whole batch or job — since the batch itself
-/// bounds how many of these exist in memory at once (see the module
-/// doc's "Concurrent reads, sequential emission" section).
-struct CandidateContent {
-    /// Every `CONTENT_CHUNK` this candidate's content produced, in order.
-    chunks: Vec<ContentChunk>,
-    /// Sum of every chunk's payload length.
-    total_read: u64,
-    /// BLAKE3 digest over every chunk's payload, in order.
-    digest: Digest,
-    /// Set only if a read failed partway through; `None` means every
-    /// byte up to `entry.logical_size` was read successfully.
-    read_error: Option<io::Error>,
-}
-
-/// Read every candidate in `batch` concurrently — one
-/// [`std::thread::scope`] thread each — returning each candidate's
-/// [`CandidateContent`] in the same order as `batch` itself. Bounds how
-/// far ahead of frame emission reading can get to `batch.len()`
-/// candidates' content, never the whole job's.
-fn read_candidate_batch(
-    batch: &[(&CandidateEntry, u64)],
-    content_source: &dyn ContentSource,
-    max_chunk_bytes: u32,
-) -> Vec<CandidateContent> {
-    std::thread::scope(|scope| {
-        // The intermediate `Vec` is semantically required, not needless:
-        // it forces every thread to be spawned before any is joined.
-        // Fusing this into one `.map(spawn).map(join)` chain would join
-        // each thread immediately after spawning it, one at a time —
-        // exactly the sequential behavior this function exists to avoid.
-        #[expect(
-            clippy::needless_collect,
-            reason = "see the comment above — collecting here is what makes every spawn \
-                      happen before any join, not an accident"
-        )]
-        let handles: Vec<_> = batch
-            .iter()
-            .map(|&(entry, candidate_id)| {
-                scope.spawn(move || {
-                    read_one_candidate(entry, candidate_id, content_source, max_chunk_bytes)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|panic_payload| CandidateContent {
-                        chunks: Vec::new(),
-                        total_read: 0,
-                        digest: IncrementalDigest::new().finalize(),
-                        read_error: Some(io::Error::other(format!(
-                            "content-read thread panicked: {panic_payload:?}"
-                        ))),
-                    })
-            })
-            .collect()
-    })
-}
-
-/// Read one candidate's content into memory, up to `entry.logical_size`
-/// or the first read error. Never touches `emit_frame`/`frame_sequence`/
-/// `counters`/`failure_log` — those stay single-threaded, touched only
-/// by [`emit_candidate`] afterward.
-fn read_one_candidate(
-    entry: &CandidateEntry,
-    candidate_id: u64,
-    content_source: &dyn ContentSource,
-    max_chunk_bytes: u32,
-) -> CandidateContent {
-    let mut hasher = IncrementalDigest::new();
-    let mut offset = 0_u64;
-    let mut chunk_sequence = 0_u64;
-    let mut total_read = 0_u64;
-    let mut chunks = Vec::new();
-    let mut read_error = None;
-
-    while offset < entry.logical_size {
-        match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
-            Ok(bytes) if bytes.is_empty() => break,
-            Ok(bytes) => {
-                let read_len = len_as_u64(bytes.len());
-                hasher.update(&bytes);
-                total_read += read_len;
-                chunks.push(ContentChunk {
-                    candidate_id,
-                    chunk_sequence,
-                    logical_offset: offset,
-                    logical_length: read_len,
-                    payload: bytes,
-                });
-                offset += read_len;
-                chunk_sequence += 1;
-            }
-            Err(err) => {
-                tracing::warn!(
-                    candidate_id,
-                    path = %entry.relative_path.display(),
-                    offset,
-                    error = %err,
-                    "content read failed"
-                );
-                read_error = Some(err);
-                break;
-            }
-        }
-    }
-
-    CandidateContent {
-        chunks,
-        total_read,
-        digest: hasher.finalize(),
-        read_error,
-    }
 }
 
 /// Emit one already-read candidate's `FILE_BEGIN`, its `CONTENT_CHUNK`s,

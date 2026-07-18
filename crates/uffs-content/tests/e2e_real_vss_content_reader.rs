@@ -43,7 +43,9 @@
 #[cfg(windows)]
 use anyhow as _;
 use blake3 as _;
-#[cfg(windows)]
+// Used by `uffs_content::job::workflow`'s pipelined content reader, not
+// by this thin test directly (its own real test body is windows-only,
+// see below — but the dependency itself is unconditional).
 use crossbeam_channel as _;
 use serde as _;
 use serde_json as _;

@@ -137,6 +137,21 @@ pub(super) struct CandidateContent {
 ///   channel into a small reorder map and calls `on_ready` for `0, 1, 2, ...`
 ///   in turn as each becomes available.
 ///
+/// A fourth, bounded **credit** channel keeps the whole pipeline's memory
+/// bounded regardless of run length: the feeder must claim one credit
+/// before sending each index, and the coordinator returns exactly one
+/// credit every time an index resolves (whether `on_ready` was actually
+/// called for it or not — see below). Without this, a single slow
+/// candidate holding up `next_expected` would not stop the *other*
+/// workers from reading every remaining candidate in the run to
+/// completion and piling the results into the reorder map unbounded —
+/// real hardware has shown this: one multi-GB candidate stalling
+/// emission while workers kept finishing (and fully buffering) tens of
+/// thousands of others behind it, well past what "a small constant
+/// multiple of concurrency" should ever allow. The credit window is
+/// generous relative to `concurrency` (workers should rarely feel it on
+/// an ordinary run) but always finite.
+///
 /// If `on_ready` itself returns an error (e.g. a downstream transport
 /// failure), the coordinator stops calling it but keeps draining the
 /// output channel to completion anyway — never stopping early and
@@ -160,15 +175,32 @@ pub(super) fn read_lease_run_pipelined(
         return Ok(());
     }
     let worker_count = concurrency.max(1).min(run.len());
+    // How many candidates may be claimed-but-not-yet-emitted at once —
+    // see this function's own doc comment on the credit channel. A
+    // small multiple of worker_count gives workers slack to keep moving
+    // even while a handful of candidates ahead of the emission cursor
+    // are still being read, without letting the whole remainder of a
+    // huge run pile into memory behind one straggler.
+    let credit_window = worker_count.saturating_mul(4);
 
     let (input_tx, input_rx): (Sender<usize>, Receiver<usize>) =
         crossbeam_channel::bounded(worker_count);
     let (output_tx, output_rx): (Sender<IndexedContent>, Receiver<IndexedContent>) =
         crossbeam_channel::bounded(worker_count);
+    let (credit_tx, credit_rx): (Sender<()>, Receiver<()>) =
+        crossbeam_channel::bounded(credit_window);
+    for _ in 0..credit_window {
+        // Never blocks: capacity is exactly credit_window and this sends
+        // exactly that many, once, before any thread below starts.
+        let _prefilled = credit_tx.try_send(()).ok();
+    }
 
     std::thread::scope(|scope| {
         scope.spawn(move || {
             for index in 0..run.len() {
+                if credit_rx.recv().is_err() {
+                    break;
+                }
                 if input_tx.send(index).is_err() {
                     break;
                 }
@@ -204,7 +236,7 @@ pub(super) fn read_lease_run_pipelined(
         // finish.
         drop(output_tx);
 
-        drain_pipelined_output(run.len(), &output_rx, &mut on_ready)
+        drain_pipelined_output(run.len(), &output_rx, &credit_tx, &mut on_ready)
     })
 }
 
@@ -218,6 +250,14 @@ type IndexedContent = (usize, CandidateContent);
 /// so `read_lease_run_pipelined` itself stays under the workspace's
 /// `too_many_lines` budget.
 ///
+/// Returns one credit to `credit_tx` every time an index resolves —
+/// whether `on_ready` was actually called for it or not (see this
+/// function's own error-handling branch below) — so the feeder in
+/// [`read_lease_run_pipelined`] never blocks waiting for a credit that a
+/// resolved-but-unemitted index should have released. This is the other
+/// half of that function's credit-window backpressure; see its doc
+/// comment for why the window exists at all.
+///
 /// # Errors
 /// Returns the first error `on_ready` produced, after draining every
 /// remaining result (see [`read_lease_run_pipelined`]'s doc comment for
@@ -226,6 +266,7 @@ type IndexedContent = (usize, CandidateContent);
 fn drain_pipelined_output(
     total_candidates: usize,
     output_rx: &Receiver<IndexedContent>,
+    credit_tx: &Sender<()>,
     on_ready: &mut dyn FnMut(usize, CandidateContent) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut next_expected = 0_usize;
@@ -239,6 +280,11 @@ fn drain_pipelined_output(
                 first_error = Some(err);
             }
             next_expected += 1;
+            // Best-effort: a disconnected credit channel just means the
+            // feeder already exited (e.g. it hit a send error on
+            // input_tx and gave up), not something this coordinator
+            // needs to react to.
+            let _credit_returned = credit_tx.send(()).ok();
             continue;
         }
         match output_rx.recv() {

@@ -190,6 +190,75 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
 }
 
 #[test]
+fn a_run_larger_than_the_credit_window_still_completes_correctly() {
+    let source_dir = tempfile::tempdir().expect("create source temp dir");
+    // concurrency 2 -> credit_window = 2 * 4 = 8 (see pipeline::
+    // read_lease_run_pipelined), so a run of 40 files forces the feeder
+    // to actually exhaust and wait on credits several times over, not
+    // just exercise the never-full-window happy path every other test
+    // in this file takes.
+    let file_count: u64 = 40;
+    for index in 0..file_count {
+        fs::write(
+            source_dir.path().join(format!("file_{index:03}.txt")),
+            format!("content for file {index}").into_bytes(),
+        )
+        .expect("write fixture file");
+    }
+
+    let run_dir = tempfile::tempdir().expect("create run temp dir");
+    let request = JobRequest {
+        source_id: "credit-window-source".to_owned(),
+        roots: vec![source_dir.path().to_path_buf()],
+        query: "*".to_owned(),
+        ..Default::default()
+    };
+
+    let mut frames = Vec::new();
+    let outcome = run_job(
+        &request,
+        &DirWalkCandidateSource,
+        &FsContentSource,
+        run_dir.path(),
+        &ReadConcurrency::flat(2),
+        &[],
+        0,
+        |frame| {
+            frames.push(frame);
+            Ok(())
+        },
+    )
+    .expect("run_job must succeed");
+
+    assert_eq!(outcome.run_summary.candidate_count, file_count);
+    assert_eq!(outcome.run_summary.succeeded_count, file_count);
+    assert_eq!(outcome.run_summary.failed_retryable_count, 0);
+    assert_eq!(outcome.run_summary.failed_terminal_count, 0);
+
+    // FILE_END frames must appear in strict, gapless candidate_id order
+    // -- confirms the credit-window backpressure never disturbs the
+    // pipeline's strict-order emission guarantee, even when the feeder
+    // is repeatedly forced to block waiting for a credit.
+    let mut file_end_candidate_ids = Vec::new();
+    for frame_bytes in &frames {
+        let mut reader = Reader::new(frame_bytes);
+        let (envelope, payload) =
+            FrameEnvelope::decode(&mut reader, u64::MAX).expect("decode frame envelope");
+        if envelope.frame_type == FrameType::FileEnd {
+            let mut payload_reader = Reader::new(&payload);
+            let file_end = FileEnd::decode(&mut payload_reader).expect("decode file end");
+            file_end_candidate_ids.push(file_end.candidate_id);
+        }
+    }
+    let expected_ids: Vec<u64> = (1..=file_count).collect();
+    assert_eq!(
+        file_end_candidate_ids, expected_ids,
+        "FILE_END frames must appear in strict candidate_id order even when the run exceeds \
+         the credit window"
+    );
+}
+
+#[test]
 fn candidates_over_the_delivery_ceiling_are_reported_metadata_only() {
     let source_dir = tempfile::tempdir().expect("create source temp dir");
     fs::write(source_dir.path().join("small.txt"), b"tiny").expect("write small.txt");

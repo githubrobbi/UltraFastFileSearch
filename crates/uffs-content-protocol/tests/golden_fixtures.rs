@@ -42,9 +42,9 @@ mod tests {
     use uffs_content_protocol::codec::Reader;
     use uffs_content_protocol::error::ErrorCode;
     use uffs_content_protocol::frame::{
-        ContentSemantics, DigestAlgorithm, FailedOutcome, FailureStage, FileEnd, FileFailed,
-        FrameEnvelope, FrameError, FrameOrdering, FrameType, JobBegin, JobEnd, JobStatus, ReadMode,
-        RetryClass,
+        ContentChunk, ContentSemantics, DigestAlgorithm, FailedOutcome, FailureStage, FileBegin,
+        FileEnd, FileFailed, FrameEnvelope, FrameError, FrameOrdering, FrameType, JobBegin, JobEnd,
+        JobStatus, ReadMode, RetryClass,
     };
     use uffs_content_protocol::manifest::{
         AuthorizationMode, CandidateFlags, CandidateRecord, ManifestHeader, ManifestTrailer,
@@ -396,6 +396,289 @@ mod tests {
                 + decoded.failed_terminal_count
                 + decoded.deferred_manual_count
         );
+    }
+
+    // ───────────────────────── job stream (full sequence)
+    // ─────────────────────────
+    //
+    // A recorded frame stream for one representative job, end to end:
+    // JOB_BEGIN, then FILE_BEGIN/[CONTENT_CHUNK]*/FILE_END per candidate,
+    // then JOB_END — no framing beyond each frame's own envelope, exactly
+    // as a consumer sees it over the wire. This is the "replay fixture"
+    // a consumer without a Windows/VSS host (e.g. Docenta) can decode
+    // against to validate their own decoder end to end, not just against
+    // one frame type in isolation. Candidate 1 is an ordinary two-chunk
+    // success; candidate 2 exceeds `JOB_BEGIN.max_content_delivery_bytes`
+    // and is reported `ReadMode::MetadataOnly`, so this stream also
+    // covers that still-recent wire shape in full sequence context.
+
+    const JOB_STREAM_JOB_ID: [u8; 16] = [0xAA_u8; 16];
+
+    const fn job_stream_content() -> &'static [u8] {
+        b"hello world"
+    }
+
+    fn sample_job_stream_job_begin() -> JobBegin {
+        JobBegin {
+            job_id: JOB_STREAM_JOB_ID,
+            source_id: [0xBB_u8; 16],
+            snapshot_id: b"vss-snapshot-job-stream-0001".to_vec(),
+            snapshot_created_at: 1_752_100_000_000,
+            manifest_digest: [0xCC_u8; 32],
+            candidate_count: 2,
+            authorization_mode: AuthorizationMode::AdminExport,
+            ordering: FrameOrdering::None,
+            content_semantics: ContentSemantics::UnnamedLogicalStream,
+            digest_algorithm: DigestAlgorithm::Blake3,
+            max_chunk_bytes: 1_048_576,
+            max_content_delivery_bytes: Some(1024),
+        }
+    }
+
+    fn sample_job_stream_file_begin_1() -> FileBegin {
+        FileBegin {
+            candidate_id: 1,
+            file_reference: 0x1000_0000_0000_0001,
+            path: WindowsPath::from_str_lossless(r"C:\Users\robert\Documents\report.docx"),
+            logical_size: 11,
+            mtime: 1_752_100_000_000,
+            read_mode: ReadMode::LogicalSnapshot,
+            attempt_number: 1,
+            content_object_id: None,
+        }
+    }
+
+    fn sample_job_stream_chunk_1a() -> ContentChunk {
+        ContentChunk {
+            candidate_id: 1,
+            chunk_sequence: 0,
+            logical_offset: 0,
+            logical_length: 6,
+            payload: b"hello ".to_vec(),
+        }
+    }
+
+    fn sample_job_stream_chunk_1b() -> ContentChunk {
+        ContentChunk {
+            candidate_id: 1,
+            chunk_sequence: 1,
+            logical_offset: 6,
+            logical_length: 5,
+            payload: b"world".to_vec(),
+        }
+    }
+
+    fn sample_job_stream_file_end_1() -> FileEnd {
+        FileEnd {
+            candidate_id: 1,
+            total_logical_bytes: 11,
+            content_digest: Some(*blake3::hash(job_stream_content()).as_bytes()),
+            read_mode: ReadMode::LogicalSnapshot,
+            chunk_count: 2,
+            elapsed_ms: 3,
+            warning_flags: 0,
+        }
+    }
+
+    fn sample_job_stream_file_begin_2() -> FileBegin {
+        FileBegin {
+            candidate_id: 2,
+            file_reference: 0x1000_0000_0000_0002,
+            path: WindowsPath::from_str_lossless(r"C:\Data\bigfile.bin"),
+            logical_size: 10_737_418_240,
+            mtime: 1_752_100_000_000,
+            read_mode: ReadMode::MetadataOnly,
+            attempt_number: 1,
+            content_object_id: None,
+        }
+    }
+
+    const fn sample_job_stream_file_end_2() -> FileEnd {
+        FileEnd {
+            candidate_id: 2,
+            total_logical_bytes: 0,
+            content_digest: None,
+            read_mode: ReadMode::MetadataOnly,
+            chunk_count: 0,
+            elapsed_ms: 0,
+            warning_flags: 0,
+        }
+    }
+
+    fn sample_job_stream_job_end() -> JobEnd {
+        JobEnd {
+            candidate_count: 2,
+            succeeded_count: 2,
+            failed_retryable_count: 0,
+            failed_terminal_count: 0,
+            deferred_manual_count: 0,
+            acknowledged_success_count: 0,
+            logical_bytes_succeeded: 11,
+            failure_bucket_id: b"job-stream-0001-failures".to_vec(),
+            manifest_digest: [0xCC_u8; 32],
+            outcome_ledger_digest: [0xDD_u8; 32],
+            job_status: JobStatus::Completed,
+        }
+    }
+
+    /// Wraps `payload` in a `FrameEnvelope` for the job-stream fixture,
+    /// assigning `frame_sequence` in emission order.
+    fn job_stream_envelope(frame_type: FrameType, frame_sequence: u64, payload: &[u8]) -> Vec<u8> {
+        FrameEnvelope {
+            protocol_version: 2,
+            frame_type,
+            flags: 0,
+            job_id: JOB_STREAM_JOB_ID,
+            frame_sequence,
+        }
+        .encode(payload)
+    }
+
+    /// Builds the full, ordered byte stream: `JOB_BEGIN`, candidate 1's
+    /// `FILE_BEGIN`/two `CONTENT_CHUNK`s/`FILE_END`, candidate 2's
+    /// `FILE_BEGIN`/`FILE_END` (metadata-only), then `JOB_END`.
+    fn build_job_stream_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend(job_stream_envelope(
+            FrameType::JobBegin,
+            0,
+            &sample_job_stream_job_begin().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::FileBegin,
+            1,
+            &sample_job_stream_file_begin_1().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::ContentChunk,
+            2,
+            &sample_job_stream_chunk_1a().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::ContentChunk,
+            3,
+            &sample_job_stream_chunk_1b().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::FileEnd,
+            4,
+            &sample_job_stream_file_end_1().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::FileBegin,
+            5,
+            &sample_job_stream_file_begin_2().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::FileEnd,
+            6,
+            &sample_job_stream_file_end_2().encode(),
+        ));
+        out.extend(job_stream_envelope(
+            FrameType::JobEnd,
+            7,
+            &sample_job_stream_job_end()
+                .encode()
+                .unwrap_or_else(|err| panic!("sample_job_stream_job_end must encode: {err}")),
+        ));
+        out
+    }
+
+    #[test]
+    #[ignore = "writes a golden fixture; run with UFFS_REGENERATE_FIXTURES=1 --ignored"]
+    fn regenerate_job_stream_fixture() {
+        regenerate_fixture("job_stream_two_candidates.bin", &build_job_stream_bytes());
+    }
+
+    #[test]
+    fn job_stream_fixture_decodes_to_expected_full_sequence() {
+        let bytes = load_fixture("job_stream_two_candidates.bin");
+        let mut reader = Reader::new(&bytes);
+
+        let mut decoded_types = Vec::new();
+        let mut total_chunk_bytes = Vec::new();
+        let mut file_ends = Vec::new();
+        while reader.remaining() > 0 {
+            let (envelope, payload) = FrameEnvelope::decode(&mut reader, 1_000_000).unwrap();
+            assert_eq!(envelope.job_id, JOB_STREAM_JOB_ID);
+            decoded_types.push(envelope.frame_type);
+
+            let mut payload_reader = Reader::new(&payload);
+            match envelope.frame_type {
+                FrameType::JobBegin => {
+                    assert_eq!(
+                        JobBegin::decode(&mut payload_reader).unwrap(),
+                        sample_job_stream_job_begin()
+                    );
+                }
+                FrameType::ContentChunk => {
+                    let chunk = ContentChunk::decode(&mut payload_reader, 1_000_000).unwrap();
+                    if chunk.candidate_id == 1 {
+                        total_chunk_bytes.extend(chunk.payload);
+                    }
+                }
+                FrameType::FileEnd => {
+                    file_ends.push(FileEnd::decode(&mut payload_reader).unwrap());
+                }
+                FrameType::JobEnd => {
+                    assert_eq!(
+                        JobEnd::decode(&mut payload_reader).unwrap(),
+                        sample_job_stream_job_end()
+                    );
+                }
+                FrameType::FileBegin => {
+                    // Decoded via the per-candidate assertions below.
+                }
+                other @ (FrameType::FileFailed
+                | FrameType::FileDeferred
+                | FrameType::FileAck
+                | FrameType::Progress
+                | FrameType::Heartbeat
+                | FrameType::JobCancel
+                | FrameType::WindowUpdate
+                | FrameType::JobResume
+                | FrameType::JobSubmit) => {
+                    panic!("unexpected frame type in job stream: {other:?}")
+                }
+            }
+        }
+
+        assert_eq!(decoded_types, vec![
+            FrameType::JobBegin,
+            FrameType::FileBegin,
+            FrameType::ContentChunk,
+            FrameType::ContentChunk,
+            FrameType::FileEnd,
+            FrameType::FileBegin,
+            FrameType::FileEnd,
+            FrameType::JobEnd,
+        ]);
+
+        // Candidate 1: chunks reassemble to the exact original content,
+        // and the digest FILE_END reports matches an independent BLAKE3
+        // recomputation over those reassembled bytes.
+        assert_eq!(total_chunk_bytes, job_stream_content());
+        assert_eq!(file_ends.len(), 2);
+        let candidate_1_end = file_ends
+            .iter()
+            .find(|end| end.candidate_id == 1)
+            .expect("candidate 1's FILE_END must be present");
+        assert_eq!(candidate_1_end, &sample_job_stream_file_end_1());
+        assert_eq!(
+            candidate_1_end.content_digest,
+            Some(*blake3::hash(&total_chunk_bytes).as_bytes())
+        );
+
+        // Candidate 2: over the delivery ceiling, so metadata-only —
+        // matches ReadMode::MetadataOnly's own doc comment (design-doc's
+        // two-tier delivery-ceiling model).
+        let candidate_2_end = file_ends
+            .iter()
+            .find(|end| end.candidate_id == 2)
+            .expect("candidate 2's FILE_END must be present");
+        assert_eq!(candidate_2_end, &sample_job_stream_file_end_2());
+        assert_eq!(candidate_2_end.content_digest, None);
+        assert_eq!(candidate_2_end.chunk_count, 0);
     }
 
     // ───────────────────────── invalid fixtures (must be rejected)

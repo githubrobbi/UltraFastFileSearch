@@ -453,6 +453,22 @@ pub struct VolumeHandle {
     /// handle it would silently read the *live* `$MFT`'s layout instead
     /// of the snapshot's, corrupting every offset computed from it.
     is_live_letter: bool,
+    /// The exact NUL-terminated UTF-16 path this handle was opened
+    /// against via `CreateFileW` — `Some` for [`Self::open`]'s own
+    /// `CreateFileW` fallback and [`Self::open_device_path`], `None` for
+    /// a broker-adopted or duplicated handle (which never called
+    /// `CreateFileW` itself here).
+    ///
+    /// [`Self::open_unbuffered_handle`] needs this: re-opening a snapshot
+    /// device handle's write-protect fallback by reconstructing
+    /// `"\\.\{volume}:"` from the drive letter would silently switch to
+    /// the *live* volume instead of the snapshot, and `DuplicateHandle`
+    /// can't substitute for a real re-open here since it preserves the
+    /// original handle's flags rather than adding
+    /// `FILE_FLAG_NO_BUFFERING`. A `None` case is always safe to
+    /// re-derive as `"\\.\{volume}:"`, since a broker-adopted handle only
+    /// ever points at the live volume (see [`Self::is_live_letter`]).
+    opened_path: Option<Vec<u16>>,
 }
 
 #[expect(
@@ -658,6 +674,7 @@ impl VolumeHandle {
             volume_data,
             broker_backed: false,
             is_live_letter,
+            opened_path: Some(path.to_vec()),
         })
     }
 
@@ -752,6 +769,7 @@ impl VolumeHandle {
             volume_data,
             broker_backed: true,
             is_live_letter,
+            opened_path: None,
         })
     }
 
@@ -1014,6 +1032,14 @@ impl VolumeHandle {
     /// sector-aligned buffers and offsets (already guaranteed by
     /// [`AlignedBuffer`]).
     ///
+    /// Re-opens [`Self::opened_path`] when this handle was opened against
+    /// a real path (live volume or VSS snapshot device) — critically,
+    /// *not* re-derived as `"\\.\{volume}:"`, which would silently switch
+    /// a snapshot-device handle to the live volume instead (see
+    /// [`Self::opened_path`]'s own doc comment). Falls back to
+    /// `"\\.\{volume}:"` only when there is no stored path — i.e. a
+    /// broker-adopted/duplicated handle, which is always the live volume.
+    ///
     /// The caller is responsible for closing the returned handle.
     ///
     /// # Errors
@@ -1022,17 +1048,14 @@ impl VolumeHandle {
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub(crate) fn open_unbuffered_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
-        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
-            .encode_utf16()
-            .chain(core::iter::once(0))
-            .collect();
+        let path = Self::unbuffered_reopen_path(self.opened_path.as_deref(), volume);
 
-        // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration
-        // of the call, optional pointers are passed as `None`, and the
+        // SAFETY: `path` is UTF-16 and NUL-terminated for the duration of
+        // the call, optional pointers are passed as `None`, and the
         // returned handle is transferred to the caller.
         let handle = unsafe {
             CreateFileW(
-                PCWSTR::from_raw(volume_path.as_ptr()),
+                PCWSTR::from_raw(path.as_ptr()),
                 FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
@@ -1046,6 +1069,25 @@ impl VolumeHandle {
             volume,
             source: hresult_to_io_error(&err),
         })
+    }
+
+    /// The exact NUL-terminated UTF-16 path [`Self::open_unbuffered_handle`]
+    /// re-opens: `opened_path` when present, else `"\\.\{volume}:"`
+    /// re-derived from the drive letter (only correct when there is no
+    /// stored path — i.e. a broker-adopted/duplicated handle, which is
+    /// always the live volume). Extracted from
+    /// [`Self::open_unbuffered_handle`] so this path-selection decision is
+    /// unit-testable without touching the filesystem.
+    fn unbuffered_reopen_path(opened_path: Option<&[u16]>, volume: super::DriveLetter) -> Vec<u16> {
+        opened_path.map_or_else(
+            || {
+                format!("\\\\.\\{volume}:")
+                    .encode_utf16()
+                    .chain(core::iter::once(0))
+                    .collect()
+            },
+            <[u16]>::to_vec,
+        )
     }
 
     /// Returns the byte offset of the MFT on the volume.
@@ -1820,6 +1862,47 @@ mod tests {
             io_err.raw_os_error(),
             Some(bits.cast_signed()),
             "non-WIN32 HRESULT must be forwarded verbatim",
+        );
+    }
+
+    // ── unbuffered_reopen_path regression tests ──────────────────────────
+    //
+    // Pins the write-protect-fallback fix: re-opening a snapshot-device
+    // handle for FILE_FLAG_NO_BUFFERING must re-open the *same* device
+    // path, never silently fall back to the live volume's "\\.\{letter}:"
+    // — that would defeat point-in-time consistency exactly like the bug
+    // `Self::from_duplicated_handle`'s own doc comment describes for the
+    // async re-open path.
+
+    fn wide_nul_terminated(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(core::iter::once(0)).collect()
+    }
+
+    #[test]
+    fn unbuffered_reopen_path_uses_the_stored_snapshot_device_path() {
+        let snapshot_path = wide_nul_terminated(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy7");
+        let volume = super::super::DriveLetter::parse('C').expect("valid drive letter");
+
+        let reopen_path = VolumeHandle::unbuffered_reopen_path(Some(&snapshot_path), volume);
+
+        assert_eq!(
+            reopen_path, snapshot_path,
+            "a handle opened against a real path (live or snapshot) must re-open that exact \
+             path, not re-derive the live-volume path from the drive letter"
+        );
+    }
+
+    #[test]
+    fn unbuffered_reopen_path_falls_back_to_the_live_volume_when_no_path_is_stored() {
+        let volume = super::super::DriveLetter::parse('D').expect("valid drive letter");
+
+        let reopen_path = VolumeHandle::unbuffered_reopen_path(None, volume);
+
+        assert_eq!(
+            reopen_path,
+            wide_nul_terminated(r"\\.\D:"),
+            "a broker-adopted/duplicated handle has no stored path, but is always the live \
+             volume, so re-deriving the live-volume path is correct here"
         );
     }
 }

@@ -365,7 +365,9 @@ where
 {
     let total_candidates = candidates.len();
     let mut emitted_count = 0_usize;
-    let mut last_progress_log_at = std::time::Instant::now();
+    let run_started_at = std::time::Instant::now();
+    let mut last_progress_log_at = run_started_at;
+    let mut last_progress_log_bytes = 0_u64;
 
     for run in lease_runs(candidates) {
         let Some(&(first_entry, _)) = run.first() else {
@@ -397,7 +399,9 @@ where
                     emitted_count,
                     total_candidates,
                     counters,
+                    run_started_at,
                     &mut last_progress_log_at,
+                    &mut last_progress_log_bytes,
                 );
                 result
             },
@@ -426,11 +430,33 @@ const PROGRESS_LOG_CANDIDATE_STRIDE: usize = 1000;
 /// [`PROGRESS_LOG_CANDIDATE_STRIDE`] boundary — see this module's
 /// "Concurrent reads, sequential emission" doc section for why total
 /// silence during content reading was a real problem this closes.
+///
+/// Also reports `mib_per_sec_since_last_heartbeat` and
+/// `mib_per_sec_since_job_start`: `logical_bytes_succeeded` only
+/// advances as candidates are actually *emitted* — i.e. bytes handed to
+/// `emit_frame`, the real wire write in `--serve` mode — so both figures
+/// are a direct measurement of consumer-facing pipe throughput, not an
+/// internal per-connection or per-drive read rate. Scan
+/// `mib_per_sec_since_last_heartbeat` across a run's log for min/max;
+/// the last line's `mib_per_sec_since_job_start` is the run's overall
+/// average.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "diagnostic-only throughput figures for a log line, not computed against further \
+              — same posture as uffs-content's own benchmark report (self_test.rs)"
+)]
+#[expect(
+    clippy::float_arithmetic,
+    reason = "diagnostic-only throughput ratios for a log line, matching self_test.rs's \
+              existing benchmark-report precedent"
+)]
 fn log_progress_if_due(
     emitted_count: usize,
     total_candidates: usize,
     counters: &RunCounters,
+    run_started_at: std::time::Instant,
     last_progress_log_at: &mut std::time::Instant,
+    last_progress_log_bytes: &mut u64,
 ) {
     let due_by_time = last_progress_log_at.elapsed() >= PROGRESS_LOG_MIN_INTERVAL;
     let due_by_count = emitted_count.is_multiple_of(PROGRESS_LOG_CANDIDATE_STRIDE)
@@ -438,7 +464,24 @@ fn log_progress_if_due(
     if !due_by_time && !due_by_count {
         return;
     }
+    let interval_secs = last_progress_log_at.elapsed().as_secs_f64();
+    let interval_bytes = counters
+        .logical_bytes_succeeded
+        .saturating_sub(*last_progress_log_bytes);
+    let mib_per_sec_since_last_heartbeat = if interval_secs > 0.0_f64 {
+        (interval_bytes as f64 / (1_024.0_f64 * 1_024.0_f64)) / interval_secs
+    } else {
+        0.0_f64
+    };
+    let overall_secs = run_started_at.elapsed().as_secs_f64();
+    let mib_per_sec_since_job_start = if overall_secs > 0.0_f64 {
+        (counters.logical_bytes_succeeded as f64 / (1_024.0_f64 * 1_024.0_f64)) / overall_secs
+    } else {
+        0.0_f64
+    };
+
     *last_progress_log_at = std::time::Instant::now();
+    *last_progress_log_bytes = counters.logical_bytes_succeeded;
     tracing::info!(
         emitted_count,
         total_candidates,
@@ -446,6 +489,8 @@ fn log_progress_if_due(
         failed_retryable = counters.failed_retryable_count,
         failed_terminal = counters.failed_terminal_count,
         logical_bytes_succeeded = counters.logical_bytes_succeeded,
+        mib_per_sec_since_last_heartbeat,
+        mib_per_sec_since_job_start,
         "job: content read progress"
     );
 }

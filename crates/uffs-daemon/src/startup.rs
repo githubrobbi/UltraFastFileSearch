@@ -226,10 +226,32 @@ pub(crate) fn drive_letter_matches(
 /// On Windows, an empty `--drive` triggers auto-discovery; non-empty
 /// respects the explicit list.  Always empty on non-Windows since
 /// live MFT scanning is Windows-only.
+///
+/// An ephemeral instance (`--ephemeral-id`, always paired with one or
+/// more `--device` VSS-snapshot sources) never auto-discovers: it is a
+/// job-scoped instance that exists to serve exactly the device sources
+/// it was spawned with, never anything a resident daemon would also be
+/// scanning. Auto-discovering here — the same fallback the resident
+/// daemon uses when `--drive` is omitted — used to also load every
+/// local NTFS drive *live*, including the very letter(s) already
+/// covered by `--device`. Both copies got registered and searched,
+/// silently doubling every search result for that letter (identical
+/// `file_reference` for files untouched since the live load; divergent
+/// by whole NTFS-sequence-number generations for anything touched
+/// in between, which is what broke `OpenFileById` against the VSS
+/// device for half the rows on real hardware). `uffs-content` never
+/// passes `--drive` alongside `--device`, so without this guard every
+/// ephemeral spawn hit the auto-discover branch.
 #[cfg(windows)]
 pub(crate) fn resolve_drive_list(config: &DaemonConfig) -> Vec<uffs_mft::platform::DriveLetter> {
     let explicit = config.drives.clone();
     if explicit.is_empty() {
+        if config.ephemeral_id.is_some() {
+            tracing::info!(
+                "Ephemeral instance: skipping live-drive auto-discovery (device sources only)"
+            );
+            return Vec::new();
+        }
         let auto_drives = uffs_mft::detect_ntfs_drives();
         tracing::info!(
             count = auto_drives.len(),
@@ -253,4 +275,61 @@ pub(crate) const fn resolve_drive_list(
     _config: &DaemonConfig,
 ) -> Vec<uffs_mft::platform::DriveLetter> {
     Vec::new()
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod tests {
+    use super::resolve_drive_list;
+    use crate::DaemonConfig;
+
+    /// Minimal `DaemonConfig` builder for `resolve_drive_list` tests —
+    /// every field but `drives`/`device_sources`/`ephemeral_id` is
+    /// irrelevant to drive-list resolution.
+    fn config(
+        drives: Vec<uffs_mft::platform::DriveLetter>,
+        device_sources: Vec<(String, uffs_mft::platform::DriveLetter)>,
+        ephemeral_id: Option<&str>,
+    ) -> DaemonConfig {
+        DaemonConfig {
+            mft_files: Vec::new(),
+            data_dir: None,
+            drives,
+            device_sources,
+            idle_timeout: 0,
+            no_retire: false,
+            no_cache: false,
+            log_level: "info".to_owned(),
+            log_file: None,
+            ephemeral_id: ephemeral_id.map(str::to_owned),
+        }
+    }
+
+    /// An ephemeral instance spawned with `--device` but no `--drive`
+    /// (`uffs-content`'s only spawn shape) must never fall through to
+    /// live-drive auto-discovery — that used to double-load the same
+    /// letter the `--device` source already covers.
+    #[test]
+    fn ephemeral_with_device_sources_skips_auto_discovery() {
+        let letter = uffs_mft::platform::DriveLetter::parse('F').expect("valid letter");
+        let cfg = config(
+            Vec::new(),
+            vec![(
+                "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1=F".to_owned(),
+                letter,
+            )],
+            Some("job-1"),
+        );
+        assert_eq!(resolve_drive_list(&cfg), Vec::new());
+    }
+
+    /// An ephemeral instance with an explicit `--drive` still respects
+    /// it — the guard only suppresses the *auto-discover* fallback, not
+    /// a caller's explicit request.
+    #[test]
+    fn ephemeral_with_explicit_drives_keeps_them() {
+        let letter = uffs_mft::platform::DriveLetter::parse('D').expect("valid letter");
+        let cfg = config(vec![letter], Vec::new(), Some("job-2"));
+        assert_eq!(resolve_drive_list(&cfg), vec![letter]);
+    }
 }

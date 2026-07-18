@@ -18,6 +18,21 @@ use uffs_content_protocol::frame::{ContentChunk, ReadMode};
 use crate::job::candidate_source::CandidateEntry;
 use crate::job::content_source::ContentSource;
 
+/// A declared `logical_size` above this is almost certainly corrupted
+/// MFT metadata, not a genuine file — used only to log a warning early
+/// (see [`read_one_candidate`]), never to reject or cap the read itself,
+/// since a real use case (e.g. a VM image or disk image export) can
+/// legitimately exceed this.
+const IMPLAUSIBLE_LOGICAL_SIZE_BYTES: u64 = 1024 * 1024 * 1024 * 1024; // 1 TiB
+
+/// How often [`read_one_candidate`] re-warns about a single candidate
+/// still being read, once it's been in progress this long. Chosen to be
+/// well above normal per-file read latency (even a large legitimate
+/// file should clear this comfortably) but short enough that a genuinely
+/// stuck candidate is visible in the log within one interval, not after
+/// an hour of silence.
+const STALL_WARNING_INTERVAL: core::time::Duration = core::time::Duration::from_secs(30);
+
 /// Split `candidates` into contiguous same-`snapshot_lease_id` runs for
 /// [`read_lease_run_pipelined`] — unlike a fixed batch size, a run is
 /// never capped: its own concurrency (looked up once, from its first
@@ -301,6 +316,18 @@ fn read_one_candidate(
             read_mode: ReadMode::MetadataOnly,
         };
     }
+    if entry.logical_size > IMPLAUSIBLE_LOGICAL_SIZE_BYTES {
+        tracing::warn!(
+            candidate_id,
+            path = %entry.relative_path.display(),
+            declared_logical_size = entry.logical_size,
+            "content read: candidate's declared logical_size is implausibly large -- this \
+             usually means corrupted/stale MFT metadata for this file (e.g. a reused FRS or a \
+             race with the file being resized around snapshot time), not a genuinely huge file; \
+             the read below is bounded by this declared size regardless, so a corrupted value \
+             here can make one candidate consume a very long time and a lot of memory"
+        );
+    }
 
     let mut hasher = IncrementalDigest::new();
     let mut offset = 0_u64;
@@ -308,8 +335,17 @@ fn read_one_candidate(
     let mut total_read = 0_u64;
     let mut chunks = Vec::new();
     let mut read_error = None;
+    let read_started_at = std::time::Instant::now();
+    let mut last_stall_warning_at = read_started_at;
 
     while offset < entry.logical_size {
+        warn_if_candidate_read_is_stalling(
+            entry,
+            candidate_id,
+            total_read,
+            read_started_at,
+            &mut last_stall_warning_at,
+        );
         match content_source.read_at(entry, candidate_id, offset, max_chunk_bytes) {
             Ok(bytes) if bytes.is_empty() => break,
             Ok(bytes) => {
@@ -347,4 +383,37 @@ fn read_one_candidate(
         read_error,
         read_mode: ReadMode::LogicalSnapshot,
     }
+}
+
+/// Logs a warning if this candidate's read has been running for at
+/// least [`STALL_WARNING_INTERVAL`] and hasn't already warned within the
+/// last [`STALL_WARNING_INTERVAL`] — extracted from
+/// [`read_one_candidate`]'s read loop purely to keep that function's
+/// cognitive complexity down; see its own doc comment for why this
+/// exists (a corrupted `logical_size` or a stuck reader-side round trip
+/// must be visible in the log, not silent for an hour).
+fn warn_if_candidate_read_is_stalling(
+    entry: &CandidateEntry,
+    candidate_id: u64,
+    total_read: u64,
+    read_started_at: std::time::Instant,
+    last_stall_warning_at: &mut std::time::Instant,
+) {
+    if read_started_at.elapsed() < STALL_WARNING_INTERVAL
+        || last_stall_warning_at.elapsed() < STALL_WARNING_INTERVAL
+    {
+        return;
+    }
+    *last_stall_warning_at = std::time::Instant::now();
+    tracing::warn!(
+        candidate_id,
+        path = %entry.relative_path.display(),
+        declared_logical_size = entry.logical_size,
+        total_read,
+        elapsed_secs = read_started_at.elapsed().as_secs(),
+        "content read: this candidate is taking unusually long -- still in progress, not \
+         necessarily hung, but if this repeats every ~30s indefinitely for the same \
+         candidate_id, suspect corrupted logical_size (see the warning above, if any) or a \
+         stuck reader-side round trip"
+    );
 }

@@ -363,6 +363,10 @@ fn read_and_emit_all_candidates<F>(
 where
     F: FnMut(Vec<u8>) -> io::Result<()>,
 {
+    let total_candidates = candidates.len();
+    let mut emitted_count = 0_usize;
+    let mut last_progress_log_at = std::time::Instant::now();
+
     for run in lease_runs(candidates) {
         let Some(&(first_entry, _)) = run.first() else {
             continue;
@@ -378,7 +382,7 @@ where
                 let Some(&(entry, candidate_id)) = run.get(index) else {
                     return Ok(());
                 };
-                emit_candidate(
+                let result = emit_candidate(
                     entry,
                     candidate_id,
                     read_result,
@@ -387,11 +391,63 @@ where
                     job_id,
                     frame_sequence,
                     emit_frame,
-                )
+                );
+                emitted_count += 1;
+                log_progress_if_due(
+                    emitted_count,
+                    total_candidates,
+                    counters,
+                    &mut last_progress_log_at,
+                );
+                result
             },
         )?;
     }
     Ok(())
+}
+
+/// How often [`read_and_emit_all_candidates`] logs a progress heartbeat,
+/// at minimum — never less often than this many wall-clock seconds
+/// apart, regardless of candidate count or throughput. Chosen so a job
+/// that's silently grinding for a long time (whether genuinely slow or
+/// stuck on one candidate — see `pipeline::read_one_candidate`'s own
+/// per-candidate stall warning) is never silent for more than about this
+/// long between updates.
+const PROGRESS_LOG_MIN_INTERVAL: core::time::Duration = core::time::Duration::from_secs(10);
+
+/// Also log a heartbeat every this many candidates, even if
+/// [`PROGRESS_LOG_MIN_INTERVAL`] hasn't elapsed — keeps a very fast run
+/// (thousands of tiny files) from having its own progress signal
+/// throttled down to nothing.
+const PROGRESS_LOG_CANDIDATE_STRIDE: usize = 1000;
+
+/// Log an `INFO`-level progress line if either [`PROGRESS_LOG_MIN_INTERVAL`]
+/// has elapsed since the last one or `emitted_count` just crossed a
+/// [`PROGRESS_LOG_CANDIDATE_STRIDE`] boundary — see this module's
+/// "Concurrent reads, sequential emission" doc section for why total
+/// silence during content reading was a real problem this closes.
+fn log_progress_if_due(
+    emitted_count: usize,
+    total_candidates: usize,
+    counters: &RunCounters,
+    last_progress_log_at: &mut std::time::Instant,
+) {
+    let due_by_time = last_progress_log_at.elapsed() >= PROGRESS_LOG_MIN_INTERVAL;
+    let due_by_count = emitted_count.is_multiple_of(PROGRESS_LOG_CANDIDATE_STRIDE)
+        || emitted_count == total_candidates;
+    if !due_by_time && !due_by_count {
+        return;
+    }
+    *last_progress_log_at = std::time::Instant::now();
+    tracing::info!(
+        emitted_count,
+        total_candidates,
+        succeeded = counters.succeeded_count,
+        failed_retryable = counters.failed_retryable_count,
+        failed_terminal = counters.failed_terminal_count,
+        logical_bytes_succeeded = counters.logical_bytes_succeeded,
+        "job: content read progress"
+    );
 }
 
 /// Wrap `payload` in a `FrameEnvelope` for `job_id`, assigning and

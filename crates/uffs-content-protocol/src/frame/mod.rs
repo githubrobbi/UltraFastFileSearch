@@ -11,6 +11,39 @@
 //! on [`FrameType`]. This mirrors [`crate::manifest`]'s
 //! header/record split and keeps the bounds-checking chokepoint in one
 //! place regardless of which of the 12 frame types is inside.
+//!
+//! # Wire layout
+//!
+//! Every frame is this exact byte sequence, all integers little-endian.
+//! There is no separate outer length prefix — `header_length` and
+//! `payload_length` below are it — so a consumer reading frames directly
+//! off a stream (a named pipe, a socket) reads this sequence in order:
+//!
+//! | Bytes | Field | Notes |
+//! |---|---|---|
+//! | 4 | `magic` | [`FRAME_MAGIC`] (`b"UFS2"`) |
+//! | 2 | `protocol_version` | must equal [`PROTOCOL_VERSION`] |
+//! | 2 | `frame_type` | [`FrameType`] discriminant |
+//! | 4 | `flags` | reserved, `0` in v2 |
+//! | 4 | `header_length` | bytes from `magic` through `frame_sequence`, inclusive (always `48` in v2) |
+//! | 8 | `payload_length` | byte length of `payload` below |
+//! | 16 | `job_id` | |
+//! | 8 | `frame_sequence` | |
+//! | 4 | `header_checksum` | [`crate::codec::checksum32`] over the 48 bytes above |
+//! | 4 | `payload_checksum` | `checksum32` over `payload` |
+//! | `payload_length` | `payload` | opaque bytes; decode per `frame_type` (e.g. [`JobBegin::decode`]) |
+//!
+//! So: read 24 bytes to learn `payload_length`, read 56 bytes total
+//! (`header_length` + both checksums) before you can validate anything,
+//! then read exactly `payload_length` more bytes for the payload — 56 +
+//! `payload_length` bytes per frame, back to back, no gaps. Validate
+//! `header_checksum` against bytes `0..48` and `payload_checksum`
+//! against the payload before trusting either; [`FrameEnvelope::decode`]
+//! already does all of this for an in-memory buffer holding a whole
+//! frame. For assembling frames out of arbitrary read-sized chunks off a
+//! live stream, use [`FrameStreamReader`] instead of reimplementing this
+//! table — it performs exactly the above and needs no more wiring than a
+//! `feed()` call per read plus a `try_next()` loop.
 
 use crate::codec::{
     Reader, checksum32, write_bytes_u16_prefixed, write_i64_le, write_u16_le, write_u32_le,
@@ -27,6 +60,7 @@ mod file_end;
 mod file_failed;
 mod job_begin;
 mod job_end;
+mod stream_reader;
 
 pub use content_chunk::ContentChunk;
 pub use control::{Heartbeat, JobCancel, JobResume, JobSubmit, Progress, WindowUpdate};
@@ -37,6 +71,7 @@ pub use file_end::FileEnd;
 pub use file_failed::{FailedOutcome, FileFailed};
 pub use job_begin::JobBegin;
 pub use job_end::JobEnd;
+pub use stream_reader::FrameStreamReader;
 
 /// Frame envelope magic (design-doc §12.1).
 pub const FRAME_MAGIC: [u8; 4] = *b"UFS2";

@@ -109,6 +109,8 @@ mod tests {
             // read path (`read_lease_run_pipelined`) with more candidates
             // than the window is wide, not just a single pass.
             &ReadConcurrency::flat(3),
+            &[],
+            0,
             |frame| {
                 frames.push(frame);
                 Ok(())

@@ -97,12 +97,29 @@ where
         .context("failed to spawn the content reader")?;
     let content_source = VssContentSource::new(content_reader);
 
+    // JOB_BEGIN carries only one job-level snapshot_id/snapshot_created_at
+    // pair (see `JobBegin`'s own doc comment), so a multi-drive job's
+    // provenance is necessarily a representative one, not one per drive.
+    // The first leased drive is as good a choice as any: every lease for
+    // a job is taken back-to-back at job start (see
+    // `vss_orchestrator::prepare_ephemeral_daemon_for_roots`), so their
+    // snapshot_created_at values differ by at most the lease loop's own
+    // wall-clock time, not something a consumer's temporal-memory use case
+    // would notice.
+    let (snapshot_id, snapshot_created_at) = resources
+        .leases
+        .first()
+        .map(|lease| (lease.snapshot_id.clone(), lease.snapshot_created_at_unix_ms))
+        .unwrap_or_default();
+
     let result = run_job(
         &resolved_request,
         &candidate_source,
         &content_source,
         run_dir,
         &read_concurrency,
+        &snapshot_id,
+        snapshot_created_at,
         emit_frame,
     )
     .context("run_job failed");

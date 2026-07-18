@@ -212,12 +212,21 @@ pub struct JobOutcome {
 /// failure). A per-candidate content-read failure is *not* an error
 /// return — it's recorded as a `FAILED_RETRYABLE` outcome for that
 /// candidate instead (a [`FileFailed`] frame plus a [`FailureRecord`]).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "snapshot_id/snapshot_created_at are real VSS provenance the caller (run_vss_job) \
+              already holds from its lease response; the fake/test callers pass empty/zero. \
+              Bundling them into a struct purely to satisfy this lint would add indirection \
+              for two fields that always travel together and change meaning together."
+)]
 pub fn run_job<F>(
     request: &JobRequest,
     candidate_source: &dyn CandidateSource,
     content_source: &dyn ContentSource,
     run_dir: &Path,
     read_concurrency: &ReadConcurrency,
+    snapshot_id: &[u8],
+    snapshot_created_at: i64,
     mut emit_frame: F,
 ) -> io::Result<JobOutcome>
 where
@@ -252,8 +261,8 @@ where
     let job_begin = JobBegin {
         job_id,
         source_id,
-        snapshot_id: Vec::new(),
-        snapshot_created_at: 0,
+        snapshot_id: snapshot_id.to_vec(),
+        snapshot_created_at,
         manifest_digest: built.manifest_digest,
         candidate_count,
         authorization_mode: AuthorizationMode::AdminExport,

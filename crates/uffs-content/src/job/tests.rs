@@ -152,6 +152,8 @@ fn run_job_produces_a_well_formed_frame_sequence_with_no_failures() {
         // read path (`read_lease_run_pipelined`), not just the fully-
         // sequential (`concurrency == 1`) case.
         &ReadConcurrency::flat(4),
+        &[],
+        0,
         |frame| {
             frames.push(frame);
             Ok(())
@@ -209,6 +211,8 @@ fn candidates_over_the_delivery_ceiling_are_reported_metadata_only() {
         &FsContentSource,
         run_dir.path(),
         &ReadConcurrency::flat(2),
+        &[],
+        0,
         |frame| {
             frames.push(frame);
             Ok(())

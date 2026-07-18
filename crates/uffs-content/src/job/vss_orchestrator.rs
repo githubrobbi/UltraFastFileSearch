@@ -50,6 +50,15 @@ pub(crate) struct LeasedDrive {
     pub(crate) drive_letter: char,
     /// This drive's lease id.
     pub(crate) lease_id: u64,
+    /// Opaque VSS snapshot identifier, as reported by the Broker at
+    /// lease time. Carried through to `JOB_BEGIN.snapshot_id` (see
+    /// `super::vss_job::run_vss_job`) — one drive's worth of real
+    /// snapshot provenance, since the wire protocol has only one
+    /// job-level `snapshot_id`/`snapshot_created_at` pair even though a
+    /// job may lease several drives.
+    pub(crate) snapshot_id: Vec<u8>,
+    /// This drive's snapshot creation time, Unix milliseconds.
+    pub(crate) snapshot_created_at_unix_ms: i64,
 }
 
 /// Every live resource this orchestration step produced.
@@ -206,6 +215,8 @@ fn lease_one_drive(job_id: [u8; 16], letter: char) -> Result<Option<LeasedDrive>
         device_path: lease.snapshot_device_identity,
         drive_letter: letter,
         lease_id: lease.snapshot_lease_id,
+        snapshot_id: lease.snapshot_id,
+        snapshot_created_at_unix_ms: lease.snapshot_created_at_unix_ms,
     }))
 }
 

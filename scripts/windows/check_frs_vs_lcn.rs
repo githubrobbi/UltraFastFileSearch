@@ -34,10 +34,21 @@
 //!    reduction does cheap FRS-sorting actually capture, versus what only a
 //!    real LCN-resolution pass (querying physical location up front) could get.
 //!
+//! Two sampling modes are supported (3rd arg):
+//! - `random` (default): a true uniform random draw across every row in the
+//!   file -- answers "does global FRS order track global LCN order."
+//! - `block`: `sample_size` *consecutive* rows (in search-response order)
+//!   starting at a given or random offset -- answers a different question: are
+//!   candidates *as the pipeline's bounded sliding window would actually
+//!   encounter them together* physically clustered. This is the more
+//!   operationally relevant test, since the read pipeline only ever has a
+//!   handful of candidates in flight at once, not the freedom to globally
+//!   reorder the whole run.
+//!
 //! # Usage
 //! ```text
 //! uffs.exe "*.txt" --drive D --format json > d_files.jsonl
-//! rust-script scripts/windows/check_frs_vs_lcn.rs d_files.jsonl [sample_size]
+//! rust-script scripts/windows/check_frs_vs_lcn.rs d_files.jsonl [sample_size] [random|block] [offset]
 //! ```
 
 use std::collections::HashMap;
@@ -45,6 +56,7 @@ use std::path::Path;
 use std::process::Command;
 use std::{env, fs};
 
+use rand::Rng;
 use rand::seq::SliceRandom;
 
 /// Low 48 bits are the FRS (MFT record number); high 16 bits are the
@@ -72,7 +84,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let Some(json_path) = args.get(1) else {
         eprintln!(
-            "usage: check_frs_vs_lcn.rs <json_path> [sample_size=500]\n\
+            "usage: check_frs_vs_lcn.rs <json_path> [sample_size=500] [random|block] [offset]\n\
              \n\
              json_path must be `uffs --format json` output (one JSON object per line, \
              with a `path` and nonzero `file_reference` field)."
@@ -80,6 +92,8 @@ fn main() {
         std::process::exit(2);
     };
     let sample_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(500);
+    let mode = args.get(3).map(String::as_str).unwrap_or("random");
+    let fixed_offset: Option<usize> = args.get(4).and_then(|s| s.parse().ok());
 
     println!("Reading {json_path} ...");
     let content = fs::read_to_string(json_path).unwrap_or_else(|err| {
@@ -114,9 +128,26 @@ fn main() {
 
     let mut rng = rand::thread_rng();
     let take = sample_size.min(rows.len());
-    let mut indices: Vec<usize> = (0..rows.len()).collect();
-    indices.shuffle(&mut rng);
-    indices.truncate(take);
+    let indices: Vec<usize> = match mode {
+        "block" => {
+            let max_start = rows.len().saturating_sub(take);
+            let start = fixed_offset
+                .unwrap_or_else(|| rng.gen_range(0..=max_start))
+                .min(max_start);
+            let total = rows.len();
+            println!(
+                "Block-sampling {take} consecutive rows starting at natural index {start} \
+                 (of {total} total)."
+            );
+            (start..start + take).collect()
+        }
+        _ => {
+            let mut shuffled: Vec<usize> = (0..rows.len()).collect();
+            shuffled.shuffle(&mut rng);
+            shuffled.truncate(take);
+            shuffled
+        }
+    };
 
     println!("Sampling {take} files; querying extents (this hits the filesystem once per file)...");
 

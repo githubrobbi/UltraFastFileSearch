@@ -325,9 +325,35 @@ fn query_bytes_per_cluster(drive_root: &str) -> Option<u64> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        if line.to_ascii_lowercase().contains("bytes per cluster") {
-            let digits: String = line.chars().filter(char::is_ascii_digit).collect();
-            if let Ok(value) = digits.parse::<u64>() {
+        if !line.to_ascii_lowercase().contains("bytes per cluster") {
+            continue;
+        }
+        // Only look at what follows the last ':' on this line -- the
+        // label itself never contains digits, but scoping to the value
+        // side avoids picking up stray digits from anywhere else on the
+        // line if the format has more on it than expected.
+        let Some(colon) = line.rfind(':') else {
+            continue;
+        };
+        let after = line[colon + 1..].trim();
+        let parsed = if let Some(hex) = after
+            .strip_prefix("0x")
+            .or_else(|| after.strip_prefix("0X"))
+        {
+            u64::from_str_radix(hex.trim(), 16).ok()
+        } else {
+            after
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .ok()
+        };
+        // NTFS cluster sizes are always a power of two in [512 B, 2 MiB].
+        // Reject anything else as a parse failure rather than silently
+        // reporting a nonsense MiB conversion downstream.
+        if let Some(value) = parsed {
+            if (512..=2 * 1024 * 1024).contains(&value) && value.is_power_of_two() {
                 return Some(value);
             }
         }

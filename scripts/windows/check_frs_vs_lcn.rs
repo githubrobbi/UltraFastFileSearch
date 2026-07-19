@@ -33,6 +33,14 @@
 //!    with LCN" into a concrete number: how much of the *achievable* seek
 //!    reduction does cheap FRS-sorting actually capture, versus what only a
 //!    real LCN-resolution pass (querying physical location up front) could get.
+//! 3. Fragmentation: even a perfectly LCN-ordered read still pays a seek for
+//!    every file that's itself split across more than one on-disk extent --
+//!    ordering candidates by their *first* extent's LCN says nothing about
+//!    what happens once a file's own data is scattered. Reports how many of
+//!    the sampled files have more than one extent and the total intra-file
+//!    seek distance (the gap between one extent's end and the next extent's
+//!    start, summed within each file) this costs even under otherwise-perfect
+//!    ordering.
 //!
 //! Two sampling modes are supported (3rd arg):
 //! - `random` (default): a true uniform random draw across every row in the
@@ -77,7 +85,19 @@ struct Resolved {
     /// response's row order).
     natural_index: usize,
     frs: u64,
+    /// First extent's starting LCN -- what every ordering comparison in
+    /// this script sorts/measures by.
     lcn: u64,
+    /// How many separate on-disk extents this file's `$DATA` attribute
+    /// is split across (from `fsutil file queryextents`). `1` means
+    /// contiguous; more means the file itself forces a seek partway
+    /// through reading it, independent of read *order*.
+    extent_count: usize,
+    /// Sum of `|gap|` between one extent's end (`lcn + clusters`) and the
+    /// next extent's start, across this file's own extents -- the seek
+    /// distance a perfectly-LCN-ordered read still can't avoid, because
+    /// it's internal to a single file's layout.
+    intra_file_seek_clusters: u64,
 }
 
 fn main() {
@@ -158,12 +178,15 @@ fn main() {
             println!("  ... {} / {take}", i + 1);
         }
         let row = &rows[idx];
-        match query_first_lcn(&row.path) {
-            Some(lcn) => resolved.push(Resolved {
+        let extents = query_all_extents(&row.path);
+        match extents.first() {
+            Some(&(lcn, _)) => resolved.push(Resolved {
                 path: row.path.clone(),
                 natural_index: idx,
                 frs: row.frs,
                 lcn,
+                extent_count: extents.len(),
+                intra_file_seek_clusters: intra_file_seek_distance(&extents),
             }),
             None => unresolved += 1,
         }
@@ -208,6 +231,7 @@ fn main() {
     }
 
     print_seek_distance_comparison(&resolved);
+    print_fragmentation_report(&resolved);
 
     let out_csv = default_output_csv(json_path);
     write_csv(&out_csv, &resolved);
@@ -361,40 +385,116 @@ fn query_bytes_per_cluster(drive_root: &str) -> Option<u64> {
     None
 }
 
-/// Run `fsutil file queryextents` and pull out the first `Lcn` value it
-/// prints -- tolerant of hex (`0x...`) or decimal, and of the label's
-/// exact wording/case, since this has drifted across Windows versions.
-fn query_first_lcn(path: &str) -> Option<u64> {
-    let output = Command::new("fsutil")
+/// Run `fsutil file queryextents` and return every `(Lcn, Clusters)` pair
+/// it prints, in the order given -- i.e. in ascending VCN (logical
+/// offset within the file) order, since that's the order `fsutil` lists
+/// a file's runs in. A file with more than one entry is fragmented: its
+/// own data is split across non-adjacent runs on disk, so reading it in
+/// full requires a seek at each run boundary no matter how well the
+/// *candidate* read order is chosen.
+///
+/// Tolerant of hex (`0x...`) or decimal values and of the labels' exact
+/// wording/case, since both have drifted across Windows versions.
+fn query_all_extents(path: &str) -> Vec<(u64, u64)> {
+    let Ok(output) = Command::new("fsutil")
         .args(["file", "queryextents", path])
         .output()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
     if !output.status.success() {
-        return None;
+        return Vec::new();
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(idx) = lower.find("lcn") {
-            let after = line.get(idx + 3..)?;
-            let after = after.trim_start_matches([':', ' ', '\t']);
-            if let Some(hex) = after
-                .strip_prefix("0x")
-                .or_else(|| after.strip_prefix("0X"))
-            {
-                let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
-                if let Ok(value) = u64::from_str_radix(&digits, 16) {
-                    return Some(value);
-                }
-            } else {
-                let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
-                if let Ok(value) = digits.parse::<u64>() {
-                    return Some(value);
-                }
-            }
-        }
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let lcn = extract_number_after(line, "lcn")?;
+            let clusters = extract_number_after(line, "cluster").unwrap_or(0);
+            Some((lcn, clusters))
+        })
+        .collect()
+}
+
+/// Finds `keyword` (case-insensitive) in `line` and parses the hex
+/// (`0x...`) or decimal number immediately following it, skipping over
+/// separators (`:`, spaces, tabs) in between.
+fn extract_number_after(line: &str, keyword: &str) -> Option<u64> {
+    let lower = line.to_ascii_lowercase();
+    let idx = lower.find(keyword)?;
+    let after = line.get(idx + keyword.len()..)?;
+    let after = after.trim_start_matches([':', ' ', '\t']);
+    if let Some(hex) = after
+        .strip_prefix("0x")
+        .or_else(|| after.strip_prefix("0X"))
+    {
+        let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
+        u64::from_str_radix(&digits, 16).ok()
+    } else {
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
     }
-    None
+}
+
+/// Sum of the gap between one extent's end (`lcn + clusters`) and the
+/// next extent's start, across `extents` -- `0` for a contiguous
+/// (single-extent) file.
+fn intra_file_seek_distance(extents: &[(u64, u64)]) -> u64 {
+    extents
+        .windows(2)
+        .map(|pair| {
+            let (lcn, clusters) = pair[0];
+            let next_lcn = pair[1].0;
+            next_lcn.abs_diff(lcn + clusters)
+        })
+        .sum()
+}
+
+/// Prints how many of the sampled files are fragmented (more than one
+/// on-disk extent) and the total intra-file seek distance this forces,
+/// even under perfect (oracle) candidate ordering -- the seek cost that
+/// LCN-sorting candidate *order* fundamentally cannot remove.
+fn print_fragmentation_report(resolved: &[Resolved]) {
+    let fragmented: Vec<&Resolved> = resolved.iter().filter(|r| r.extent_count > 1).collect();
+    let fragmented_pct = 100.0 * fragmented.len() as f64 / resolved.len() as f64;
+    let total_extents: usize = resolved.iter().map(|r| r.extent_count).sum();
+    let avg_extents = total_extents as f64 / resolved.len() as f64;
+    let total_intra_file_clusters: u64 = resolved.iter().map(|r| r.intra_file_seek_clusters).sum();
+
+    let bytes_per_cluster = resolved
+        .first()
+        .and_then(|r| drive_root(&r.path))
+        .and_then(|root| query_bytes_per_cluster(&root));
+
+    println!();
+    println!("=== Fragmentation ===");
+    println!(
+        "{} / {} sampled files ({fragmented_pct:.1}%) span more than one on-disk extent.",
+        fragmented.len(),
+        resolved.len()
+    );
+    println!("Average extents per file: {avg_extents:.2} (1.00 = perfectly contiguous).");
+    print_distance_line(
+        "Total intra-file seek distance (unavoidable even under oracle ordering)",
+        total_intra_file_clusters,
+        bytes_per_cluster,
+    );
+
+    if let Some(worst) = fragmented.iter().max_by_key(|r| r.extent_count) {
+        println!(
+            "Most-fragmented sampled file: {} extents -- {}",
+            worst.extent_count, worst.path
+        );
+    }
+
+    if fragmented.is_empty() {
+        println!("No fragmentation in this sample -- LCN ordering alone should suffice.");
+    } else if fragmented_pct > 20.0 {
+        println!(
+            "Significant fragmentation -- even a fully LCN-ordered read pipeline will keep \
+             seeking mid-file for a meaningful share of candidates on this volume."
+        );
+    }
 }
 
 /// Spearman rank correlation between FRS order and LCN order across
@@ -441,13 +541,17 @@ fn default_output_csv(json_path: &str) -> std::path::PathBuf {
 }
 
 fn write_csv(path: &Path, resolved: &[Resolved]) {
-    let mut out = String::from("Path,NaturalIndex,Frs,Lcn\n");
+    let mut out = String::from("Path,NaturalIndex,Frs,Lcn,ExtentCount,IntraFileSeekClusters\n");
     for row in resolved {
         // Paths can contain commas/quotes -- quote and escape per RFC 4180.
         let escaped_path = row.path.replace('"', "\"\"");
         out.push_str(&format!(
-            "\"{escaped_path}\",{},{},{}\n",
-            row.natural_index, row.frs, row.lcn
+            "\"{escaped_path}\",{},{},{},{},{}\n",
+            row.natural_index,
+            row.frs,
+            row.lcn,
+            row.extent_count,
+            row.intra_file_seek_clusters
         ));
     }
     if let Err(err) = fs::write(path, out) {

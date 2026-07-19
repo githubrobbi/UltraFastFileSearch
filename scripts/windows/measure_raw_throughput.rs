@@ -6,6 +6,7 @@
 //!     "Win32_Security",
 //!     "Win32_Storage_FileSystem",
 //!     "Win32_System_IO",
+//!     "Win32_System_Ioctl",
 //! ] }
 //! ```
 // SPDX-License-Identifier: MPL-2.0
@@ -51,9 +52,10 @@ mod imp {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_BEGIN, FILE_FLAG_SEQUENTIAL_SCAN, FILE_GENERIC_READ, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileSizeEx, OPEN_EXISTING, ReadFile,
-        SetFilePointerEx,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile, SetFilePointerEx,
     };
+    use windows::Win32::System::IO::DeviceIoControl;
+    use windows::Win32::System::Ioctl::{FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER};
     use windows::core::PCWSTR;
 
     /// One probe location within the volume.
@@ -283,12 +285,41 @@ mod imp {
     }
 
     /// Total size in bytes of the volume/device behind `handle`.
+    ///
+    /// `GetFileSizeEx` does not work on raw volume/device handles (it
+    /// fails with `ERROR_INVALID_PARAMETER`) -- volume size instead
+    /// comes from `FSCTL_GET_NTFS_VOLUME_DATA`'s `TotalClusters *
+    /// BytesPerCluster`, the same ioctl `uffs-mft`'s own
+    /// `VolumeHandle::get_ntfs_volume_data` uses for the same reason.
     fn query_size(handle: HANDLE) -> Result<u64, String> {
-        let mut size: i64 = 0;
-        // SAFETY: `handle` is a valid, open handle; `size` is a valid
-        // out-pointer for the duration of the call.
-        unsafe { GetFileSizeEx(handle, &raw mut size) }.map_err(|err| err.to_string())?;
-        u64::try_from(size).map_err(|err| err.to_string())
+        let mut volume_data = NTFS_VOLUME_DATA_BUFFER::default();
+        let mut bytes_returned: u32 = 0;
+        let buffer_size =
+            u32::try_from(size_of::<NTFS_VOLUME_DATA_BUFFER>()).unwrap_or(u32::MAX);
+
+        // SAFETY: `handle` is a valid, open volume handle; `volume_data`
+        // points to valid writable storage of `buffer_size` bytes; and
+        // `bytes_returned` is a valid out-pointer for the duration of
+        // this call.
+        unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_GET_NTFS_VOLUME_DATA,
+                None,
+                0,
+                Some(core::ptr::from_mut(&mut volume_data).cast()),
+                buffer_size,
+                Some(&raw mut bytes_returned),
+                None,
+            )
+        }
+        .map_err(|err| format!("FSCTL_GET_NTFS_VOLUME_DATA failed: {err}"))?;
+
+        let total_clusters = volume_data.TotalClusters.cast_unsigned();
+        let bytes_per_cluster = u64::from(volume_data.BytesPerCluster);
+        total_clusters
+            .checked_mul(bytes_per_cluster)
+            .ok_or_else(|| "volume size overflowed u64".to_owned())
     }
 
     /// Moves `handle`'s file pointer to `offset` bytes from the start.

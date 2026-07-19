@@ -134,6 +134,23 @@ fn from_cli_args_normalize_malformed_flag() {
     assert!(!off.normalize_malformed, "absent flag defaults off");
 }
 
+/// The CLI surface: `--resolve-lcn-order` sets the param; absent → off.
+/// Diagnostic/manual-verification flag -- see its match-arm comment in
+/// `cli_args.rs` for why this exists alongside `uffs-content` setting the
+/// same field directly.
+#[test]
+fn from_cli_args_resolve_lcn_order_flag() {
+    let on = SearchParams::from_cli_args(&["*.tmp".to_owned(), "--resolve-lcn-order".to_owned()])
+        .expect("parse with flag");
+    assert!(
+        on.resolve_lcn_order,
+        "--resolve-lcn-order must set the flag"
+    );
+
+    let off = SearchParams::from_cli_args(&["*.tmp".to_owned()]).expect("parse without flag");
+    assert!(!off.resolve_lcn_order, "absent flag defaults off");
+}
+
 /// Canonical helpers preserve legacy single-flag sort semantics.
 ///
 /// First field: ascending by default (no `--sort-desc`).

@@ -52,6 +52,8 @@ impl SearchParams {
                 "--hide-system" => raw.hide_system = true,
                 "--hide-ads" => raw.hide_ads = true,
                 "--normalize-malformed" => raw.normalize_malformed = true,
+                // Diagnostic only -- uffs-content sets this itself for real jobs.
+                "--resolve-lcn-order" => raw.resolve_lcn_order = true,
                 // WI-4.4 forensic filters: find ill-formed (non-UTF-8) names.
                 "--malformed" => raw.malformed = Some(true),
                 "--well-formed" => raw.malformed = Some(false),
@@ -312,6 +314,8 @@ struct RawCliArgs {
     hide_system: bool,
     hide_ads: bool,
     normalize_malformed: bool,
+    /// Diagnostic-only flag (see `--resolve-lcn-order` above).
+    resolve_lcn_order: bool,
     /// WI-4.4: `Some(true)` from `--malformed`, `Some(false)` from
     /// `--well-formed`, `None` if neither (no filter).
     malformed: Option<bool>,
@@ -735,11 +739,7 @@ impl RawCliArgs {
             // Row precedence (high → low): --rows (on) > agg (off) > --no-output (off) > default
             // (on).
             include_rows: force_rows || (agg_specs.is_empty() && !self.no_output),
-            // Not exposed as a CLI flag: interactive searches never need
-            // physical-location ordering, only uffs-content's bulk
-            // content-read jobs do (set directly on the `SearchParams`
-            // they build, bypassing this CLI-args constructor).
-            resolve_lcn_order: false,
+            resolve_lcn_order: self.resolve_lcn_order,
             agg_cursor: self.agg_cursor,
             agg_page_size: self.agg_page_size,
             // Direct file output

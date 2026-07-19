@@ -214,6 +214,14 @@ impl CandidateSource for VssCandidateSource<'_> {
             older: self.older.clone(),
             exclude: self.exclude.clone(),
             attr: self.attr.clone(),
+            // Real-hardware benchmarking found reading candidates in
+            // match order (or even ascending-FRS order) leaves most of
+            // the achievable seek-distance reduction on the table for a
+            // volume that's been reorganized over years -- see
+            // docs/architecture/content-stream-tool-design.md. Bulk
+            // content reads are exactly the workload that benefits from
+            // this; interactive CLI searches never set it.
+            resolve_lcn_order: true,
             ..Default::default()
         };
         tracing::info!(

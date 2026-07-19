@@ -452,6 +452,19 @@ pub struct SearchParams {
     /// (equivalent to `--count` or `--aggregate` without `--rows`).
     #[serde(default = "default_true")]
     pub include_rows: bool,
+    /// Resolve each matched row's true on-disk physical location (LCN)
+    /// and return rows sorted by ascending LCN instead of match order.
+    ///
+    /// Opt-in and off by default: resolving physical location costs one
+    /// extra targeted MFT record read per matched row, so this is meant
+    /// for bulk content-read jobs (`uffs-content`) ordering reads to
+    /// minimize seeks, not interactive queries. Real-hardware
+    /// benchmarking found match order (and even ascending-FRS order)
+    /// captures only a fraction of the achievable seek-distance
+    /// reduction on a volume that's been reorganized over years — see
+    /// `docs/architecture/content-stream-tool-design.md`.
+    #[serde(default)]
+    pub resolve_lcn_order: bool,
 
     // ── Aggregation pagination ─────────────────────────────────────
     /// Opaque cursor token from a previous response's `next_cursor`.
@@ -618,6 +631,7 @@ impl Default for SearchParams {
             profile: false,
             aggregations: vec![],
             include_rows: true,
+            resolve_lcn_order: false,
             agg_cursor: None,
             agg_page_size: None,
             output_file: None,

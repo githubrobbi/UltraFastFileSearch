@@ -20,6 +20,7 @@ mod hotload;
 mod info;
 mod journal;
 mod loading;
+mod physical_order;
 mod predicates;
 mod projection;
 mod refresh;
@@ -180,6 +181,21 @@ pub(crate) struct IndexManager {
     /// Per-drive load timing for `--profile` reporting.
     drive_timings:
         RwLock<std::collections::HashMap<uffs_mft::platform::DriveLetter, StoredDriveTiming>>,
+    /// Device path (VSS snapshot, via `--device PATH=LETTER`) each loaded
+    /// drive was actually read from, if any. A drive absent from this map
+    /// was loaded from its live volume. Needed by
+    /// [`Self::run_search_over`]'s optional physical-location-ordering
+    /// step: `VolumeHandle::get_mft_extents` requires opening the *same*
+    /// device the index came from, or it silently returns the wrong
+    /// volume's layout (see that method's own doc comment in `uffs-mft`).
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "only read by physical_order's Windows-only reorder_impl"
+        )
+    )]
+    device_paths: RwLock<std::collections::HashMap<uffs_mft::platform::DriveLetter, String>>,
     /// Source for `Parked` / `Cold` shard bodies during
     /// promote-on-search.  Production paths use
     /// [`crate::cache::body_loader::DiskBodyLoader`]; the

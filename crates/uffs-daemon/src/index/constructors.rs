@@ -168,6 +168,7 @@ impl IndexManager {
             queries_total_us: AtomicU64::new(0),
             startup_duration_us: AtomicU64::new(0),
             drive_timings: RwLock::new(std::collections::HashMap::new()),
+            device_paths: RwLock::new(std::collections::HashMap::new()),
             body_loader,
             working_set_trim,
             prefetch,

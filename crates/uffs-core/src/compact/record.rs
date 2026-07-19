@@ -89,6 +89,15 @@ impl CompactRecord {
         (frs & FRS_MASK) | (u64::from(sequence_number) << 48)
     }
 
+    /// The FRS (MFT slot, low 48 bits) of a raw packed file reference —
+    /// the free-standing counterpart of [`Self::frs`] for callers that
+    /// only have the packed `u64` (e.g. `DisplayRow`/`SearchRow`'s
+    /// `file_reference` field), not a whole `CompactRecord`.
+    #[must_use]
+    pub const fn unpack_frs(file_reference: u64) -> u64 {
+        file_reference & FRS_MASK
+    }
+
     /// The FRS (MFT slot, low 48 bits) of this record's file reference.
     #[must_use]
     pub const fn frs(&self) -> u64 {

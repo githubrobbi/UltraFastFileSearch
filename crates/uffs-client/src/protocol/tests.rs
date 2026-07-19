@@ -94,6 +94,32 @@ fn search_params_normalize_malformed_round_trip_and_default() {
     );
 }
 
+/// `resolve_lcn_order` round-trips, and an older payload that omits it
+/// deserializes as `false` (backward-compatible via `#[serde(default)]`) --
+/// mirrors `search_params_normalize_malformed_round_trip_and_default`.
+#[test]
+fn search_params_resolve_lcn_order_round_trip_and_default() {
+    let params = SearchParams {
+        pattern: "*".to_owned(),
+        resolve_lcn_order: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&params).expect("serialize");
+    let parsed: SearchParams = serde_json::from_value(json).expect("deserialize");
+    assert!(
+        parsed.resolve_lcn_order,
+        "the flag must survive the JSON-RPC round trip"
+    );
+
+    // A payload from an older client that never knew the field.
+    let legacy: SearchParams =
+        serde_json::from_value(serde_json::json!({ "pattern": "*" })).expect("legacy deserialize");
+    assert!(
+        !legacy.resolve_lcn_order,
+        "omitted field defaults off (wire backward-compat)"
+    );
+}
+
 /// The CLI surface: `--normalize-malformed` sets the param; absent → off.
 #[test]
 fn from_cli_args_normalize_malformed_flag() {

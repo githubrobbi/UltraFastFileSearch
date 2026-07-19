@@ -735,6 +735,11 @@ impl RawCliArgs {
             // Row precedence (high → low): --rows (on) > agg (off) > --no-output (off) > default
             // (on).
             include_rows: force_rows || (agg_specs.is_empty() && !self.no_output),
+            // Not exposed as a CLI flag: interactive searches never need
+            // physical-location ordering, only uffs-content's bulk
+            // content-read jobs do (set directly on the `SearchParams`
+            // they build, bypassing this CLI-args constructor).
+            resolve_lcn_order: false,
             agg_cursor: self.agg_cursor,
             agg_page_size: self.agg_page_size,
             // Direct file output

@@ -219,6 +219,17 @@ impl IndexManager {
             drives_total: total,
         };
 
+        // Recorded up front (not just on success) so a later physical-
+        // location-ordering search request always knows which device this
+        // drive's index came from, matching this function's whole-batch
+        // "always a VSS/device source" contract.
+        {
+            let mut paths = self.device_paths.write().await;
+            for (device_path, drive) in devices {
+                paths.insert(*drive, device_path.clone());
+            }
+        }
+
         let mut join_set = Self::spawn_device_drive_loaders(devices);
 
         let mut loaded: usize = 0;

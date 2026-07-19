@@ -478,7 +478,7 @@ impl IndexManager {
         // `drive_match_counts` was computed up-front (see block above)
         // so both dispatch branches share the same per-drive tally.
         let filtered_len = filtered_rows.len();
-        let rows: Vec<SearchRow> = if effective_params.include_rows {
+        let mut rows: Vec<SearchRow> = if effective_params.include_rows {
             filtered_rows
                 .iter()
                 .map(Self::display_row_to_search_row)
@@ -487,6 +487,11 @@ impl IndexManager {
             Vec::new()
         };
         let row_build_us = t_rows.map_or(0, |ts| ts.elapsed().as_micros());
+        // Opt-in, off by default (see field doc) -- every other request's
+        // code path above is completely unaffected.
+        rows = self
+            .reorder_rows_by_physical_location(&effective_params, rows)
+            .await;
 
         // Update perf counters.
         let query_us = query_start.elapsed().as_micros();

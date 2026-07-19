@@ -247,6 +247,13 @@ pub mod platform;
 
 pub mod usn;
 
+// Read-order optimization for bulk content-read jobs: resolves FRS to
+// on-disk physical location (LCN). The byte-parsing core is pure and
+// cross-platform (testable without Windows); only its `VolumeHandle`-
+// driven public entry point is cfg-gated internally, matching that
+// type's own gating below.
+pub mod lcn_resolve;
+
 pub mod frs;
 
 pub mod cache;
@@ -305,6 +312,8 @@ pub use io::{
     ParsedRecord, ReadChunk, apply_fixup, generate_read_chunks, parse_record_full,
     parse_record_zero_alloc,
 };
+#[cfg(windows)]
+pub use lcn_resolve::resolve_frs_to_lcn;
 // Re-export NTFS constants and types (pure Rust data structures, cross-platform)
 pub use ntfs::SECTOR_SIZE;
 pub use ntfs::{
@@ -323,12 +332,12 @@ pub use platform::current_euid;
 // Unix: geteuid() == 0).  Exported unconditionally so uffs-cli and
 // uffs-daemon can gate mutating daemon commands on all targets.
 pub use platform::is_elevated;
-pub use platform::registered_broker_handle_count;
 // Re-export platform types
 // Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms
 // Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on
 // Windows
 pub use platform::{DriveType, MftBitmap, MftExtent, SystemMemory, query_system_memory};
+pub use platform::{Lcn, registered_broker_handle_count};
 // External-API anchors with cross-crate consumers.  Other Windows-only
 // platform items (NtfsVolumeData, detect_drive_type, infer_drive_from_path,
 // is_volume_read_only) are pub(crate) and consumed only via

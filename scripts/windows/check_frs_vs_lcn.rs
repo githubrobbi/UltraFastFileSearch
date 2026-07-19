@@ -385,13 +385,22 @@ fn query_bytes_per_cluster(drive_root: &str) -> Option<u64> {
     None
 }
 
+/// NTFS's convention (shared with `FSCTL_GET_RETRIEVAL_POINTERS`) for "this
+/// VCN range has no on-disk allocation" -- a sparse-file hole -- is an `Lcn`
+/// of all-ones (`-1` as a signed 64-bit quantity). `fsutil file queryextents`
+/// prints that literally, and it is NOT a real physical location: treating
+/// it as one previously corrupted every seek-distance sum it appeared in,
+/// since `u64::MAX` swamps every real LCN by many orders of magnitude.
+const SPARSE_HOLE_LCN: u64 = u64::MAX;
+
 /// Run `fsutil file queryextents` and return every `(Lcn, Clusters)` pair
 /// it prints, in the order given -- i.e. in ascending VCN (logical
 /// offset within the file) order, since that's the order `fsutil` lists
 /// a file's runs in. A file with more than one entry is fragmented: its
 /// own data is split across non-adjacent runs on disk, so reading it in
 /// full requires a seek at each run boundary no matter how well the
-/// *candidate* read order is chosen.
+/// *candidate* read order is chosen. Sparse-file holes ([`SPARSE_HOLE_LCN`])
+/// are dropped, not just any other extent -- see that const's doc comment.
 ///
 /// Tolerant of hex (`0x...`) or decimal values and of the labels' exact
 /// wording/case, since both have drifted across Windows versions.
@@ -410,6 +419,9 @@ fn query_all_extents(path: &str) -> Vec<(u64, u64)> {
         .lines()
         .filter_map(|line| {
             let lcn = extract_number_after(line, "lcn")?;
+            if lcn == SPARSE_HOLE_LCN {
+                return None;
+            }
             let clusters = extract_number_after(line, "cluster").unwrap_or(0);
             Some((lcn, clusters))
         })
@@ -445,9 +457,9 @@ fn intra_file_seek_distance(extents: &[(u64, u64)]) -> u64 {
         .map(|pair| {
             let (lcn, clusters) = pair[0];
             let next_lcn = pair[1].0;
-            next_lcn.abs_diff(lcn + clusters)
+            next_lcn.abs_diff(lcn.saturating_add(clusters))
         })
-        .sum()
+        .fold(0_u64, u64::saturating_add)
 }
 
 /// Prints how many of the sampled files are fragmented (more than one

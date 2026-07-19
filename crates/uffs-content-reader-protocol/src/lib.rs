@@ -41,6 +41,29 @@ pub const MAX_IDENTIFIER_BYTES: u32 = 512;
 /// Maximum byte length for a free-text diagnostic message.
 const MAX_MESSAGE_BYTES: u16 = 4096;
 
+/// Append an `Option<u64>` as a presence byte followed by the value if
+/// present — mirrors `uffs-content-protocol::frame::write_optional_u64`
+/// (this crate deliberately duplicates rather than depends on that
+/// Layer-0 crate; see [`codec`]'s own module doc).
+fn write_optional_u64(out: &mut Vec<u8>, value: Option<u64>) {
+    match value {
+        Some(present_value) => {
+            out.push(1);
+            write_u64_le(out, present_value);
+        }
+        None => out.push(0),
+    }
+}
+
+/// Read an `Option<u64>` encoded by [`write_optional_u64`].
+fn read_optional_u64(reader: &mut Reader<'_>) -> Result<Option<u64>, DecodeError> {
+    let present = reader.read_u8()?;
+    match present {
+        0 => Ok(None),
+        _ => Ok(Some(reader.read_u64_le()?)),
+    }
+}
+
 /// A volume's identity, as carried in a [`ReadRequest`] (addendum §2.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeIdentity {
@@ -252,6 +275,18 @@ pub struct ReadRequest {
     pub volume_identity: VolumeIdentity,
     /// Full NTFS file reference (never a bare MFT record index).
     pub full_file_reference: u64,
+    /// The candidate's logical size, if the Coordinator already knows it
+    /// from the manifest that named this candidate. `Some` lets the
+    /// Reader skip its own `GetFileSizeEx` re-resolution and trust this
+    /// value directly — a real (if rare) trust tradeoff, so this is
+    /// opt-in per request, not a blanket assumption: only the real VSS
+    /// Coordinator (`uffs-content::job::content_source::VssContentSource`)
+    /// populates it today, since its manifest size was itself read from
+    /// the same frozen snapshot this request targets. Any other/future
+    /// caller that leaves this `None` gets the Reader's original
+    /// always-re-verify behavior with no code changes required on its
+    /// part — see `uffs-content-reader::reader::logical`'s module doc.
+    pub known_logical_size: Option<u64>,
     /// Which stream to read.
     pub stream_kind: StreamKind,
     /// Logical byte offset to start reading at.
@@ -274,6 +309,7 @@ impl ReadRequest {
         write_u64_le(&mut out, self.candidate_id);
         self.volume_identity.encode(&mut out);
         write_u64_le(&mut out, self.full_file_reference);
+        write_optional_u64(&mut out, self.known_logical_size);
         out.push(self.stream_kind.encode());
         write_u64_le(&mut out, self.logical_offset);
         write_u32_le(&mut out, self.maximum_logical_length);
@@ -292,6 +328,7 @@ impl ReadRequest {
         let candidate_id = reader.read_u64_le()?;
         let volume_identity = VolumeIdentity::decode(reader)?;
         let full_file_reference = reader.read_u64_le()?;
+        let known_logical_size = read_optional_u64(reader)?;
         let stream_kind_byte = reader.read_u8()?;
         let stream_kind = StreamKind::decode(stream_kind_byte).map_err(|byte| {
             DecodeError::UnknownDiscriminant {
@@ -315,6 +352,7 @@ impl ReadRequest {
             candidate_id,
             volume_identity,
             full_file_reference,
+            known_logical_size,
             stream_kind,
             logical_offset,
             maximum_logical_length,
@@ -446,6 +484,7 @@ mod tests {
                 volume_guid: b"{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_vec(),
             },
             full_file_reference: 0xABCD_EF01_2345_6789,
+            known_logical_size: Some(65536),
             stream_kind: StreamKind::UnnamedData,
             logical_offset: 4096,
             maximum_logical_length: 65536,
@@ -457,6 +496,19 @@ mod tests {
     #[test]
     fn read_request_round_trips() {
         let request = sample_request();
+        let bytes = request.encode();
+        let mut reader = Reader::new(&bytes);
+        let decoded = ReadRequest::decode(&mut reader).unwrap();
+        assert_eq!(decoded, request);
+        assert_eq!(reader.remaining(), 0);
+    }
+
+    #[test]
+    fn read_request_with_no_known_logical_size_round_trips() {
+        let request = ReadRequest {
+            known_logical_size: None,
+            ..sample_request()
+        };
         let bytes = request.encode();
         let mut reader = Reader::new(&bytes);
         let decoded = ReadRequest::decode(&mut reader).unwrap();
@@ -555,6 +607,7 @@ mod tests {
             candidate_id: u64,
             volume_serial: u64,
             full_file_reference: u64,
+            known_logical_size: Option<u64>,
             logical_offset: u64,
             maximum_logical_length: u32,
             request_nonce: u64,
@@ -568,6 +621,7 @@ mod tests {
                     volume_guid: b"{guid}".to_vec(),
                 },
                 full_file_reference,
+                known_logical_size,
                 stream_kind: StreamKind::UnnamedData,
                 logical_offset,
                 maximum_logical_length,

@@ -168,6 +168,7 @@ impl ContentSource for VssContentSource {
                 candidate.snapshot_lease_id,
                 candidate_id,
                 candidate.file_reference,
+                candidate.logical_size,
             )
             .map_err(|err| io::Error::other(err.to_string()))?;
         Ok(Box::new(session))

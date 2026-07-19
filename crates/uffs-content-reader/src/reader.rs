@@ -78,6 +78,7 @@ fn dispatch_request(
     match logical::read_logical(
         device_path,
         request.full_file_reference,
+        request.known_logical_size,
         request.logical_offset,
         request.maximum_logical_length,
         cache,

@@ -20,8 +20,8 @@
 //!
 //! Each pool is a bounded [`crossbeam_channel`] of already-open
 //! connections. A candidate's whole sequential read pins exactly one
-//! connection for its entire duration — see [`ContentReader::begin_read`]/
-//! [`ReaderSession`] — rather than checking one out fresh per chunk:
+//! connection for its entire duration — see `ContentReader::begin_read`/
+//! `ReaderSession` — rather than checking one out fresh per chunk:
 //! real-hardware benchmarking found `uffs-content-reader` caches its
 //! open NTFS file handle per connection across consecutive requests for
 //! the same file (see that crate's `reader/logical.rs`), so consecutive
@@ -220,6 +220,12 @@ impl ContentReader {
     /// if every connection in this drive's pool is currently checked
     /// out.
     ///
+    /// `known_logical_size` is the candidate's size as the manifest
+    /// already knows it — forwarded to the Reader so it can skip its own
+    /// `GetFileSizeEx` re-resolution; see
+    /// `uffs-content-reader-protocol::ReadRequest::known_logical_size`'s
+    /// doc comment for the trust reasoning.
+    ///
     /// # Errors
     /// Returns an error if `snapshot_lease_id` has no pool, or every
     /// connection in that pool has already failed and been dropped.
@@ -228,6 +234,7 @@ impl ContentReader {
         snapshot_lease_id: u64,
         candidate_id: u64,
         full_file_reference: u64,
+        known_logical_size: u64,
     ) -> Result<ReaderSession> {
         let pool = self.connections.get(&snapshot_lease_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -247,6 +254,7 @@ impl ContentReader {
             snapshot_lease_id,
             candidate_id,
             full_file_reference,
+            known_logical_size,
             next_nonce: Arc::clone(&self.next_nonce),
         })
     }
@@ -298,6 +306,11 @@ pub(crate) struct ReaderSession {
     candidate_id: u64,
     /// This session's file, echoed into every `ReadRequest`.
     full_file_reference: u64,
+    /// This candidate's manifest-known logical size, forwarded as
+    /// `ReadRequest::known_logical_size` on every request so the Reader
+    /// can skip its own `GetFileSizeEx` re-resolution on a cache miss —
+    /// see that field's own doc comment for the trust reasoning.
+    known_logical_size: u64,
     /// Shared with every other live session (see
     /// [`ContentReader::next_nonce`]'s own doc comment).
     next_nonce: Arc<AtomicU64>,
@@ -332,6 +345,7 @@ impl ReaderSession {
                 volume_guid: Vec::new(),
             },
             full_file_reference: self.full_file_reference,
+            known_logical_size: Some(self.known_logical_size),
             stream_kind: StreamKind::UnnamedData,
             logical_offset,
             maximum_logical_length,

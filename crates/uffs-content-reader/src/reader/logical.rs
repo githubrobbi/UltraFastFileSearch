@@ -41,6 +41,22 @@
 //! `CreateFileW`+`CloseHandle` cycle per candidate at no correctness
 //! cost, on top of the file-handle caching above.
 //!
+//! # Trusting a caller-supplied size (opt-in per request)
+//!
+//! [`read_logical`]'s `known_logical_size` parameter, when `Some`, skips
+//! the `GetFileSizeEx` re-resolution on a cache miss entirely and uses
+//! the caller's value as `EOF` directly — real-hardware benchmarking
+//! against small-file-heavy drives found `GetFileSizeEx` a real fraction
+//! of per-candidate time even after the caching above. This is a genuine
+//! (if rare) trust tradeoff: the value could theoretically be stale, so
+//! it is opt-in per request via `ReadRequest::known_logical_size`, never
+//! a blanket change to this function's own default behavior. Only the
+//! real Coordinator populates it (`VssCandidateSource`'s manifest size
+//! comes from parsing the exact same frozen snapshot this read targets,
+//! so the two should always agree); any request that leaves it `None`
+//! gets the original always-re-verify behavior with no code changes
+//! required on the caller's part.
+//!
 //! # v1 simplifications (documented, not silent)
 //!
 //! - **VDL is treated as equal to EOF.** Getting the true NTFS valid data
@@ -301,9 +317,11 @@ fn read_exact(handle: &OwnedHandle, buf: &mut [u8]) -> anyhow::Result<()> {
 
 /// Perform one logical read: reuse `cache`'s open handle if it's already
 /// open against `full_file_reference` (see this module's doc comment),
-/// else open fresh by file reference and re-resolve `EOF`; apply the
-/// VDL/EOF rule, and read the resulting real-byte range (zero-extending
-/// per the plan).
+/// else open fresh by file reference and resolve `EOF` — trusting
+/// `known_logical_size` directly if `Some`, else re-querying via
+/// `GetFileSizeEx` (see the "Trusting a caller-supplied size" doc
+/// section for the tradeoff); apply the VDL/EOF rule, and read the
+/// resulting real-byte range (zero-extending per the plan).
 ///
 /// Returns the (possibly newly-opened) handle back as an updated
 /// [`ReadHandleCache`] for the caller to reuse on its next call — on
@@ -322,6 +340,7 @@ fn read_exact(handle: &OwnedHandle, buf: &mut [u8]) -> anyhow::Result<()> {
 pub(crate) fn read_logical(
     device_path: &str,
     full_file_reference: u64,
+    known_logical_size: Option<u64>,
     logical_offset: u64,
     maximum_logical_length: u32,
     cache: ReadHandleCache,
@@ -348,6 +367,7 @@ pub(crate) fn read_logical(
 
     let mut open_file_by_id_time = Duration::ZERO;
     let mut file_size_time = Duration::ZERO;
+    let mut trusted_known_size = false;
     let (file_handle, eof) = match cache.file {
         Some(cached) if cached.full_file_reference == full_file_reference => {
             (cached.handle, cached.eof)
@@ -357,9 +377,15 @@ pub(crate) fn read_logical(
             let file_handle = open_file_by_id(&volume_hint.handle, full_file_reference)?;
             open_file_by_id_time = open_by_id_started_at.elapsed();
 
-            let file_size_started_at = Instant::now();
-            let eof = file_size(&file_handle)?;
-            file_size_time = file_size_started_at.elapsed();
+            let eof = if let Some(size) = known_logical_size {
+                trusted_known_size = true;
+                size
+            } else {
+                let file_size_started_at = Instant::now();
+                let eof = file_size(&file_handle)?;
+                file_size_time = file_size_started_at.elapsed();
+                eof
+            };
 
             (file_handle, eof)
         }
@@ -388,6 +414,7 @@ pub(crate) fn read_logical(
     // read time for a given drive's workload.
     tracing::debug!(
         cache_hit,
+        trusted_known_size,
         real_bytes = plan.real_bytes,
         open_volume_hint_us = duration_micros(open_volume_hint_time),
         open_file_by_id_us = duration_micros(open_file_by_id_time),

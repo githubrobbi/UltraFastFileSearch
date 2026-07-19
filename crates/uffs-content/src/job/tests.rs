@@ -7,14 +7,19 @@
 //! `crates/uffs-content/tests/e2e_dir_walk_parity_fake_reader.rs` — these
 //! tests instead cover this module's own internals in isolation.
 
+use core::time::Duration;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use uffs_content_protocol::codec::Reader;
-use uffs_content_protocol::frame::{FileEnd, FrameEnvelope, FrameType, ReadMode};
+use uffs_content_protocol::frame::{
+    ContentChunk, FileBegin, FileEnd, FrameEnvelope, FrameType, ReadMode,
+};
 use uffs_content_protocol::manifest::{CandidateRecord, ManifestHeader, ManifestTrailer};
 
-use super::candidate_source::{CandidateSource as _, DirWalkCandidateSource};
-use super::content_source::{ContentSource as _, FsContentSource};
+use super::candidate_source::{CandidateEntry, CandidateSource, DirWalkCandidateSource};
+use super::content_source::{ContentSource, FsContentSource, ReadSession};
 use super::intake::JobRequest;
 use super::manifest_builder::build_manifest;
 use super::workflow::{ReadConcurrency, run_job};
@@ -36,8 +41,8 @@ fn dir_walk_candidate_source_enumerates_files_not_directories() {
         .collect();
     relative_paths.sort();
     assert_eq!(relative_paths, vec![
-        std::path::PathBuf::from("a.txt"),
-        std::path::PathBuf::from("nested/b.txt"),
+        PathBuf::from("a.txt"),
+        PathBuf::from("nested/b.txt"),
     ]);
 }
 
@@ -318,4 +323,209 @@ fn candidates_over_the_delivery_ceiling_are_reported_metadata_only() {
         .expect("small file's FILE_END must report its actual byte count");
     assert_eq!(small_end.read_mode, ReadMode::LogicalSnapshot);
     assert!(small_end.content_digest.is_some());
+}
+
+/// Test-only [`CandidateSource`] that fabricates a fixed small candidate
+/// set per root, tagging each with a `snapshot_lease_id` parsed from the
+/// root itself (`"lease:<id>"`) — lets a single test drive multiple
+/// concurrent lease runs without touching the filesystem or a real VSS
+/// snapshot.
+struct MultiLeaseCandidateSource {
+    /// Candidates to synthesize per lease.
+    per_lease: usize,
+}
+
+impl CandidateSource for MultiLeaseCandidateSource {
+    fn enumerate(&self, root: &Path) -> std::io::Result<Vec<CandidateEntry>> {
+        let root_str = root.to_string_lossy();
+        let lease_id: u64 = root_str
+            .strip_prefix("lease:")
+            .and_then(|suffix| suffix.parse().ok())
+            .unwrap_or(0);
+        Ok((0..self.per_lease)
+            .map(|i| {
+                let name = format!("file-{lease_id}-{i}.txt");
+                CandidateEntry {
+                    relative_path: PathBuf::from(&name),
+                    absolute_path: PathBuf::from(&name),
+                    logical_size: 4,
+                    mtime_unix_ms: 0,
+                    file_reference: lease_id * 1000 + i as u64,
+                    snapshot_lease_id: lease_id,
+                }
+            })
+            .collect())
+    }
+}
+
+/// Test-only [`ContentSource`] whose every candidate read sleeps
+/// `per_candidate_delay` before returning a fixed 4-byte payload —
+/// simulates real per-candidate I/O latency without touching a real
+/// disk, so a test can assert on wall-clock time to prove concurrent
+/// lease runs actually overlap (rather than merely not crashing).
+struct SlowContentSource {
+    /// How long each candidate's one real read takes.
+    per_candidate_delay: Duration,
+}
+
+impl ContentSource for SlowContentSource {
+    fn begin_read(
+        &self,
+        _candidate: &CandidateEntry,
+        _candidate_id: u64,
+    ) -> std::io::Result<Box<dyn ReadSession>> {
+        Ok(Box::new(SlowReadSession {
+            delay: self.per_candidate_delay,
+            served: false,
+        }))
+    }
+}
+
+/// [`SlowContentSource`]'s session: sleeps once, returns 4 bytes, then
+/// signals EOF on every subsequent call.
+struct SlowReadSession {
+    /// How long the one real read takes.
+    delay: Duration,
+    /// Whether the 4-byte payload has already been served.
+    served: bool,
+}
+
+impl ReadSession for SlowReadSession {
+    fn read_at(&mut self, _offset: u64, _max_len: u32) -> std::io::Result<Vec<u8>> {
+        std::thread::sleep(self.delay);
+        if self.served {
+            return Ok(Vec::new());
+        }
+        self.served = true;
+        Ok(b"data".to_vec())
+    }
+}
+
+/// Multiple lease runs (drives) must run concurrently, not one fully
+/// finishing before the next starts — real-hardware benchmarking found
+/// a slow HDD-backed lease holding up every other drive's candidates,
+/// including a fast SSD-backed lease sitting idle in queue, even though
+/// they share no connection pool or physical device. Proves this two
+/// ways: wall-clock time must reflect the *slowest single lease*, not
+/// the *sum* of every lease's time, and the emitted frame stream must
+/// never let one candidate's frame group be split apart by another's —
+/// the one atomicity guarantee concurrent lease runs must still uphold
+/// (see `workflow`'s "Concurrent reads, concurrent drives, atomic
+/// per-candidate emission" doc section).
+#[test]
+fn concurrent_lease_runs_actually_overlap_and_never_interleave_a_candidates_frames() {
+    const CANDIDATES_PER_LEASE: usize = 3;
+    const PER_CANDIDATE_DELAY: Duration = Duration::from_millis(100);
+
+    let run_dir = tempfile::tempdir().expect("create run temp dir");
+    let request = JobRequest {
+        source_id: "test-source".to_owned(),
+        roots: vec![PathBuf::from("lease:1"), PathBuf::from("lease:2")],
+        query: "*".to_owned(),
+        ..Default::default()
+    };
+
+    let candidate_source = MultiLeaseCandidateSource {
+        per_lease: CANDIDATES_PER_LEASE,
+    };
+    let content_source = SlowContentSource {
+        per_candidate_delay: PER_CANDIDATE_DELAY,
+    };
+
+    let mut frames = Vec::new();
+    let started_at = Instant::now();
+    let outcome = run_job(
+        &request,
+        &candidate_source,
+        &content_source,
+        run_dir.path(),
+        &ReadConcurrency::flat(1),
+        &[],
+        0,
+        |frame| {
+            frames.push(frame);
+            Ok(())
+        },
+    )
+    .expect("run_job must succeed");
+    let elapsed = started_at.elapsed();
+
+    let total_candidates = 2 * CANDIDATES_PER_LEASE;
+    assert_eq!(outcome.run_summary.candidate_count, total_candidates as u64);
+    assert_eq!(outcome.run_summary.succeeded_count, total_candidates as u64);
+    assert_eq!(outcome.run_summary.failed_retryable_count, 0);
+
+    // Sequential-lease processing would cost roughly
+    // 2 * CANDIDATES_PER_LEASE * PER_CANDIDATE_DELAY (~600ms); concurrent
+    // lease runs should cost roughly CANDIDATES_PER_LEASE *
+    // PER_CANDIDATE_DELAY (~300ms), since both leases' single-connection
+    // (concurrency = 1) reads proceed at the same time. The threshold
+    // sits comfortably between the two, with slack for scheduling
+    // jitter on a loaded CI machine.
+    let sequential_estimate =
+        PER_CANDIDATE_DELAY * u32::try_from(total_candidates).unwrap_or(u32::MAX);
+    assert!(
+        elapsed < sequential_estimate * 3 / 4,
+        "elapsed {elapsed:?} should be well under the fully-sequential estimate \
+         {sequential_estimate:?} -- lease runs (drives) do not appear to be running \
+         concurrently"
+    );
+
+    // Correctness: decode every frame in emission order and confirm no
+    // candidate's frame group (FILE_BEGIN..FILE_END) is ever split apart
+    // by another candidate's frames -- the one atomicity guarantee that
+    // must hold regardless of how many lease runs execute concurrently.
+    let mut open_candidate: Option<u64> = None;
+    for frame_bytes in &frames {
+        let mut reader = Reader::new(frame_bytes);
+        let Ok((envelope, payload)) = FrameEnvelope::decode(&mut reader, u64::MAX) else {
+            panic!("every emitted frame must decode");
+        };
+        match envelope.frame_type {
+            FrameType::FileBegin => {
+                assert_eq!(
+                    open_candidate, None,
+                    "a new FILE_BEGIN must never arrive while another candidate is still open"
+                );
+                let file_begin = FileBegin::decode(&mut Reader::new(&payload))
+                    .expect("decode FILE_BEGIN payload");
+                open_candidate = Some(file_begin.candidate_id);
+            }
+            FrameType::ContentChunk => {
+                let chunk = ContentChunk::decode(&mut Reader::new(&payload), u32::MAX)
+                    .expect("decode CONTENT_CHUNK payload");
+                assert_eq!(
+                    open_candidate,
+                    Some(chunk.candidate_id),
+                    "a CONTENT_CHUNK must belong to the currently-open candidate"
+                );
+            }
+            FrameType::FileEnd => {
+                let file_end =
+                    FileEnd::decode(&mut Reader::new(&payload)).expect("decode FILE_END payload");
+                assert_eq!(
+                    open_candidate,
+                    Some(file_end.candidate_id),
+                    "FILE_END must close the currently-open candidate"
+                );
+                open_candidate = None;
+            }
+            FrameType::JobBegin | FrameType::JobEnd => {}
+            other @ (FrameType::FileFailed
+            | FrameType::FileDeferred
+            | FrameType::FileAck
+            | FrameType::Progress
+            | FrameType::Heartbeat
+            | FrameType::JobCancel
+            | FrameType::WindowUpdate
+            | FrameType::JobResume
+            | FrameType::JobSubmit) => {
+                panic!("unexpected frame type in this test's stream: {other:?}")
+            }
+        }
+    }
+    assert_eq!(
+        open_candidate, None,
+        "every candidate must be closed by the end of the stream"
+    );
 }

@@ -45,7 +45,7 @@ use super::workflow::{JobOutcome, ReadConcurrency, run_job};
 /// best-effort before returning.
 pub fn run_vss_job<F>(request: &JobRequest, run_dir: &Path, emit_frame: F) -> Result<JobOutcome>
 where
-    F: FnMut(Vec<u8>) -> std::io::Result<()>,
+    F: FnMut(Vec<u8>) -> std::io::Result<()> + Send,
 {
     let job_id = *uuid::Uuid::new_v4().as_bytes();
     let ephemeral_id = uuid::Uuid::new_v4().simple().to_string();

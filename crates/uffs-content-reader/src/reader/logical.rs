@@ -29,6 +29,18 @@
 //! `uffs-content::job::reader_client`'s module doc) rather than
 //! round-robining a chunk at a time across the pool.
 //!
+//! [`ReadHandleCache`] also caches [`open_volume_hint`]'s handle,
+//! independent of which file is currently being read: real-hardware
+//! benchmarking against small-file-heavy drives (thousands of tiny
+//! `.txt`/driver-readme files, each its own candidate) found this handle
+//! was being opened and closed **fresh for every single candidate**,
+//! even though it only identifies the *volume* — never the file — and
+//! every candidate on one connection is read from the same volume (one
+//! connection is only ever drawn from one lease's pool, so `device_path`
+//! never actually changes mid-connection). Caching it removes one whole
+//! `CreateFileW`+`CloseHandle` cycle per candidate at no correctness
+//! cost, on top of the file-handle caching above.
+//!
 //! # v1 simplifications (documented, not silent)
 //!
 //! - **VDL is treated as equal to EOF.** Getting the true NTFS valid data
@@ -105,13 +117,31 @@ unsafe impl Send for OwnedHandle {}
 /// `pub(crate)` (rather than living entirely inside this module) because
 /// `pipe_server` owns one instance per connection and threads it through
 /// every request on that connection, across a `spawn_blocking` boundary.
+///
+/// Also caches the [`open_volume_hint`] handle used to resolve
+/// `OpenFileById` calls, independent of which file is being read —
+/// real-hardware benchmarking against small-file-heavy drives (drives
+/// dominated by tiny `.txt`/driver-readme files) found this handle was
+/// being opened and closed **fresh for every single candidate**, even
+/// though it identifies only the *volume*, not the file, and every
+/// candidate on one connection is read from the same volume. Caching it
+/// removes one whole `CreateFileW`+`CloseHandle` cycle per candidate
+/// with no correctness cost.
 #[derive(Default)]
-pub(crate) struct ReadHandleCache(Option<CachedFileHandle>);
+pub(crate) struct ReadHandleCache {
+    /// The cached open file handle, if any — see [`CachedFileHandle`].
+    file: Option<CachedFileHandle>,
+    /// The cached volume-hint handle, if any — see [`CachedVolumeHint`].
+    volume_hint: Option<CachedVolumeHint>,
+}
 
 impl ReadHandleCache {
     /// A fresh cache holding nothing — one per new connection.
     pub(crate) const fn empty() -> Self {
-        Self(None)
+        Self {
+            file: None,
+            volume_hint: None,
+        }
     }
 }
 
@@ -133,6 +163,20 @@ struct CachedFileHandle {
     eof: u64,
 }
 
+/// One cached [`open_volume_hint`] handle plus the `device_path` it was
+/// opened against — [`read_logical`] reuses it for every candidate on
+/// this connection, only reopening if `device_path` ever actually
+/// changes (never happens in practice, since one physical connection is
+/// only ever drawn from one lease's pool — see
+/// `uffs-content::job::reader_client`'s module doc — but checking rather
+/// than assuming keeps this correct even if that ever changed).
+struct CachedVolumeHint {
+    /// The device path this handle was opened against.
+    device_path: String,
+    /// The open handle itself.
+    handle: OwnedHandle,
+}
+
 /// Encode `text` as a NUL-terminated UTF-16 buffer for `PCWSTR` FFI calls.
 fn to_wide_null(text: &str) -> Vec<u16> {
     std::ffi::OsStr::new(text)
@@ -142,8 +186,11 @@ fn to_wide_null(text: &str) -> Vec<u16> {
 }
 
 /// Open a handle to the snapshot device's volume root — used only as
-/// `OpenFileById`'s volume hint, then dropped immediately after that
-/// call returns (the returned file handle is independent of it).
+/// `OpenFileById`'s volume hint. The file handle `OpenFileById` returns
+/// is entirely independent of this one once opened, so the caller is
+/// free to keep this handle around and reuse it across many
+/// `OpenFileById` calls rather than reopening it per file — see
+/// [`CachedVolumeHint`].
 fn open_volume_hint(device_path: &str) -> anyhow::Result<OwnedHandle> {
     let wide = to_wide_null(device_path);
     #[expect(
@@ -281,26 +328,34 @@ pub(crate) fn read_logical(
 ) -> anyhow::Result<(Vec<u8>, ActualReadMode, ReadHandleCache)> {
     let call_started_at = Instant::now();
     let cache_hit = matches!(
-        &cache.0,
+        &cache.file,
         Some(cached) if cached.full_file_reference == full_file_reference
     );
 
     let mut open_volume_hint_time = Duration::ZERO;
+    let volume_hint = match cache.volume_hint {
+        Some(cached) if cached.device_path == device_path => cached,
+        _ => {
+            let volume_hint_started_at = Instant::now();
+            let handle = open_volume_hint(device_path)?;
+            open_volume_hint_time = volume_hint_started_at.elapsed();
+            CachedVolumeHint {
+                device_path: device_path.to_owned(),
+                handle,
+            }
+        }
+    };
+
     let mut open_file_by_id_time = Duration::ZERO;
     let mut file_size_time = Duration::ZERO;
-    let (file_handle, eof) = match cache.0 {
+    let (file_handle, eof) = match cache.file {
         Some(cached) if cached.full_file_reference == full_file_reference => {
             (cached.handle, cached.eof)
         }
         _ => {
-            let volume_hint_started_at = Instant::now();
-            let volume_hint = open_volume_hint(device_path)?;
-            open_volume_hint_time = volume_hint_started_at.elapsed();
-
             let open_by_id_started_at = Instant::now();
-            let file_handle = open_file_by_id(&volume_hint, full_file_reference)?;
+            let file_handle = open_file_by_id(&volume_hint.handle, full_file_reference)?;
             open_file_by_id_time = open_by_id_started_at.elapsed();
-            drop(volume_hint);
 
             let file_size_started_at = Instant::now();
             let eof = file_size(&file_handle)?;
@@ -342,11 +397,14 @@ pub(crate) fn read_logical(
         "read_logical: per-phase timing"
     );
 
-    let updated_cache = ReadHandleCache(Some(CachedFileHandle {
-        full_file_reference,
-        handle: file_handle,
-        eof,
-    }));
+    let updated_cache = ReadHandleCache {
+        file: Some(CachedFileHandle {
+            full_file_reference,
+            handle: file_handle,
+            eof,
+        }),
+        volume_hint: Some(volume_hint),
+    };
 
     Ok((payload, ActualReadMode::Logical, updated_cache))
 }

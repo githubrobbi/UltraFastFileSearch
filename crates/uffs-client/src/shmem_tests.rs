@@ -81,7 +81,12 @@ fn sample_row(name: &str) -> SearchRow {
         malformed: false,
         malformed_path: false,
         name_hex: None,
-        file_reference: 0,
+        // Nonzero on purpose: 0 is never a valid NTFS file reference (it's
+        // the reserved `$MFT` record), so a round-trip test that used 0
+        // here would not have caught the v3-era bug where the shmem
+        // reader hardcoded `file_reference: 0` regardless of what was
+        // written (see `VERSION`'s v4 doc note in `shmem.rs`).
+        file_reference: 0x0002_0000_0000_2AF8,
     }
 }
 
@@ -101,6 +106,10 @@ fn shmem_round_trip_deletes_file() {
     let second = round_tripped.get(1).expect("expected at least 2 rows");
     assert_eq!(first.name, "a.txt");
     assert_eq!(second.name, "b.txt");
+    assert_eq!(
+        first.file_reference, 0x0002_0000_0000_2AF8,
+        "file_reference must round-trip through shmem, not come back as 0"
+    );
 
     // The file must be gone now.
     assert!(

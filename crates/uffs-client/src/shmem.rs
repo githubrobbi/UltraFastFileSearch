@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! [ShmemHeader: 48 bytes]
-//! [ShmemRecord × row_count: 80 bytes each]
+//! [ShmemRecord × row_count: 96 bytes each]
 //! [String table: concatenated UTF-8 bytes]
 //! ```
 //!
@@ -63,7 +63,20 @@ const MAGIC: u32 = 0x5346_4655; // b"UFFS" LE
 /// the bump guards against an old reader interpreting stale padding as flags.
 /// Shmem blobs are transient per-query temp files, so no migration is needed —
 /// a stale blob is simply rejected and regenerated.
-const VERSION: u32 = 3;
+///
+/// v4: adds a `file_reference` field (88 → 96 bytes). Real hardware found
+/// that a full multi-drive content-read job (`uffs-content`), whose search
+/// results routinely exceed [`SHMEM_THRESHOLD`], got `file_reference: 0`
+/// back for every shmem-delivered row — the field simply wasn't in the
+/// compact record, so the reader hardcoded it to `0` under the assumption
+/// (correct at the time, wrong now) that no shmem-path consumer needed it.
+/// `0` is never a valid NTFS file reference (it's the reserved `$MFT`
+/// record), so every one of those candidates then failed `OpenFileById`
+/// with `ERROR_INVALID_PARAMETER` on the reader side. Small result sets
+/// (e.g. an ad-hoc single-filename search) stay under the threshold and
+/// are delivered inline instead, which is why this only ever showed up on
+/// large scans.
+const VERSION: u32 = 4;
 
 // ── On-disk structures ────────────────────────────────────────────────────
 
@@ -89,7 +102,7 @@ struct ShmemHeader {
     _reserved: u32,
 }
 
-/// Per-row fixed-size record — 88 bytes, naturally aligned.
+/// Per-row fixed-size record — 96 bytes, naturally aligned.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShmemRecord {
@@ -115,6 +128,11 @@ pub(crate) struct ShmemRecord {
     created: i64,
     /// Last-access timestamp (Unix µs).
     accessed: i64,
+    /// Packed NTFS file reference (FRS + sequence number) — see
+    /// [`VERSION`]'s v4 note for why this is carried: content-read jobs
+    /// (`uffs-content`) need it to `OpenFileById` against a VSS snapshot,
+    /// and their result sets routinely go through this shmem path.
+    file_reference: u64,
     /// Descendant count (dirs only).
     descendants: u32,
     /// Padding.
@@ -139,8 +157,8 @@ const _: () = assert!(
     "ShmemHeader layout changed — binary format requires exactly 48 bytes"
 );
 const _: () = assert!(
-    size_of::<ShmemRecord>() == 88,
-    "ShmemRecord layout changed — binary format requires exactly 88 bytes"
+    size_of::<ShmemRecord>() == 96,
+    "ShmemRecord layout changed — binary format requires exactly 96 bytes"
 );
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -226,6 +244,7 @@ pub fn write_search_results(
             modified: row.modified,
             created: row.created,
             accessed: row.accessed,
+            file_reference: row.file_reference,
             descendants: row.descendants,
             _pad2: 0,
             treesize: row.treesize,
@@ -409,10 +428,12 @@ pub fn read_search_results(path: &Path) -> io::Result<SearchResponse> {
             // rare field; it is served via the JSON projection path instead.
             malformed: rec.malformed != 0,
             malformed_path: rec.malformed_path != 0,
+            // Not carried by the compact shmem record: adding a
+            // variable-length hex region would cost every row, for a
+            // vanishingly rare field. Served via the JSON projection
+            // path instead.
             name_hex: None,
-            // Not carried by the compact shmem record, same rationale as
-            // `name_hex` above — no shmem-path consumer needs it today.
-            file_reference: 0,
+            file_reference: rec.file_reference,
         });
     }
 

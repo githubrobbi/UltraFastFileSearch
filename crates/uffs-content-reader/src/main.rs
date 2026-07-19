@@ -84,7 +84,17 @@ fn main() {
 
     #[cfg(windows)]
     {
+        // `.with_max_level(DEBUG)`: without an explicit level, this
+        // subscriber's own default caps below `read_logical`'s per-phase
+        // timing instrumentation (`tracing::debug!` in
+        // `reader/logical.rs`) -- real-hardware runs confirmed zero of
+        // those lines ever reached the log file despite candidates
+        // actually being read, even though the binary had the
+        // instrumentation built in. This is diagnostic-only: every event
+        // still lands in this job's own per-run temp log file (see
+        // `uffs-content::job::reader_client`), not anywhere persistent.
         let _guard = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
             .with_writer(std::io::stderr)
             .try_init();
         let result = parse_device_args().and_then(|devices| reader::run(&devices));

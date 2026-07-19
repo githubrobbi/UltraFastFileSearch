@@ -279,10 +279,7 @@ where
         root_count = request.roots.len(),
         "job: starting candidate enumeration"
     );
-    let mut entries = Vec::new();
-    for root in &request.roots {
-        entries.extend(candidate_source.enumerate(root)?);
-    }
+    let entries = enumerate_all_roots_concurrently(candidate_source, &request.roots)?;
     let candidate_count = len_as_u64(entries.len());
     tracing::info!(
         candidate_count,
@@ -366,6 +363,56 @@ where
         manifest_bytes: built.bytes,
         run_summary,
     })
+}
+
+/// Enumerate every root in `roots` concurrently (one thread per root) and
+/// concatenate the results back in `roots`' own order.
+///
+/// Real-hardware benchmarking found this step strictly sequential —
+/// root-by-root, one full search-and-collect cycle blocking the next —
+/// even though each [`CandidateSource::enumerate`] call opens its own
+/// independent connection to the daemon (see
+/// `VssCandidateSource::enumerate`) and shares no mutable state with any
+/// other call. A two-root job showed ~15s + ~13s back to back (~28s
+/// total) that this reduces to ~max(15s, 13s) by running both searches
+/// at once — and the effect compounds with every additional root.
+///
+/// # Errors
+/// Propagates the first error from any root's [`CandidateSource::enumerate`]
+/// call, in `roots` order (matching the sequential loop this replaces).
+#[expect(
+    clippy::needless_collect,
+    reason = "the intermediate `handles` collect is the whole point: every root's \
+              scope.spawn must happen before any handle is joined, or this degenerates \
+              back into spawn-then-immediately-join-one-at-a-time -- exactly the \
+              sequential behavior this function exists to replace"
+)]
+fn enumerate_all_roots_concurrently(
+    candidate_source: &dyn CandidateSource,
+    roots: &[std::path::PathBuf],
+) -> io::Result<Vec<CandidateEntry>> {
+    let results: Vec<io::Result<Vec<CandidateEntry>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = roots
+            .iter()
+            .map(|root| scope.spawn(move || candidate_source.enumerate(root)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle.join().unwrap_or_else(|panic_payload| {
+                    Err(io::Error::other(format!(
+                        "candidate enumeration thread panicked: {panic_payload:?}"
+                    )))
+                })
+            })
+            .collect()
+    });
+
+    let mut entries = Vec::new();
+    for result in results {
+        entries.extend(result?);
+    }
+    Ok(entries)
 }
 
 /// Wrap `payload` in a `FrameEnvelope` for `job_id`, assigning and

@@ -41,7 +41,14 @@ pub struct CandidateEntry {
 /// which is exactly right for testing the Coordinator's own logic (this
 /// is `uffs-ingest-implementation-plan.md` §9.5's "fast" harness) but is
 /// not how a shipped job runs against NTFS.
-pub trait CandidateSource {
+///
+/// `Sync`: `run_job` enumerates every root concurrently (one thread per
+/// root via `std::thread::scope`, mirroring the same shape as
+/// [`super::content_source::ContentSource`]'s own `Sync` bound) — real-hardware
+/// benchmarking found root-by-root enumeration strictly sequential today,
+/// even though each `enumerate` call opens its own independent connection
+/// to the daemon and shares no mutable state with any other call.
+pub trait CandidateSource: Sync {
     /// Enumerate every regular file under `root`.
     ///
     /// # Errors

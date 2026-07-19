@@ -529,3 +529,96 @@ fn concurrent_lease_runs_actually_overlap_and_never_interleave_a_candidates_fram
         "every candidate must be closed by the end of the stream"
     );
 }
+
+/// Test-only [`CandidateSource`] whose every `enumerate` call sleeps
+/// `per_root_delay` before returning one fixed candidate for `root` —
+/// simulates real per-root search latency (a synchronous round trip to
+/// the daemon) without touching a real daemon, so a test can assert on
+/// wall-clock time to prove root enumeration actually overlaps.
+struct SlowEnumerateCandidateSource {
+    /// How long each root's `enumerate` call takes.
+    per_root_delay: Duration,
+}
+
+impl CandidateSource for SlowEnumerateCandidateSource {
+    fn enumerate(&self, root: &Path) -> std::io::Result<Vec<CandidateEntry>> {
+        std::thread::sleep(self.per_root_delay);
+        let root_str = root.to_string_lossy();
+        let root_index: u64 = root_str
+            .strip_prefix("root:")
+            .and_then(|suffix| suffix.parse().ok())
+            .unwrap_or(0);
+        let name = format!("file-{root_index}.txt");
+        Ok(vec![CandidateEntry {
+            relative_path: PathBuf::from(&name),
+            absolute_path: PathBuf::from(&name),
+            logical_size: 4,
+            mtime_unix_ms: 0,
+            file_reference: root_index,
+            snapshot_lease_id: 0,
+        }])
+    }
+}
+
+/// Enumerating multiple roots must run concurrently, not one root's
+/// whole search-and-collect cycle blocking the next — real-hardware
+/// benchmarking found a two-drive job's enumeration costing ~15s + ~13s
+/// back to back (~28s total) even though each root's `enumerate` call
+/// opens its own independent connection to the daemon and shares no
+/// mutable state with any other call (see
+/// `workflow::enumerate_all_roots_concurrently`'s own doc comment).
+#[test]
+fn root_enumeration_actually_overlaps_across_roots() {
+    const ROOT_COUNT: usize = 4;
+    const PER_ROOT_DELAY: Duration = Duration::from_millis(100);
+
+    let run_dir = tempfile::tempdir().expect("create run temp dir");
+    let roots: Vec<PathBuf> = (0..ROOT_COUNT)
+        .map(|i| PathBuf::from(format!("root:{i}")))
+        .collect();
+    let request = JobRequest {
+        source_id: "test-source".to_owned(),
+        roots,
+        query: "*".to_owned(),
+        ..Default::default()
+    };
+
+    let candidate_source = SlowEnumerateCandidateSource {
+        per_root_delay: PER_ROOT_DELAY,
+    };
+    let content_source = SlowContentSource {
+        per_candidate_delay: Duration::ZERO,
+    };
+
+    let started_at = Instant::now();
+    let outcome = run_job(
+        &request,
+        &candidate_source,
+        &content_source,
+        run_dir.path(),
+        &ReadConcurrency::flat(1),
+        &[],
+        0,
+        |_frame| Ok(()),
+    )
+    .expect("run_job must succeed");
+    let elapsed = started_at.elapsed();
+
+    assert_eq!(outcome.run_summary.candidate_count, ROOT_COUNT as u64);
+    assert_eq!(outcome.run_summary.succeeded_count, ROOT_COUNT as u64);
+    assert_eq!(outcome.run_summary.failed_retryable_count, 0);
+
+    // Sequential enumeration would cost roughly
+    // ROOT_COUNT * PER_ROOT_DELAY (~400ms); concurrent enumeration
+    // should cost roughly PER_ROOT_DELAY (~100ms), since every root's
+    // `enumerate` call runs on its own thread at the same time. The
+    // threshold sits comfortably between the two, with slack for
+    // scheduling jitter on a loaded CI machine.
+    let sequential_estimate = PER_ROOT_DELAY * u32::try_from(ROOT_COUNT).unwrap_or(u32::MAX);
+    assert!(
+        elapsed < sequential_estimate * 3 / 4,
+        "elapsed {elapsed:?} should be well under the fully-sequential estimate \
+         {sequential_estimate:?} -- root enumeration does not appear to be running \
+         concurrently"
+    );
+}

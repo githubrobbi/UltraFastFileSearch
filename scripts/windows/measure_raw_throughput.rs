@@ -131,7 +131,16 @@ mod imp {
 
         for zone in &ZONES {
             let max_offset = volume_bytes.saturating_sub(zone_bytes);
-            let offset = ((volume_bytes as f64 * zone.fraction) as u64).min(max_offset);
+            let raw_offset = ((volume_bytes as f64 * zone.fraction) as u64).min(max_offset);
+            // Volume-handle I/O requires a sector-aligned offset (fails
+            // with ERROR_INVALID_PARAMETER otherwise) even for buffered
+            // reads -- unlike a regular file, there's no cache-manager
+            // layer translating an arbitrary byte offset for you. A
+            // fraction like 0.02 or 0.9 essentially never lands on a
+            // sector boundary by chance, so round down to a 1 MiB
+            // boundary, comfortably covering every real sector/stripe
+            // size in use today.
+            let offset = align_down(raw_offset, OFFSET_ALIGNMENT);
             println!();
             println!(
                 "=== {} (offset {:.1} GiB, reading {} MiB) ===",
@@ -198,9 +207,24 @@ mod imp {
         slowest_chunk_mib_per_sec: f64,
     }
 
+    /// Byte offsets and read lengths against a raw volume handle must be
+    /// sector-aligned (Windows rejects anything else with
+    /// `ERROR_INVALID_PARAMETER`, even for buffered/cached access) --
+    /// 1 MiB comfortably covers every real physical/logical sector or
+    /// stripe size in use today.
+    const OFFSET_ALIGNMENT: u64 = 1024 * 1024;
+
+    /// Rounds `value` down to the nearest multiple of `alignment`.
+    const fn align_down(value: u64, alignment: u64) -> u64 {
+        value - (value % alignment)
+    }
+
     /// Seeks to `offset` and reads `total_bytes` sequentially in
     /// `chunk_bytes`-sized calls, timing the whole zone and each
-    /// individual chunk.
+    /// individual chunk. Only ever issues full `chunk_bytes`-sized reads
+    /// -- a short final read would need its own (smaller) alignment
+    /// reasoning, so any less-than-a-full-chunk remainder is simply left
+    /// unread rather than risking a second alignment failure mode.
     fn read_zone(
         handle: HANDLE,
         offset: u64,
@@ -216,10 +240,8 @@ mod imp {
         let mut slowest_mib_per_sec = f64::INFINITY;
         let zone_started_at = Instant::now();
 
-        while remaining > 0 {
-            let want = remaining.min(chunk_bytes);
-            let want_len = usize::try_from(want).unwrap_or(buf.len());
-            let dest = &mut buf[..want_len];
+        while remaining >= chunk_bytes {
+            let dest = &mut buf[..];
             let chunk_started_at = Instant::now();
             let mut bytes_read = 0_u32;
             // SAFETY: `handle` is a valid, open, synchronous file handle

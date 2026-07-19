@@ -158,11 +158,24 @@ impl ContentReader {
         );
 
         let exe = find_reader_exe();
+        // uffs-content-reader's own tracing subscriber writes to its
+        // process's stderr with no level cap (see its main.rs), but
+        // stderr used to be piped to Stdio::null() — discarding every
+        // one of its events, including the per-phase read timing this
+        // crate's own `logical.rs` can emit at debug level. Redirecting
+        // to a discoverable file (mirroring `ephemeral_daemon`'s
+        // `--log-file` for uffsd) makes that timing data actually
+        // retrievable for a real-hardware investigation instead of
+        // silently vanishing.
+        let job_id_str = uuid::Uuid::from_bytes(job_id).simple().to_string();
+        let log_file = std::env::temp_dir().join(format!("uffs-content-reader-{job_id_str}.log"));
+        let log_file_handle = std::fs::File::create(&log_file)
+            .with_context(|| format!("failed to create {}", log_file.display()))?;
         let mut command = Command::new(&exe);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(log_file_handle));
         for (device_path, lease_id, _pool_size) in devices {
             command
                 .arg("--device")
@@ -171,6 +184,7 @@ impl ContentReader {
         tracing::info!(
             exe = %exe.display(),
             device_count = devices.len(),
+            log_file = %log_file.display(),
             "content reader: spawning uffs-content-reader"
         );
         let child = command

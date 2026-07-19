@@ -48,7 +48,9 @@
 //!   whether that string was ever handed out at all.
 
 use core::mem::size_of;
+use core::time::Duration;
 use std::os::windows::ffi::OsStrExt as _;
+use std::time::Instant;
 
 use uffs_content_reader_protocol::ActualReadMode;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -277,15 +279,33 @@ pub(crate) fn read_logical(
     maximum_logical_length: u32,
     cache: ReadHandleCache,
 ) -> anyhow::Result<(Vec<u8>, ActualReadMode, ReadHandleCache)> {
+    let call_started_at = Instant::now();
+    let cache_hit = matches!(
+        &cache.0,
+        Some(cached) if cached.full_file_reference == full_file_reference
+    );
+
+    let mut open_volume_hint_time = Duration::ZERO;
+    let mut open_file_by_id_time = Duration::ZERO;
+    let mut file_size_time = Duration::ZERO;
     let (file_handle, eof) = match cache.0 {
         Some(cached) if cached.full_file_reference == full_file_reference => {
             (cached.handle, cached.eof)
         }
         _ => {
+            let volume_hint_started_at = Instant::now();
             let volume_hint = open_volume_hint(device_path)?;
+            open_volume_hint_time = volume_hint_started_at.elapsed();
+
+            let open_by_id_started_at = Instant::now();
             let file_handle = open_file_by_id(&volume_hint, full_file_reference)?;
+            open_file_by_id_time = open_by_id_started_at.elapsed();
             drop(volume_hint);
+
+            let file_size_started_at = Instant::now();
             let eof = file_size(&file_handle)?;
+            file_size_time = file_size_started_at.elapsed();
+
             (file_handle, eof)
         }
     };
@@ -295,13 +315,32 @@ pub(crate) fn read_logical(
         .map_err(|err| anyhow::anyhow!("{err}"))?;
 
     let mut payload = Vec::with_capacity(plan.total_len() as usize);
+    let read_started_at = Instant::now();
     if plan.real_bytes > 0 {
         seek(&file_handle, logical_offset)?;
         let mut real_buf = vec![0_u8; plan.real_bytes as usize];
         read_exact(&file_handle, &mut real_buf)?;
         payload.extend_from_slice(&real_buf);
     }
+    let read_time = read_started_at.elapsed();
     payload.resize(payload.len() + plan.zero_bytes as usize, 0);
+
+    // PROFILING (temporary — see the "confirm the per-file open/close
+    // overhead theory" investigation): one structured line per call,
+    // broken down by phase, so a real run's log can be aggregated
+    // (`grep 'read_logical: per-phase timing'` + average each field) to
+    // see whether open/close overhead or actual disk I/O dominates total
+    // read time for a given drive's workload.
+    tracing::debug!(
+        cache_hit,
+        real_bytes = plan.real_bytes,
+        open_volume_hint_us = duration_micros(open_volume_hint_time),
+        open_file_by_id_us = duration_micros(open_file_by_id_time),
+        file_size_us = duration_micros(file_size_time),
+        read_us = duration_micros(read_time),
+        total_us = duration_micros(call_started_at.elapsed()),
+        "read_logical: per-phase timing"
+    );
 
     let updated_cache = ReadHandleCache(Some(CachedFileHandle {
         full_file_reference,
@@ -310,4 +349,11 @@ pub(crate) fn read_logical(
     }));
 
     Ok((payload, ActualReadMode::Logical, updated_cache))
+}
+
+/// Converts `duration` to whole microseconds, saturating instead of
+/// panicking — only used for diagnostic log fields, where a saturated
+/// value is still obviously "very large" rather than a silent wrap.
+fn duration_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }

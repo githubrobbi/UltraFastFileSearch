@@ -332,7 +332,7 @@ mod windows_handles {
         /// The returned `HANDLE` is a Copy bit-pattern — callers must
         /// **not** close it; ownership stays with `self` and the
         /// underlying kernel handle is released exactly once via
-        /// [`OwnedHandle::Drop`].
+        /// its own `Drop`.
         const fn raw(&self) -> HANDLE {
             self.0
         }
@@ -591,8 +591,8 @@ mod windows_handles {
     ///
     /// Wraps [`CreateMemoryResourceNotification`] and returns the
     /// resulting `HANDLE` boxed in an [`OwnedHandle`] so the watcher
-    /// thread closes it exactly once on exit via
-    /// [`OwnedHandle::Drop`].  Maps any windows-rs error into
+    /// thread closes it exactly once on exit via its own `Drop`.
+    /// Maps any windows-rs error into
     /// `io::Error::other` so the surrounding orchestrator's error
     /// path stays platform-agnostic.
     fn create_memory_resource_notification(
@@ -613,7 +613,7 @@ mod windows_handles {
     /// Create an unnamed manual-reset Win32 event handle.
     ///
     /// Used as the watcher thread's shutdown signal: the owning
-    /// [`super::PlatformPressureSignal::Drop`] calls
+    /// [`super::PlatformPressureSignal`]'s own `Drop` calls
     /// [`signal_shutdown`] (which pulses `SetEvent`) so the next
     /// `WaitForMultipleObjects` returns and the thread exits.  The
     /// returned [`OwnedHandle`] closes the event on its own `Drop`

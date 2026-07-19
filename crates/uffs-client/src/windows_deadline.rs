@@ -21,13 +21,13 @@
 //! * The guard stores a stable, duplicated handle to the thread that owns the
 //!   [`crate::connect_sync::UffsClientSync`] — this handle is valid for the
 //!   lifetime of the guard even after the thread exits.
-//! * An [`AtomicU64`] carries the absolute `GetTickCount64` tick at which the
-//!   current RPC should be aborted.  `0` means "no RPC in flight", i.e.
-//!   disarmed.
-//! * The watchdog thread wakes every [`WATCHDOG_POLL_MS`] ms, checks the
-//!   atomic, and calls `CancelSynchronousIo` on the target thread when the
-//!   deadline has passed.  It consumes the deadline (via `compare_exchange`) so
-//!   each arm fires at most once.
+//! * An [`core::sync::atomic::AtomicU64`] carries the absolute `GetTickCount64`
+//!   tick at which the current RPC should be aborted.  `0` means "no RPC in
+//!   flight", i.e. disarmed.
+//! * The watchdog thread wakes every `WATCHDOG_POLL_MS` ms, checks the atomic,
+//!   and calls `CancelSynchronousIo` on the target thread when the deadline has
+//!   passed.  It consumes the deadline (via `compare_exchange`) so each arm
+//!   fires at most once.
 //! * `CancelSynchronousIo` causes the blocked `ReadFile` / `WriteFile` on the
 //!   target thread to return `ERROR_OPERATION_ABORTED` (`0x4D3`), which bubbles
 //!   up through `std::io::Read` / `Write` as a regular I/O error — the caller's
@@ -48,12 +48,12 @@
 //! * Per guard (per `UffsClientSync` lifetime): one watchdog thread, ~20
 //!   wake-ups / s, negligible CPU.
 //! * Per RPC (arm + disarm): two atomic stores, nanoseconds.
-//! * Worst-case deadline overshoot: [`WATCHDOG_POLL_MS`] ms.
+//! * Worst-case deadline overshoot: `WATCHDOG_POLL_MS` ms.
 //! * Drop latency: < 1 ms.  The watchdog blocks on an
-//!   [`mpsc::Receiver::recv_timeout`] pairing the 50 ms poll with an instant
-//!   shutdown wake, so [`Drop`] no longer stalls waiting for the next poll
-//!   cycle.  Before this fix the CLI hot path was paying ~48 ms median on every
-//!   invocation (Run 11 bisect — 60 % of the entire wall-clock).
+//!   [`std::sync::mpsc::Receiver::recv_timeout`] pairing the 50 ms poll with an
+//!   instant shutdown wake, so [`Drop`] no longer stalls waiting for the next
+//!   poll cycle.  Before this fix the CLI hot path was paying ~48 ms median on
+//!   every invocation (Run 11 bisect — 60 % of the entire wall-clock).
 
 #![cfg(windows)]
 

@@ -71,7 +71,7 @@ static BROKER_HANDLES: std::sync::OnceLock<std::sync::Mutex<std::collections::Ha
 /// (the registry copy stays in place) — the live MFT read opens the volume
 /// more than once (read pass + cache-write pass), so a take-once handle would
 /// leave the second open to fall back to `CreateFileW` and fail with
-/// access-denied.  The registry entry is freed by [`release_broker_handle`].
+/// access-denied.  The registry entry is freed by `release_broker_handle`.
 #[cfg(windows)]
 pub fn register_broker_handle(drive: super::DriveLetter, raw_handle: u64) {
     let map =
@@ -875,7 +875,7 @@ impl VolumeHandle {
     /// [`Self::open_device_path`]) — see the field's own doc comment.
     /// Callers that need to carry this handle across a boundary that
     /// loses the original open-site context (e.g.
-    /// [`Self::from_duplicated_handle`]'s caller in `spawn_blocking`)
+    /// `Self::from_duplicated_handle`'s caller in `spawn_blocking`)
     /// must read this *before* duplicating.
     #[must_use]
     pub const fn is_live_letter(&self) -> bool {
@@ -1030,7 +1030,7 @@ impl VolumeHandle {
     /// `FILE_FLAG_NO_BUFFERING` bypasses the cache manager entirely and
     /// issues I/O directly to the device driver, which only requires
     /// sector-aligned buffers and offsets (already guaranteed by
-    /// [`AlignedBuffer`]).
+    /// [`crate::io::AlignedBuffer`]).
     ///
     /// Re-opens [`Self::opened_path`] when this handle was opened against
     /// a real path (live volume or VSS snapshot device) — critically,

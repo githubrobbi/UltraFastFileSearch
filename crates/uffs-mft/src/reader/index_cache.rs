@@ -170,9 +170,9 @@ impl MftReader {
     ///
     /// Mirrors
     /// [`crate::reader::multi_drive::MultiDriveMftReader::apply_or_skip_usn_changes`]
-    /// but reuses the caller-supplied [`VolumeHandle`] instead of opening a
-    /// fresh one — the cached single-drive path already holds a live handle
-    /// from `apply_usn_updates_to_fresh_index`.
+    /// but reuses the caller-supplied [`crate::platform::VolumeHandle`] instead
+    /// of opening a fresh one — the cached single-drive path already holds
+    /// a live handle from `apply_usn_updates_to_fresh_index`.
     #[cfg(windows)]
     fn apply_or_skip_usn_changes(
         drive: crate::platform::DriveLetter,

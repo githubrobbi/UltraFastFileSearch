@@ -7,9 +7,10 @@
 //! explicit second confirmation** (a `uffs.exe` under `Downloads` might be the
 //! user's own copy, so they never ride the main plan's single yes — design §8).
 //!
-//! The dedup logic is pure + unit-tested against a fake [`Search`]; the live
-//! backend ([`DaemonSearch`]) is best-effort (no daemon ⇒ no hits, never a
-//! hard failure).
+//! The dedup logic is pure + unit-tested against a fake
+//! [`crate::commands::uninstall::sweep::Search`]; the live backend
+//! ([`crate::commands::uninstall::sweep::DaemonSearch`]) is best-effort
+//! (no daemon ⇒ no hits, never a hard failure).
 
 use core::time::Duration;
 use std::ffi::OsStr;

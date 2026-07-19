@@ -8,8 +8,8 @@
 //! enumerate candidates against it, spawn the privileged content Reader,
 //! stream content through [`super::workflow::run_job`], and tear
 //! everything down — in the right order (content Reader/leases outlive
-//! candidate enumeration; see
-//! [`super::vss_orchestrator::EphemeralJobResources`] for why daemon and leases
+//! candidate enumeration; see `EphemeralJobResources`
+//! ([`super::vss_orchestrator`]) for why daemon and leases
 //! are bundled into one teardown step).
 //!
 //! Windows-only: every piece this wires together already is.

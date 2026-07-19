@@ -43,7 +43,7 @@ use tokio::sync::mpsc;
 use crate::job::registry::JobRegistry;
 
 /// A signal the command pipe delivers to the active job's streaming task
-/// ([`stream::run`]).
+/// ([`stream::spawn`]).
 pub(crate) enum ControlSignal {
     /// `WINDOW_UPDATE`: raise the send budget by this many bytes.
     WindowGrant(u64),
@@ -57,7 +57,7 @@ pub(crate) enum ControlSignal {
 /// Handle to the currently-active job, from the command pipe's point of
 /// view.
 struct ActiveJob {
-    /// The producer-assigned id for this job (see [`stream::run`]'s doc
+    /// The producer-assigned id for this job (see [`stream::spawn`]'s doc
     /// comment for why the producer, not the consumer, assigns it).
     job_id: [u8; 16],
     /// Delivers [`ControlSignal`]s to the streaming task.
@@ -76,7 +76,7 @@ struct ServerState {
 
 /// Run the command pipe server for the process's whole lifetime. Each
 /// `JOB_SUBMIT` spawns a job-owned data-pipe streaming task
-/// ([`stream::run`]) alongside it.
+/// ([`stream::spawn`]) alongside it.
 ///
 /// # Errors
 /// Returns an error only if the command pipe itself cannot be created at

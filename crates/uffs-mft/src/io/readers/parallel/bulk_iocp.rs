@@ -14,7 +14,7 @@ use super::prelude::*;
 struct BulkOverlappedRead {
     /// Win32 `OVERLAPPED` struct passed to `ReadFile` and matched on the
     /// IOCP completion side.  Addressed by raw pointer until the
-    /// completion is dequeued, hence the [`Pin<Box<_>>`] wrapping at the
+    /// completion is dequeued, hence the `Pin<Box<_>>` wrapping at the
     /// owning sites.
     overlapped: windows::Win32::System::IO::OVERLAPPED,
 }

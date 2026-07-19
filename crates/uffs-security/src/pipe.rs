@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
+#![cfg(windows)]
+
 //! Windows named-pipe security helpers.
 //!
 //! UFFS uses a Windows named pipe (`\\.\pipe\uffs-<hash>`) as the IPC
@@ -33,20 +35,20 @@
 //!
 //! # API surface
 //!
-//! * [`PipeName`] — validated newtype wrapping a Windows named-pipe path of the
-//!   form `\\.\pipe\<name>`.  The canonical constructor
-//!   [`PipeName::for_current_user`] computes the deterministic per-user pipe
-//!   path; [`PipeName::parse`] validates an arbitrary string.
-//! * [`current_user_sid_string`] — linked-or-current token user SID as a Win32
+//! * [`crate::pipe::PipeName`] — validated newtype wrapping a Windows
+//!   named-pipe path of the form `\\.\pipe\<name>`.  The canonical constructor
+//!   [`crate::pipe::PipeName::for_current_user`] computes the deterministic
+//!   per-user pipe path; [`crate::pipe::PipeName::parse`] validates an
+//!   arbitrary string.
+//! * `current_user_sid_string` — linked-or-current token user SID as a Win32
 //!   SDDL-compatible string (`"S-1-5-21-..."`).
-//! * [`OwnerOnlySd`] — RAII wrapper for a `SECURITY_DESCRIPTOR` granting
-//!   `GENERIC_ALL` to a single user SID.  Pass `as_security_attributes()` to
+//! * [`crate::pipe::OwnerOnlySd`] — RAII wrapper for a `SECURITY_DESCRIPTOR`
+//!   granting `GENERIC_ALL` to a single user SID.  Pass
+//!   `as_security_attributes()` to
 //!   `ServerOptions::create_with_security_attributes_raw`.
 //!
 //! Every unsafe Win32 call in the UFFS named-pipe stack lives in this
 //! file.  Keep it that way.
-
-#![cfg(windows)]
 
 use core::fmt;
 use std::io;
@@ -265,7 +267,7 @@ pub struct OwnerOnlySd {
 
 impl OwnerOnlySd {
     /// Build a DACL granting `GENERIC_ALL` to the current user (resolved
-    /// via [`current_user_sid_string`]).
+    /// via `current_user_sid_string`).
     ///
     /// # Errors
     ///
@@ -327,8 +329,8 @@ impl OwnerOnlySd {
 
     /// Raw pointer to the `SECURITY_ATTRIBUTES` — kept alive by `self`.
     ///
-    /// Prefer [`as_security_attributes`] unless the target API takes a
-    /// raw `*mut c_void`.
+    /// Prefer [`OwnerOnlySd::as_security_attributes`] unless the target API
+    /// takes a raw `*mut c_void`.
     #[must_use]
     pub const fn raw_security_descriptor(&self) -> *mut core::ffi::c_void {
         self.sd.0

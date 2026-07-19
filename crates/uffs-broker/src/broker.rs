@@ -161,7 +161,7 @@ fn self_test_vss_dir(args: &[String]) -> Option<std::path::PathBuf> {
 /// runtime on this machine.
 ///
 /// # Errors
-/// Returns an error (and prints "FAIL: <cause>") if any stage of the
+/// Returns an error (and prints `"FAIL: <cause>"`) if any stage of the
 /// round trip fails.
 #[cfg(windows)]
 #[expect(

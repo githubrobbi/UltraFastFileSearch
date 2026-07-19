@@ -21,7 +21,7 @@ use crate::parse::{MftRecordMerger, ParsedRecord, apply_fixup, parse_record_full
 const MFT_FILE_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
 /// Reads the MFT via a file handle obtained from
-/// [`VolumeHandle::open_mft_read_handle`].
+/// [`crate::platform::VolumeHandle::open_mft_read_handle`].
 ///
 /// Returns `Vec<ParsedRecord>` compatible with the legacy pipeline
 /// (`from_parsed_records`).

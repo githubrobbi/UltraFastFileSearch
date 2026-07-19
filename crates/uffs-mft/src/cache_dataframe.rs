@@ -104,7 +104,7 @@ fn load_cached_dataframe(
 }
 
 /// Read the MFT fresh, kick off a background cache save, and convert the
-/// resulting index into a [`DataFrame`].  Used after a cache miss.
+/// resulting index into a [`uffs_polars::DataFrame`].  Used after a cache miss.
 #[cfg(windows)]
 fn build_fresh_dataframe(
     drive: crate::platform::DriveLetter,
@@ -123,7 +123,8 @@ fn build_fresh_dataframe(
 }
 
 /// Open the MFT reader for `drive` and synchronously read every record
-/// into an [`MftIndex`].  Wraps the tracing pair around the slow read.
+/// into an [`crate::index::MftIndex`].  Wraps the tracing pair around the slow
+/// read.
 #[cfg(windows)]
 fn read_fresh_index(drive: crate::platform::DriveLetter) -> crate::Result<crate::index::MftIndex> {
     use crate::reader::MftReader;
@@ -144,7 +145,7 @@ fn read_fresh_index(drive: crate::platform::DriveLetter) -> crate::Result<crate:
 /// to the background cache writer.  `VolumeHandle` failures propagate to
 /// the caller (matching pre-refactor semantics); cache-save failures are
 /// logged at warn so the surrounding [`build_fresh_dataframe`] flow can
-/// still hand the freshly-built [`DataFrame`] back to the user.
+/// still hand the freshly-built [`uffs_polars::DataFrame`] back to the user.
 #[cfg(windows)]
 fn spawn_cache_save(
     drive: crate::platform::DriveLetter,

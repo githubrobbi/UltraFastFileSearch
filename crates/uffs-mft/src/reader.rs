@@ -215,7 +215,7 @@ impl MftReader {
     /// Open an arbitrary device path for MFT reading — e.g. a VSS snapshot
     /// device (`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN`), rather
     /// than a live drive letter's `\\.\<letter>:` path. See
-    /// [`crate::platform::volume::VolumeHandle::open_device_path`] for the
+    /// [`crate::platform::VolumeHandle::open_device_path`] for the
     /// full contract (no Access Broker fast-path; caller must already be
     /// elevated) and what `volume` (a diagnostic label only) is for.
     ///
@@ -296,12 +296,12 @@ impl MftReader {
     ///
     /// # Errors
     ///
-    /// Returns [`MftError::InvalidInput`] if the reader was constructed via
-    /// [`MftReader::from_file`] rather than [`MftReader::new_for_volume`].  In
-    /// production this is a contract violation: the IOCP read pipelines that
-    /// call this method are dispatched only after construction guarantees a
-    /// live volume.  A typed error keeps the contract enforceable without
-    /// panicking.
+    /// Returns [`crate::error::MftError::InvalidInput`] if the reader was
+    /// constructed via [`MftReader::from_file`] rather than
+    /// [`MftReader::open`].  In production this is a contract violation:
+    /// the IOCP read pipelines that call this method are dispatched only
+    /// after construction guarantees a live volume.  A typed error keeps
+    /// the contract enforceable without panicking.
     #[cfg(windows)]
     pub(crate) fn require_handle(&self) -> Result<&VolumeHandle> {
         match &self.source {

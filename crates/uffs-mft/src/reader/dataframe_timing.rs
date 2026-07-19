@@ -305,9 +305,9 @@ impl MftReader {
 /// Output of [`MftReader::benchmark_phase1_open`].
 ///
 /// Bundles the extent map, optional bitmap, detected drive type, and the
-/// pre-computed [`DriveCharacteristics`] / `mft_size_bytes` / `open_ms`
-/// so the benchmark orchestrator can move them into the read+parse phase
-/// without juggling several positional values.
+/// pre-computed [`crate::reader::DriveCharacteristics`] / `mft_size_bytes` /
+/// `open_ms` so the benchmark orchestrator can move them into the read+parse
+/// phase without juggling several positional values.
 #[cfg(windows)]
 struct Phase1Snapshot {
     /// MFT extent map handed off to [`crate::io::ParallelMftReader`].

@@ -4,11 +4,11 @@
 //! Detect a running UFFS Access Broker.
 //!
 //! The broker is an elevated Windows service that vends read-only NTFS
-//! volume handles to a non-elevated daemon.  [`broker_pipe_present`] lets
-//! the client's daemon-spawn logic ([`crate::daemon_spawn`]) decide
-//! whether a non-elevated `uffs` can start the daemon anyway (the daemon
-//! then obtains handles from the broker) instead of returning
-//! [`crate::error::ClientError::DaemonNeedsElevation`].
+//! volume handles to a non-elevated daemon.
+//! [`crate::broker_probe::broker_pipe_present`] lets the client's daemon-spawn
+//! logic ([`crate::daemon_spawn`]) decide whether a non-elevated `uffs` can
+//! start the daemon anyway (the daemon then obtains handles from the broker)
+//! instead of returning [`crate::error::ClientError::DaemonNeedsElevation`].
 //!
 //! This whole module is `#[cfg(windows)]` (declared so in `lib.rs`), so
 //! it carries no per-item cfg gates.

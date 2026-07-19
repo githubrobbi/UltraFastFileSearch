@@ -336,8 +336,8 @@ fn plan_iocp_capture_chunks(
 }
 
 /// Block on `GetQueuedCompletionStatus` for `iocp`, locate the slot whose
-/// pinned [`OverlappedRead`] matches the returned OVERLAPPED pointer, and
-/// take ownership of that op out of `in_flight`.
+/// pinned [`crate::io::OverlappedRead`] matches the returned OVERLAPPED
+/// pointer, and take ownership of that op out of `in_flight`.
 ///
 /// Returns:
 /// - `Ok(Some((slot_idx, op)))` for a normal completion.
@@ -407,8 +407,8 @@ unsafe fn wait_for_completion(
 }
 
 /// Slice the unaligned chunk payload out of the completed
-/// [`OverlappedRead`]'s buffer, hand the bytes to `writer`, and return
-/// `Ok(())` on success.
+/// [`crate::io::OverlappedRead`]'s buffer, hand the bytes to `writer`, and
+/// return `Ok(())` on success.
 ///
 /// Returns [`MftError::Io`] when the buffer is shorter than the expected
 /// post-alignment payload (which would indicate a short read or buffer-
@@ -443,12 +443,12 @@ fn record_completed_chunk(
 }
 
 /// Allocate an aligned buffer for `chunk`, wrap it in a pinned
-/// [`OverlappedRead`], submit a [`ReadFile`] against `handle`, and return
-/// the pinned op so the caller can park it in their `in_flight` slot.
+/// [`crate::io::OverlappedRead`], submit a `ReadFile` against `handle`, and
+/// return the pinned op so the caller can park it in their `in_flight` slot.
 ///
-/// `buffer_size` must already include the [`SECTOR_SIZE`] head-room
+/// `buffer_size` must already include the [`crate::io::SECTOR_SIZE`] head-room
 /// required for sector-aligned reads.  `slot_idx` is forwarded to the
-/// [`OverlappedRead`] for completion-port routing.
+/// [`crate::io::OverlappedRead`] for completion-port routing.
 ///
 /// On `ERROR_IO_PENDING` the read is considered successfully queued.
 /// Any other failure is returned as [`MftError::Io`] without closing
@@ -459,8 +459,8 @@ fn record_completed_chunk(
 /// Caller must guarantee:
 /// - `handle` is a live overlapped file handle associated with the completion
 ///   port that drives the surrounding event loop.
-/// - The returned [`OverlappedRead`] outlives the in-flight read until
-///   `GetQueuedCompletionStatus` reports its completion.
+/// - The returned [`crate::io::OverlappedRead`] outlives the in-flight read
+///   until `GetQueuedCompletionStatus` reports its completion.
 #[cfg(windows)]
 #[expect(
     unsafe_code,

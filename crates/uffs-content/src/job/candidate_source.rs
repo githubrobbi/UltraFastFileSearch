@@ -123,9 +123,9 @@ const fn file_identity(_metadata: &fs::Metadata) -> u64 {
 }
 
 /// Evaluates a job's query against the ephemeral, VSS-snapshot-backed
-/// `uffsd` instance
-/// [`super::vss_orchestrator::prepare_ephemeral_daemon_for_roots`]
-/// spawned — the real production `CandidateSource`.
+/// `uffsd` instance `prepare_ephemeral_daemon_for_roots`
+/// ([`super::vss_orchestrator`]) spawned — the real production
+/// `CandidateSource`.
 ///
 /// Windows-only: VSS snapshots, and the ephemeral daemon that queries
 /// them, don't exist on any other platform — matching

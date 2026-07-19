@@ -310,8 +310,8 @@ impl PipelinedMftReader {
 
 /// Pre-computed plan for a single pipelined-parallel read.
 ///
-/// Bundled into a struct so [`read_all_pipelined_parallel`] can hand the
-/// fields off to its sub-helpers without exceeding clippy's
+/// Bundled into a struct so [`PipelinedMftReader::read_all_pipelined_parallel`]
+/// can hand the fields off to its sub-helpers without exceeding clippy's
 /// `too_many_arguments` threshold.
 struct PipelinedReadPlan {
     /// Bitmap-aware [`ReadChunk`] schedule (in disk order) handed to the

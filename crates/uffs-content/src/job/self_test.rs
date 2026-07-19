@@ -104,7 +104,7 @@ pub fn self_test_vss_playback(test_dir: &Path) -> Result<()> {
 /// manifest's own `logical_size` fields must sum to the ground-truth
 /// total, and the bytes actually streamed over `CONTENT_CHUNK` frames
 /// must also sum to that same total. Ground truth comes from
-/// [`walk_tolerating_denied`] — a permissive `std::fs` walker reading the
+/// `walk_tolerating_denied` — a permissive `std::fs` walker reading the
 /// **live** volume rather than the job's VSS snapshot; on a quiescent
 /// drive the two are expected to match exactly.
 ///
@@ -307,9 +307,10 @@ pub fn self_test_reader_benchmark(
 /// the size of every regular file whose extension case-insensitively
 /// matches `extension`.
 ///
-/// Deliberately **not** [`DirWalkCandidateSource`] (used elsewhere in this
-/// crate for synthetic test fixtures, where an access-denied error is
-/// itself a bug worth failing loud on): a real, pre-existing drive
+/// Deliberately **not** [`super::candidate_source::DirWalkCandidateSource`]
+/// (used elsewhere in this crate for synthetic test fixtures, where an
+/// access-denied error is itself a bug worth failing loud on): a real,
+/// pre-existing drive
 /// routinely has OS-reserved, ACL-locked directories (`System Volume
 /// Information`, `$RECYCLE.BIN`) that plain `std::fs::read_dir` can't
 /// enter but that the real MFT-based query engine reads regardless (it

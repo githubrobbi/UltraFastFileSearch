@@ -12,8 +12,8 @@
 //! ## Why this is its own file
 //!
 //! Split out of the parent `usn.rs` so the DTO-side surface (the
-//! [`Usn`](super::Usn) newtype + [`UsnJournalInfo`](super::UsnJournalInfo) /
-//! [`UsnRecord`](super::UsnRecord) / aggregation helpers / non-Windows stubs /
+//! `Usn` newtype + [`UsnJournalInfo`] /
+//! [`UsnRecord`] / aggregation helpers / non-Windows stubs /
 //! tests) stays under the workspace file-size policy without needing an
 //! exception entry.  The Win32 FFI surface — `#[repr(C)]` mirror structs,
 //! `CreateFileW` / `DeviceIoControl` calls, fixed-size record-decode loop — is

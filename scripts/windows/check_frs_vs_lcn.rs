@@ -8,21 +8,31 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Checks whether ascending NTFS file-reference (FRS) order correlates
-//! with ascending on-disk physical location, for a sample of files.
+//! with ascending on-disk physical location, for a sample of files --
+//! and how much read-order headroom is actually on the table.
 //!
 //! Step 1 of the "does reading candidates in ascending FRS order actually
 //! give us near-sequential physical disk access" investigation. Rust
-//! replacement for the original `check_frs_vs_lcn.ps1` (same logic).
+//! replacement for the original `check_frs_vs_lcn.ps1` (same logic, plus
+//! the natural-vs-FRS-vs-oracle seek-distance comparison below).
 //!
 //! Reads `uffs --format json` output (path + file_reference per line),
 //! samples a subset, and runs `fsutil file queryextents` on each sampled
 //! file to find its first extent's starting LCN (logical cluster number
-//! -- i.e. where it actually sits on the volume). Reports the Spearman
-//! rank correlation between FRS order and LCN order: a strong positive
-//! correlation means ascending-FRS read order is a good proxy for
-//! physical order (sorting reads by FRS should meaningfully cut seeks);
-//! a weak/no correlation means it won't help -- the files are physically
-//! scattered independent of allocation order.
+//! -- i.e. where it actually sits on the volume). Reports two things:
+//!
+//! 1. The Spearman rank correlation between FRS order and LCN order: a strong
+//!    positive correlation means ascending-FRS read order is a good proxy for
+//!    physical order; weak/no correlation means it won't help -- the files are
+//!    physically scattered independent of allocation order.
+//! 2. The total seek distance (sum of `|Δ LCN|` between consecutive reads)
+//!    under three orderings of the same sample: the order the search response
+//!    actually returned them in ("natural" -- what the read pipeline processes
+//!    today), ascending-FRS order, and the oracle (true ascending-LCN order --
+//!    the unbeatable lower bound). This turns "FRS correlates weakly/moderately
+//!    with LCN" into a concrete number: how much of the *achievable* seek
+//!    reduction does cheap FRS-sorting actually capture, versus what only a
+//!    real LCN-resolution pass (querying physical location up front) could get.
 //!
 //! # Usage
 //! ```text
@@ -49,6 +59,11 @@ struct Sample {
 
 struct Resolved {
     path: String,
+    /// Position in `rows` -- i.e. the order the search response actually
+    /// returned this file in, which is what the read pipeline processes
+    /// today (see `candidate_source.rs`: candidates keep the search
+    /// response's row order).
+    natural_index: usize,
     frs: u64,
     lcn: u64,
 }
@@ -115,6 +130,7 @@ fn main() {
         match query_first_lcn(&row.path) {
             Some(lcn) => resolved.push(Resolved {
                 path: row.path.clone(),
+                natural_index: idx,
                 frs: row.frs,
                 lcn,
             }),
@@ -160,6 +176,8 @@ fn main() {
         );
     }
 
+    print_seek_distance_comparison(&resolved);
+
     let out_csv = default_output_csv(json_path);
     write_csv(&out_csv, &resolved);
     println!();
@@ -167,6 +185,123 @@ fn main() {
         "Full sample written to {} for inspection/plotting.",
         out_csv.display()
     );
+}
+
+/// Sum of `|Δ LCN|` between consecutive entries of `ordered` -- a proxy
+/// for total head movement (in clusters) touring this sample once in
+/// the given order.
+fn total_seek_distance(ordered: &[&Resolved]) -> u64 {
+    ordered
+        .windows(2)
+        .map(|pair| pair[0].lcn.abs_diff(pair[1].lcn))
+        .sum()
+}
+
+/// Prints the natural-vs-FRS-vs-oracle seek-distance comparison: how
+/// much of the seek reduction that's actually achievable (natural ->
+/// oracle) does cheap ascending-FRS sorting capture on its own.
+fn print_seek_distance_comparison(resolved: &[Resolved]) {
+    let mut by_natural: Vec<&Resolved> = resolved.iter().collect();
+    by_natural.sort_by_key(|r| r.natural_index);
+
+    let mut by_frs: Vec<&Resolved> = resolved.iter().collect();
+    by_frs.sort_by_key(|r| r.frs);
+
+    // The oracle: true ascending-LCN order. For a strictly ascending
+    // sequence, sum of |Δ| collapses to (max - min) -- the unbeatable
+    // lower bound for touring every point once.
+    let mut by_lcn: Vec<&Resolved> = resolved.iter().collect();
+    by_lcn.sort_by_key(|r| r.lcn);
+
+    let natural_total = total_seek_distance(&by_natural);
+    let frs_total = total_seek_distance(&by_frs);
+    let oracle_total = total_seek_distance(&by_lcn);
+
+    let bytes_per_cluster = resolved
+        .first()
+        .and_then(|r| drive_root(&r.path))
+        .and_then(|root| query_bytes_per_cluster(&root));
+
+    println!();
+    println!(
+        "=== Total seek distance (sum of |Δ LCN| touring the sample once; lower is better) ==="
+    );
+    print_distance_line(
+        "Natural (search-response) order",
+        natural_total,
+        bytes_per_cluster,
+    );
+    print_distance_line("Ascending-FRS order", frs_total, bytes_per_cluster);
+    print_distance_line(
+        "Oracle: true ascending-LCN order",
+        oracle_total,
+        bytes_per_cluster,
+    );
+    println!();
+
+    let achievable = natural_total.saturating_sub(oracle_total);
+    if achievable == 0 {
+        println!(
+            "Natural order already matches the oracle on this sample -- no seek-distance headroom to capture."
+        );
+        return;
+    }
+    let frs_captured = natural_total.saturating_sub(frs_total);
+    let capture_pct = 100.0 * frs_captured as f64 / achievable as f64;
+    println!(
+        "Ascending-FRS order captures {capture_pct:.1}% of the max possible seek-distance \
+         reduction (natural -> oracle) on this sample. The remaining {:.1}% is only reachable \
+         by actually resolving true LCN per candidate before ordering reads.",
+        100.0 - capture_pct
+    );
+}
+
+fn print_distance_line(label: &str, clusters: u64, bytes_per_cluster: Option<u64>) {
+    match bytes_per_cluster {
+        Some(bpc) => {
+            let mib = (clusters as f64 * bpc as f64) / (1024.0 * 1024.0);
+            println!("{label}: {clusters} clusters (~{mib:.1} MiB of head travel)");
+        }
+        None => println!(
+            "{label}: {clusters} clusters (bytes/cluster unknown -- couldn't convert to MiB)"
+        ),
+    }
+}
+
+/// Extracts `"D:"` from a path like `"D:\Dropbox\..."`, for the
+/// `fsutil fsinfo ntfsinfo` call below. `None` for anything that doesn't
+/// look like a drive-letter-rooted Windows path.
+fn drive_root(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        Some(format!("{}:", &path[0..1]))
+    } else {
+        None
+    }
+}
+
+/// Runs `fsutil fsinfo ntfsinfo <drive_root>` and pulls out "Bytes Per
+/// Cluster" so seek-distance numbers can be shown in MiB, not just raw
+/// cluster counts. Best-effort: `None` if the command or parse fails,
+/// callers fall back to reporting clusters only.
+fn query_bytes_per_cluster(drive_root: &str) -> Option<u64> {
+    let output = Command::new("fsutil")
+        .args(["fsinfo", "ntfsinfo", drive_root])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.to_ascii_lowercase().contains("bytes per cluster") {
+            let digits: String = line.chars().filter(char::is_ascii_digit).collect();
+            if let Ok(value) = digits.parse::<u64>() {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 /// Run `fsutil file queryextents` and pull out the first `Lcn` value it
@@ -249,11 +384,14 @@ fn default_output_csv(json_path: &str) -> std::path::PathBuf {
 }
 
 fn write_csv(path: &Path, resolved: &[Resolved]) {
-    let mut out = String::from("Path,Frs,Lcn\n");
+    let mut out = String::from("Path,NaturalIndex,Frs,Lcn\n");
     for row in resolved {
         // Paths can contain commas/quotes -- quote and escape per RFC 4180.
         let escaped_path = row.path.replace('"', "\"\"");
-        out.push_str(&format!("\"{escaped_path}\",{},{}\n", row.frs, row.lcn));
+        out.push_str(&format!(
+            "\"{escaped_path}\",{},{},{}\n",
+            row.natural_index, row.frs, row.lcn
+        ));
     }
     if let Err(err) = fs::write(path, out) {
         eprintln!("failed to write {}: {err}", path.display());

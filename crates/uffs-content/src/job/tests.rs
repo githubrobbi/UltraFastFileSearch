@@ -7,9 +7,11 @@
 //! `crates/uffs-content/tests/e2e_dir_walk_parity_fake_reader.rs` — these
 //! tests instead cover this module's own internals in isolation.
 
+use alloc::sync::Arc;
 use core::time::Duration;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use uffs_content_protocol::codec::Reader;
@@ -358,14 +360,53 @@ impl CandidateSource for MultiLeaseCandidateSource {
     }
 }
 
+/// Asserts that at least two of `intervals` overlap in wall-clock time —
+/// direct proof that two of the recorded operations actually ran at the
+/// same time, rather than inferring concurrency from a coarse
+/// elapsed-time-vs-threshold check. A fixed millisecond threshold is
+/// only ever true *relative to how fast the test machine happens to be
+/// that run*; on a loaded/throttled CI runner, `thread::sleep(100ms)`
+/// itself can take several hundred milliseconds of wall-clock time
+/// (real GitHub-hosted-Windows-runner behavior, not hypothetical — see
+/// the `concurrent_lease_runs_...` test's git history), which pushes
+/// *both* the sequential and concurrent paths past any fixed absolute
+/// threshold and produces a false failure. Two intervals overlapping is
+/// true or false independent of how slow the machine is: it only asks
+/// whether two things happened during the same stretch of time.
+fn assert_any_two_intervals_overlap(intervals: &[(Instant, Instant)], what: &str) {
+    for (i, &(a_start, a_end)) in intervals.iter().enumerate() {
+        for &(b_start, b_end) in intervals.get(i + 1..).unwrap_or_default() {
+            if a_start < b_end && b_start < a_end {
+                return;
+            }
+        }
+    }
+    panic!("no two {what} intervals overlap in wall-clock time: {intervals:?}");
+}
+
 /// Test-only [`ContentSource`] whose every candidate read sleeps
 /// `per_candidate_delay` before returning a fixed 4-byte payload —
 /// simulates real per-candidate I/O latency without touching a real
-/// disk, so a test can assert on wall-clock time to prove concurrent
-/// lease runs actually overlap (rather than merely not crashing).
+/// disk. Records each read's (start, end) so a test can prove two
+/// lease runs' reads genuinely overlapped in wall-clock time (see
+/// [`assert_any_two_intervals_overlap`]) rather than inferring it from
+/// an elapsed-time-vs-threshold check.
 struct SlowContentSource {
     /// How long each candidate's one real read takes.
     per_candidate_delay: Duration,
+    /// (start, end) of every `read_at` call across every thread. `Arc`
+    /// (not a borrow of `&self`) because `ContentSource::begin_read`
+    /// returns a `'static` `Box<dyn ReadSession>`.
+    intervals: Arc<Mutex<Vec<(Instant, Instant)>>>,
+}
+
+impl SlowContentSource {
+    fn new(per_candidate_delay: Duration) -> Self {
+        Self {
+            per_candidate_delay,
+            intervals: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl ContentSource for SlowContentSource {
@@ -377,6 +418,7 @@ impl ContentSource for SlowContentSource {
         Ok(Box::new(SlowReadSession {
             delay: self.per_candidate_delay,
             served: false,
+            intervals: Arc::clone(&self.intervals),
         }))
     }
 }
@@ -388,11 +430,19 @@ struct SlowReadSession {
     delay: Duration,
     /// Whether the 4-byte payload has already been served.
     served: bool,
+    /// Shared back-reference to record this read's (start, end) into.
+    intervals: Arc<Mutex<Vec<(Instant, Instant)>>>,
 }
 
 impl ReadSession for SlowReadSession {
     fn read_at(&mut self, _offset: u64, _max_len: u32) -> std::io::Result<Vec<u8>> {
+        let start = Instant::now();
         std::thread::sleep(self.delay);
+        let end = Instant::now();
+        self.intervals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((start, end));
         if self.served {
             return Ok(Vec::new());
         }
@@ -428,12 +478,9 @@ fn concurrent_lease_runs_actually_overlap_and_never_interleave_a_candidates_fram
     let candidate_source = MultiLeaseCandidateSource {
         per_lease: CANDIDATES_PER_LEASE,
     };
-    let content_source = SlowContentSource {
-        per_candidate_delay: PER_CANDIDATE_DELAY,
-    };
+    let content_source = SlowContentSource::new(PER_CANDIDATE_DELAY);
 
     let mut frames = Vec::new();
-    let started_at = Instant::now();
     let outcome = run_job(
         &request,
         &candidate_source,
@@ -448,28 +495,22 @@ fn concurrent_lease_runs_actually_overlap_and_never_interleave_a_candidates_fram
         },
     )
     .expect("run_job must succeed");
-    let elapsed = started_at.elapsed();
 
     let total_candidates = 2 * CANDIDATES_PER_LEASE;
     assert_eq!(outcome.run_summary.candidate_count, total_candidates as u64);
     assert_eq!(outcome.run_summary.succeeded_count, total_candidates as u64);
     assert_eq!(outcome.run_summary.failed_retryable_count, 0);
 
-    // Sequential-lease processing would cost roughly
-    // 2 * CANDIDATES_PER_LEASE * PER_CANDIDATE_DELAY (~600ms); concurrent
-    // lease runs should cost roughly CANDIDATES_PER_LEASE *
-    // PER_CANDIDATE_DELAY (~300ms), since both leases' single-connection
-    // (concurrency = 1) reads proceed at the same time. The threshold
-    // sits comfortably between the two, with slack for scheduling
-    // jitter on a loaded CI machine.
-    let sequential_estimate =
-        PER_CANDIDATE_DELAY * u32::try_from(total_candidates).unwrap_or(u32::MAX);
-    assert!(
-        elapsed < sequential_estimate * 3 / 4,
-        "elapsed {elapsed:?} should be well under the fully-sequential estimate \
-         {sequential_estimate:?} -- lease runs (drives) do not appear to be running \
-         concurrently"
-    );
+    // Direct proof of concurrency: two different leases' reads must
+    // genuinely overlap in wall-clock time (each lease runs its
+    // CANDIDATES_PER_LEASE reads sequentially within itself, at
+    // concurrency = 1, so an overlap can only come from two *different*
+    // leases' single-connection reads proceeding at the same time).
+    let intervals = content_source
+        .intervals
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_any_two_intervals_overlap(&intervals, "lease-run read_at");
 
     // Correctness: decode every frame in emission order and confirm no
     // candidate's frame group (FILE_BEGIN..FILE_END) is ever split apart
@@ -533,16 +574,36 @@ fn concurrent_lease_runs_actually_overlap_and_never_interleave_a_candidates_fram
 /// Test-only [`CandidateSource`] whose every `enumerate` call sleeps
 /// `per_root_delay` before returning one fixed candidate for `root` —
 /// simulates real per-root search latency (a synchronous round trip to
-/// the daemon) without touching a real daemon, so a test can assert on
-/// wall-clock time to prove root enumeration actually overlaps.
+/// the daemon) without touching a real daemon. Records each call's
+/// (start, end) so a test can prove two roots' enumeration genuinely
+/// overlapped in wall-clock time (see
+/// [`assert_any_two_intervals_overlap`]) rather than inferring it from
+/// an elapsed-time-vs-threshold check.
 struct SlowEnumerateCandidateSource {
     /// How long each root's `enumerate` call takes.
     per_root_delay: Duration,
+    /// (start, end) of every `enumerate` call across every thread.
+    intervals: Mutex<Vec<(Instant, Instant)>>,
+}
+
+impl SlowEnumerateCandidateSource {
+    fn new(per_root_delay: Duration) -> Self {
+        Self {
+            per_root_delay,
+            intervals: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl CandidateSource for SlowEnumerateCandidateSource {
     fn enumerate(&self, root: &Path) -> std::io::Result<Vec<CandidateEntry>> {
+        let start = Instant::now();
         std::thread::sleep(self.per_root_delay);
+        let end = Instant::now();
+        self.intervals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((start, end));
         let root_str = root.to_string_lossy();
         let root_index: u64 = root_str
             .strip_prefix("root:")
@@ -583,14 +644,9 @@ fn root_enumeration_actually_overlaps_across_roots() {
         ..Default::default()
     };
 
-    let candidate_source = SlowEnumerateCandidateSource {
-        per_root_delay: PER_ROOT_DELAY,
-    };
-    let content_source = SlowContentSource {
-        per_candidate_delay: Duration::ZERO,
-    };
+    let candidate_source = SlowEnumerateCandidateSource::new(PER_ROOT_DELAY);
+    let content_source = SlowContentSource::new(Duration::ZERO);
 
-    let started_at = Instant::now();
     let outcome = run_job(
         &request,
         &candidate_source,
@@ -602,23 +658,16 @@ fn root_enumeration_actually_overlaps_across_roots() {
         |_frame| Ok(()),
     )
     .expect("run_job must succeed");
-    let elapsed = started_at.elapsed();
 
     assert_eq!(outcome.run_summary.candidate_count, ROOT_COUNT as u64);
     assert_eq!(outcome.run_summary.succeeded_count, ROOT_COUNT as u64);
     assert_eq!(outcome.run_summary.failed_retryable_count, 0);
 
-    // Sequential enumeration would cost roughly
-    // ROOT_COUNT * PER_ROOT_DELAY (~400ms); concurrent enumeration
-    // should cost roughly PER_ROOT_DELAY (~100ms), since every root's
-    // `enumerate` call runs on its own thread at the same time. The
-    // threshold sits comfortably between the two, with slack for
-    // scheduling jitter on a loaded CI machine.
-    let sequential_estimate = PER_ROOT_DELAY * u32::try_from(ROOT_COUNT).unwrap_or(u32::MAX);
-    assert!(
-        elapsed < sequential_estimate * 3 / 4,
-        "elapsed {elapsed:?} should be well under the fully-sequential estimate \
-         {sequential_estimate:?} -- root enumeration does not appear to be running \
-         concurrently"
-    );
+    // Direct proof of concurrency: two different roots' `enumerate`
+    // calls must genuinely overlap in wall-clock time.
+    let intervals = candidate_source
+        .intervals
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_any_two_intervals_overlap(&intervals, "root enumeration");
 }

@@ -29,7 +29,7 @@ use crate::index::{
 };
 use crate::ntfs::{
     AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
-    StandardInformation, file_reference_to_frs,
+    file_reference_to_frs,
 };
 
 /// Decode a UTF-16LE byte slice into `out`, replacing unpaired surrogates
@@ -389,25 +389,19 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
             // ── $STANDARD_INFORMATION (0x10) ─────────────────────────
             Some(AttributeType::StandardInformation) => {
                 if attr_header.is_non_resident == 0 {
-                    let vo = usize::from(rd_u16(data, offset.saturating_add(20)));
-                    if let Some(si_off) = offset.checked_add(vo)
-                        && let Some(si_slice) = data.get(si_off..)
-                        && let Ok((si, _)) = StandardInformation::read_from_prefix(si_slice)
-                    {
-                        // Fast path: map raw NTFS flags directly to our
-                        // compact bitmask — skips the intermediate
-                        // ExtendedStandardInfo struct entirely.
-                        let mut info =
-                            crate::index::StandardInfo::from_raw_ntfs_flags(si.file_attributes);
-                        info.created = si.creation_time;
-                        info.modified = si.modification_time;
-                        info.accessed = si.access_time;
-                        info.mft_changed = si.mft_change_time;
-                        if is_directory {
-                            info.set_directory(true);
-                        }
-                        index.records[base_ri].stdinfo = info;
+                    // Shared with the legacy and direct-index pipelines: reads
+                    // the 72-byte NTFS 3.0+ `StandardInformationExtended` form
+                    // (usn/security_id/owner_id) when `value_length` says it's
+                    // present, falling back to the 36-byte NTFS 1.2 form
+                    // otherwise — see `parse::attribute_helpers` for the
+                    // single-source-of-truth rationale.
+                    let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                    crate::parse::parse_standard_info_full(data, offset, &mut ext);
+                    let mut info = crate::index::StandardInfo::from_extended(&ext);
+                    if is_directory {
+                        info.set_directory(true);
                     }
+                    index.records[base_ri].stdinfo = info;
                 }
             }
 

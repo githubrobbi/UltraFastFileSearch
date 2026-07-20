@@ -55,9 +55,12 @@ mod tests;
 mod types;
 mod zero_alloc;
 
-use attribute_helpers::{
-    parse_data_attribute_full, parse_file_name_full, parse_standard_info_full,
-};
+// Re-exported crate-wide: `crate::io::parser::unified` (outside this module
+// tree) calls this directly to share the one extended-aware
+// $STANDARD_INFORMATION parser with the legacy and direct-index pipelines,
+// instead of duplicating it.
+pub(crate) use attribute_helpers::parse_standard_info_full;
+use attribute_helpers::{parse_data_attribute_full, parse_file_name_full};
 pub use columns::ParsedColumns;
 pub use direct_index::parse_record_to_index;
 pub use fixup::apply_fixup;

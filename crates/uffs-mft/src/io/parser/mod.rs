@@ -73,6 +73,128 @@ mod tests {
         );
     }
 
+    /// Regression pin: both production `$STANDARD_INFORMATION` parsers —
+    /// `process_record` (the default bulk-load pipeline) and
+    /// `crate::parse::parse_record_to_index` (the live USN-journal
+    /// incremental-update pipeline, wired from `usn::windows`) — must
+    /// recognize the NTFS 3.0+ 72-byte `StandardInformationExtended` form
+    /// and populate `usn`/`security_id`/`owner_id`, not just the 4
+    /// timestamps. Before this fix both silently treated every record as
+    /// NTFS 1.2 (36 bytes) and left those three fields at zero.
+    #[test]
+    fn standard_information_extended_fields_reach_both_production_parsers() {
+        let creation_time = 1_i64;
+        let modification_time = 2_i64;
+        let mft_change_time = 3_i64;
+        let access_time = 4_i64;
+        let file_attributes = 0x20_u32; // FILE_ATTRIBUTE_ARCHIVE
+        let owner_id = 44_u32;
+        let security_id = 55_u32;
+        let usn = 66_u64;
+
+        // 72-byte StandardInformationExtended payload, field order per
+        // `ntfs::metadata::StandardInformationExtended`.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&creation_time.to_le_bytes());
+        payload.extend_from_slice(&modification_time.to_le_bytes());
+        payload.extend_from_slice(&mft_change_time.to_le_bytes());
+        payload.extend_from_slice(&access_time.to_le_bytes());
+        payload.extend_from_slice(&file_attributes.to_le_bytes());
+        payload.extend_from_slice(&0_u32.to_le_bytes()); // max_versions
+        payload.extend_from_slice(&0_u32.to_le_bytes()); // version_number
+        payload.extend_from_slice(&0_u32.to_le_bytes()); // class_id
+        payload.extend_from_slice(&owner_id.to_le_bytes());
+        payload.extend_from_slice(&security_id.to_le_bytes());
+        payload.extend_from_slice(&0_u64.to_le_bytes()); // quota_charged
+        payload.extend_from_slice(&usn.to_le_bytes());
+        assert_eq!(
+            payload.len(),
+            72,
+            "test fixture must match the real on-disk layout"
+        );
+
+        // Resident attribute: 16-byte AttributeRecordHeader + 4-byte
+        // value_length + 2-byte value_offset + 2-byte resident-flags/padding
+        // = 24-byte prefix, then the 72-byte payload at value_offset = 24.
+        let std_info_total_len = u32::try_from(24 + payload.len()).expect("fits in u32");
+
+        // A minimal $FILE_NAME attribute: `direct_index::parse_record_to_index`
+        // only returns `true` once a record has a name (real MFT records
+        // always do). 66-byte fixed `FileNameAttribute` (per
+        // `ntfs::metadata::FileNameAttribute`'s field order) + a 1-char name.
+        let mut fn_payload = Vec::new();
+        fn_payload.extend_from_slice(&0_u64.to_le_bytes()); // parent_directory
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // creation_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // modification_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // mft_change_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // access_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // allocated_size
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // data_size
+        fn_payload.extend_from_slice(&0_u32.to_le_bytes()); // file_attributes
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // packed_ea_size
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+        fn_payload.push(1); // file_name_length = 1 char
+        fn_payload.push(1); // namespace = Win32 (2 = DOS-only would be skipped)
+        fn_payload.extend_from_slice(&0x0061_u16.to_le_bytes()); // "a"
+        assert_eq!(
+            fn_payload.len(),
+            68,
+            "66-byte FileNameAttribute + 1 UTF-16 char"
+        );
+        let file_name_total_len = u32::try_from(24 + fn_payload.len()).expect("fits in u32");
+
+        let mut record = RecordBuilder::new(56)
+            .attr(0x10, std_info_total_len, 0, 0, 0)
+            .raw(&72_u32.to_le_bytes()) // value_length (signals the extended form)
+            .raw(&24_u16.to_le_bytes()) // value_offset
+            .raw(&[0_u8; 2]) // resident flags + reserved
+            .raw(&payload)
+            .attr(0x30, file_name_total_len, 0, 0, 0)
+            .raw(&u32::try_from(fn_payload.len()).expect("fits in u32").to_le_bytes()) // value_length
+            .raw(&24_u16.to_le_bytes()) // value_offset
+            .raw(&[0_u8; 2]) // resident flags + reserved
+            .raw(&fn_payload)
+            .build();
+
+        // `RecordBuilder` zeroes `bytes_in_use` (header offset 24..28); patch
+        // it to the real length so the attribute loop actually runs.
+        let total_len = u32::try_from(record.len()).expect("fits in u32");
+        record
+            .get_mut(24..28)
+            .expect("record is well over 28 bytes long")
+            .copy_from_slice(&total_len.to_le_bytes());
+
+        // Path 1: process_record — the default bulk-load pipeline.
+        let mut unified_index = MftIndex::new(crate::platform::DriveLetter::C);
+        let mut name_buf = String::new();
+        process_record(&record, 42, &mut unified_index, &mut name_buf);
+        let unified_rec = unified_index
+            .find(crate::frs::Frs::new(42))
+            .expect("process_record must create the base record");
+        assert_eq!(unified_rec.stdinfo.created, creation_time);
+        assert_eq!(unified_rec.stdinfo.usn, usn);
+        assert_eq!(unified_rec.stdinfo.security_id, security_id);
+        assert_eq!(unified_rec.stdinfo.owner_id, owner_id);
+
+        // Path 2: crate::parse::parse_record_to_index — the live
+        // USN-journal incremental-update pipeline (direct_index.rs).
+        // Fully qualified: this module's own `parse_record_to_index` import
+        // (above) is the unrelated, production-dead `io::parser::index` copy.
+        let mut direct_index = MftIndex::new(crate::platform::DriveLetter::C);
+        assert!(crate::parse::parse_record_to_index(
+            &record,
+            42,
+            &mut direct_index
+        ));
+        let direct_rec = direct_index
+            .find(crate::frs::Frs::new(42))
+            .expect("parse_record_to_index must create the base record");
+        assert_eq!(direct_rec.stdinfo.created, creation_time);
+        assert_eq!(direct_rec.stdinfo.usn, usn);
+        assert_eq!(direct_rec.stdinfo.security_id, security_id);
+        assert_eq!(direct_rec.stdinfo.owner_id, owner_id);
+    }
+
     // ── WI-5.2 panic-resistance corpus ──────────────────────────────
     //
     // The daemon builds with `panic = "abort"`: a single parser panic on a

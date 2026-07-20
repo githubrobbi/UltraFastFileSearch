@@ -74,7 +74,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo, len_to_u16};
     use crate::ntfs::{
         AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
-        StandardInformation, file_reference_to_frs,
+        file_reference_to_frs,
     };
 
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -143,29 +143,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         match attr_type {
             Some(AttributeType::StandardInformation) => {
                 if attr_header.is_non_resident == 0 {
-                    // Parse $STANDARD_INFORMATION
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
-                    let si_offset = offset + value_offset;
-                    if si_offset + size_of::<StandardInformation>() <= data.len() {
-                        let si = match StandardInformation::read_from_prefix(&data[si_offset..]) {
-                            Ok((si, _)) => si,
-                            Err(_) => break,
-                        };
-                        // Two-step canonical approach:
-                        // 1. Parse raw attrs to ExtendedStandardInfo (complete parsing)
-                        // 2. Convert to compact StandardInfo (single source of truth)
-                        let ext =
-                            crate::ntfs::ExtendedStandardInfo::from_attributes(si.file_attributes);
-                        let mut info = StandardInfo::from_extended(&ext);
-                        info.created = si.creation_time;
-                        info.modified = si.modification_time;
-                        info.accessed = si.access_time;
-                        info.mft_changed = si.mft_change_time;
-                        std_info = info;
-                    }
+                    // Shared with the legacy and unified pipelines: reads the
+                    // 72-byte NTFS 3.0+ `StandardInformationExtended` form
+                    // (usn/security_id/owner_id) when `value_length` says it's
+                    // present, falling back to the 36-byte NTFS 1.2 form
+                    // otherwise — see `attribute_helpers::parse_standard_info_full`
+                    // for the single-source-of-truth rationale.
+                    let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                    super::parse_standard_info_full(data, offset, &mut ext);
+                    std_info = StandardInfo::from_extended(&ext);
                 }
             }
             Some(AttributeType::FileName) => {

@@ -12,7 +12,11 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 ///
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
 /// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
-pub(super) fn parse_standard_info_full(
+///
+/// `pub(crate)`: this is the single source of truth for `$STANDARD_INFORMATION`
+/// parsing and is also called directly from `crate::io::parser::unified`, which
+/// sits outside the `parse` module tree.
+pub(crate) fn parse_standard_info_full(
     data: &[u8],
     attr_offset: usize,
     result: &mut ExtendedStandardInfo,

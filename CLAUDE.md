@@ -106,8 +106,8 @@ MFT reading supports multiple modes auto-selected by drive type:
 
 Records are parsed with `parse_record_zero_alloc` (thread-local buffers, zero heap allocation per record). Output uses SoA (Struct-of-Arrays) layout — parse directly into column vectors, not `Vec<ParsedRecord>`.
 
-### Fast vs Full Mode
-Default ("fast") skips extension MFT records (~1% of files with many hard links/ADS), giving 15–25% faster reads. `--full` mode merges extension records for complete data.
+### Extension Record Merging
+The default record parsers (`io::parser::unified::process_record`, `parse::direct_index::parse_record_to_index` + `direct_index_extension.rs`) always merge extension MFT records (hard links/ADS beyond what fits in the base record) into their base record in the same pass — there is no fast/full toggle on this path; that split was a pre-unification legacy behavior and no longer exists in the CLI or the live query pipeline.
 
 ### Access Broker (Windows — non-elevated MFT reads)
 Reading the live MFT normally needs Administrator. The **Access Broker** (`uffs-broker`, a `LocalSystem` Windows service) lets the daemon run **non-elevated**: the broker opens the volume, `DuplicateHandle`s an elevated, `FILE_FLAG_OVERLAPPED` handle into the daemon over a named pipe (after verifying the client is `uffsd` + Authenticode via `WinVerifyTrust`), and the daemon adopts a duplicate of it for every MFT/USN/`$MFT`-extent read. The handle registry + `try_adopt_broker_handle` live in `uffs-mft::platform::volume`; the daemon warms up handles in `warm_up_broker_handles` only when **not** already elevated. On the broker handle, use overlapped-offset reads (`read_handle_at`), not `SetFilePointerEx` (which has no synchronous file pointer there). One-time setup: `uffs-broker --install` → no UAC on any later search. Full design + the production follow-ups (all landed) are in `docs/architecture/access-broker-followups.md`.

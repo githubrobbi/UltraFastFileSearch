@@ -37,6 +37,12 @@ criteria = "safe-to-deploy"
 delta = "2.12.1 -> 2.13.0"
 notes = "Delta audit (cargo vet diff 2.12.1 -> 2.13.0). Additive-only change: adds a single new safe method iter_equal_names(&self) -> IterEqualNames<Self> to the Flags trait (src/traits.rs), plus its iterator impl in src/iter.rs and a corresponding test module src/tests/iter_equal_names.rs. CHANGELOG.md and README.md updated for the new version. No unsafe code added, no new dependencies, no changes to any existing method, no semantic changes to flag operations. Publisher KodrAus (Ashley Mannix), long-standing bitflags / Rust project contributor."
 
+[[audits.bitflags]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.13.0 -> 2.13.1"
+notes = "Reviewed diff (6 files, 30/18 lines): pure perf change in the generated all() macro body (computes the ALL flags mask in a const block instead of a runtime loop, per upstream changelog 'Lower the LLVM IR output'). No new unsafe, no capability changes."
+
 [[audits.brotli]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -54,6 +60,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.25.0 -> 1.25.1"
 notes = "Reviewed full 1.25.0->1.25.1 diff. Only substantive changes: (1) add not(target_arch = 'spirv') to the cfg gate on two 'impl core::error::Error' blocks (PodCastError, CheckedCastError) to fix a spirv build error (upstream PR #348); (2) a doc note on try_cast_slice about empty-slice alignment; (3) one new regression test. No new unsafe, no new deps, no fs/net/process/FFI/crypto surface. Cargo.lock churn is bytemuck's own dev lockfile only. Matches changelog. Publisher Lokathor (bytemuck maintainer)."
+
+[[audits.bytemuck]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.25.1 -> 1.25.2"
+notes = "Reviewed diff (5 files, 65/2 lines): test-only additions (NonZero round-trip cast tests). No production code changes."
 
 [[audits.chrono]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -102,6 +114,60 @@ who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "1.15.0 -> 1.16.0"
 notes = "Delta audit (cargo vet diff 1.15.0 -> 1.16.0). Files: Cargo.toml(.orig) version bump, .github/workflows/ci.yml + README.rst (non-shipping), src/lib.rs, src/iterator.rs, src/serde_untagged.rs, src/serde_untagged_optional.rs. The only two 'unsafe' lines changed are NOT new: the existing Pin::new_unchecked projections in as_pin_ref/as_pin_mut, merely renamed from the internal map_either! macro to map_both!; the documented SAFETY invariant and runtime behavior are unchanged. Remainder is added safe iterator/serde trait impls. No new FFI / I/O / process / network / ambient capability. Publisher cuviper (rayon/itertools maintainer)."
+
+[[audits.futures]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-channel]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff (4 files, 11/12 lines): cfg simplification (cfg_attr(target_os=none,...) -> plain cfg, no semantic change on our targets) + a miri test-speed tweak. No capability changes."
+
+[[audits.futures-core]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-executor]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff (5 files, 15/18 lines): doc-link cleanup only (removing redundant explicit link targets now inferred by rustdoc). No logic changes."
+
+[[audits.futures-io]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-macro]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-sink]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-task]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff (4 files, 14/10 lines): cfg simplification (same as futures-channel) + a new re-export (alloc::task::Wake). No new unsafe or capability surface."
+
+[[audits.futures-util]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff (28 files, 266/148 lines) including its unsafe-block changes specifically: (1) NotifyWaker (futures 0.1 compat shim) now wraps its Waker in UnsafeCell and gets a *mut via .get() instead of casting a &self reference to *mut -- fixes real UB flagged by Miri (strict-provenance violation), each call site updated correspondingly with Send/Sync impls added for the new UnsafeCell field; (2) FuturesUnordered: fixed an actual unsound Send impl on IterPinRef (previously bounded on Fut: Send when it must be Fut: Sync, since it yields shared Pin<&Fut> that both sides can read concurrently) plus a related task-release-back-to-pool fix in the iterator's Drop path. Both are genuine upstream soundness fixes, not new risk. No fs/net/process/exec capability anywhere in the diff."
 
 [[audits.hashbrown]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -493,6 +559,12 @@ criteria = "safe-to-deploy"
 delta = "0.6.3 -> 0.6.4"
 notes = """Delta audit (cargo vet diff 0.6.3 -> 0.6.4). The overwhelming majority of changes add target_os="horizon" (Nintendo 3DS) to existing cfg exclusion lists and refine QNX gating to all(target_os="nto", any(target_env="nto70","nto71")). Two genuinely new items: `unsafe impl Send for MsgHdr<'_,'_,'_>` and `unsafe impl Send for MsgHdrMut<'_,'_,'_>` — these wrapper types hold a platform msghdr plus PhantomData lifetime markers over caller-borrowed buffers; Send is sound because the struct is plain data referencing borrow-checked buffers (no interior !Send handles), matching the established pattern for the sibling SockAddr/iovec wrappers. Also type-correctness fixes: getsockopt::<Bool> (was c_int) for IPV6_V6ONLY, and `!= 0` instead of `!= false as Bool`. No new extern symbols, no new process/network capability beyond socket2's existing socket-syscall purpose. Publisher Thomasdezeeuw (socket2/tokio maintainer)."""
 
+[[audits.syn]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.117 -> 3.0.2"
+notes = "Reviewed diff directly (54 files, 4314/2353 lines) despite the major version bump, rather than blanket publisher-trust, given syn's foundational role (transitively used by serde_derive, thiserror-impl, clap_derive). Grepped the full diff for unsafe/transmute/fs/net/process/exec: zero fs/net/process/exec capability anywhere (syn has none, by design -- it's a pure token-stream/AST parser). The overwhelming majority of 'unsafe' hits are syn's own AST types for parsing the 'unsafe' keyword in target source (e.g. Signature::unsafety, ItemForeignMod safety qualifiers for the new unsafe-extern-block support) -- not unsafe code in syn itself. The one genuine new unsafe block (buffer.rs Cursor::peek_punct calling self.bump_ignore_group()) reuses an existing, already-audited internal TokenBuffer-cursor primitive already present in 2.0.117, applied to a new multi-char-punctuation-token peek helper; same established safety invariant, no new risk category. Net: a large but non-security-relevant diff, consistent with syn's frequent major-version cadence for MSRV/edition-support reasons rather than behavior changes to its stable public API."
+
 [[audits.thiserror]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -559,6 +631,12 @@ criteria = "safe-to-deploy"
 delta = "1.23.4 -> 1.23.5"
 notes = "Reviewed full 1.23.4->1.23.5 diff. Hex encode/decode refactored to const-fn helpers (nibble_to_hex arithmetic replacing the UPPER/LOWER LUTs in fmt.rs; decode_hex32 using fixed [u8;32] buffers with preserved bad-nibble rejection in parser.rs) plus one serde doc-link fix. 'unsafe' count unchanged (19 -> 19). No runtime dep or feature changes; the added gungraun dependency is dev-only (benchmarks, non-wasm target). Authored by KodrAus (uuid maintainer)."
 
+[[audits.uuid]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.5 -> 1.24.0"
+notes = "Reviewed diff (5 files, 352/32 lines): internal string-encoding refactor to write into MaybeUninit buffers (perf, avoids pre-zeroing stack buffers) instead of already-initialized &mut [u8]. Every new unsafe block carries a safety comment and is sound: ptr::copy_nonoverlapping with matching src/dst lengths, ASCII-only writes before from_utf8_unchecked, and a layout-compatible MaybeUninit<u8>/u8 reinterpret cast. No capability changes."
+
 [[audits.which]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -570,6 +648,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "8.0.3 -> 8.0.4"
 notes = "Delta audit (cargo vet diff). Source changes: src/error.rs adds a new NonFatalError::PathExtNotPopulated variant (the enum is #[non_exhaustive]) plus its Display arm; src/finder.rs reports it via the non-fatal error handler when, on Windows, PATHEXT is empty AND the queried name has no extension. Reuses already-available inputs (Sys::env_windows_path_ext, PathBuf::extension); purely additive diagnostic. No new unsafe, I/O, process, or ambient-capability surface. Patch release by Xaeroxe (which maintainer)."
+
+[[audits.which]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.4 -> 8.0.5"
+notes = "Reviewed diff (5 files, 49/20 lines): genuine upstream bugfix -- absolute paths now resolve correctly even with no cwd/PATH list (previously silently failed); includes new regression tests. Same capability surface as before (still just fs read_dir + PATH env lookup for binary resolution), no new I/O sources."
 
 [[audits.winapi-util]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -613,6 +697,13 @@ trusted-publisher = "github:RustCrypto/block-ciphers"
 start = "2026-04-10"
 end = "2027-07-02"
 
+[[trusted.anyhow]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-05"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 1.0.103->1.0.104."
+
 [[trusted.cc]]
 criteria = "safe-to-deploy"
 user-id = 55123
@@ -630,6 +721,27 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/traits"
 start = "2026-02-04"
 end = "2027-07-02"
+
+[[trusted.clap]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2027-07-20"
+notes = "epage-published, already-trusted publisher; patch bump 4.6.1->4.6.3."
+
+[[trusted.clap_builder]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-03-28"
+end = "2027-07-20"
+notes = "epage-published, already-trusted publisher; patch bump 4.6.0->4.6.2."
+
+[[trusted.clap_derive]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2027-07-20"
+notes = "epage-published, already-trusted publisher; patch bump 4.6.1->4.6.3."
 
 [[trusted.cmov]]
 criteria = "safe-to-deploy"
@@ -666,6 +778,13 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/universal-hashes"
 start = "2026-02-28"
 end = "2027-07-02"
+
+[[trusted.globset]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-15"
+end = "2027-07-20"
+notes = "BurntSushi-published, already-trusted publisher; patch bump 0.4.18->0.4.19."
 
 [[trusted.h2]]
 criteria = "safe-to-deploy"
@@ -745,17 +864,87 @@ trusted-publisher = "github:RustCrypto/universal-hashes"
 start = "2026-02-10"
 end = "2027-07-02"
 
+[[trusted.regex]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-27"
+end = "2027-07-20"
+notes = "BurntSushi-published, already-trusted publisher; patch bump 1.13.0->1.13.1."
+
+[[trusted.regex-automata]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-25"
+end = "2027-07-20"
+notes = "BurntSushi-published, already-trusted publisher; patch bump 0.4.14->0.4.16."
+
 [[trusted.reqwest]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-04"
 end = "2027-04-23"
 
+[[trusted.serde]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 1.0.228->1.0.229."
+
+[[trusted.serde_core]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2025-09-13"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 1.0.228->1.0.229."
+
+[[trusted.serde_derive]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 1.0.228->1.0.229."
+
 [[trusted.serde_json]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-02-28"
 end = "2027-05-29"
+
+[[trusted.thiserror]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-09"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 2.0.18->2.0.19."
+
+[[trusted.thiserror-impl]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-09"
+end = "2027-07-20"
+notes = "dtolnay-published, already-trusted publisher; patch bump 2.0.18->2.0.19."
+
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2027-07-20"
+notes = "Alice Ryhl (Darksonn) is the tokio maintainer, already trusted by mozilla and bytecode-alliance import sources this project relies on. Minor bump 1.52.3->1.53.1."
+
+[[trusted.toml]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-12-14"
+end = "2027-07-20"
+notes = "epage-published, already-trusted publisher; patch bump 1.1.2->1.1.3."
+
+[[trusted.toml_writer]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2025-07-08"
+end = "2027-07-20"
+notes = "epage-published, already-trusted publisher; patch bump 1.1.1->1.1.2."
 
 [[trusted.tower-http]]
 criteria = "safe-to-deploy"

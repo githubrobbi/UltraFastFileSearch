@@ -162,10 +162,6 @@ criteria = "safe-to-deploy"
 version = "3.0.11"
 criteria = "safe-to-deploy"
 
-[[exemptions.anyhow]]
-version = "1.0.102"
-criteria = "safe-to-deploy"
-
 [[exemptions.ar_archive_writer]]
 version = "0.5.1"
 criteria = "safe-to-deploy"
@@ -268,18 +264,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.chrono-tz]]
 version = "0.10.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.clap]]
-version = "4.6.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.clap_builder]]
-version = "4.6.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.clap_derive]]
-version = "4.6.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_lex]]
@@ -488,10 +472,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
 version = "0.3.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.globset]]
-version = "0.4.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.half]]
@@ -922,14 +902,6 @@ criteria = "safe-to-deploy"
 version = "1.0.25"
 criteria = "safe-to-deploy"
 
-[[exemptions.regex]]
-version = "1.12.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.regex-automata]]
-version = "0.4.14"
-criteria = "safe-to-deploy"
-
 [[exemptions.regex-syntax]]
 version = "0.8.10"
 criteria = "safe-to-deploy"
@@ -1122,10 +1094,6 @@ criteria = "safe-to-deploy"
 version = "1.11.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.tokio]]
-version = "1.52.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.tokio-macros]]
 version = "2.7.0"
 criteria = "safe-to-deploy"
@@ -1142,20 +1110,12 @@ criteria = "safe-to-deploy"
 version = "0.7.18"
 criteria = "safe-to-deploy"
 
-[[exemptions.toml]]
-version = "1.1.2+spec-1.1.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.toml_datetime]]
 version = "1.1.1+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.toml_parser]]
 version = "1.1.2+spec-1.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.toml_writer]]
-version = "1.1.1+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tower]]

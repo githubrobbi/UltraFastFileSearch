@@ -11,6 +11,11 @@ use crate::index::{
     len_to_u16, len_to_u32, u32_as_usize,
 };
 
+/// A pending stream, collected while walking a record's attributes and
+/// applied to the index in one batch via [`add_stream_to_index`]:
+/// `(name, size, allocated, is_sparse, is_resident)`.
+pub(crate) type StreamEntry = (String, u64, u64, bool, bool);
+
 /// Adds a stream to the index and returns its index.
 #[inline]
 pub(crate) fn add_stream_to_index(
@@ -18,6 +23,8 @@ pub(crate) fn add_stream_to_index(
     stream_name: &str,
     stream_size: u64,
     stream_allocated: u64,
+    is_sparse: bool,
+    is_resident: bool,
 ) -> u32 {
     let stream_name_offset = index.add_name(stream_name);
     let stream_name_len = stream_name.len();
@@ -38,8 +45,9 @@ pub(crate) fn add_stream_to_index(
         },
         next_entry: NO_ENTRY,
         name: stream_name_ref,
-        // type_name_id=8 for $DATA (0x80 >> 4), stored in bits 2-7
-        flags: 8 << 2,
+        // bit0=is_sparse, bit1=is_resident, type_name_id=8 for $DATA
+        // (0x80 >> 4) in bits 2-7.
+        flags: u8::from(is_sparse) | (u8::from(is_resident) << 1) | (8 << 2),
         _pad0: [0; 3],
     });
     stream_idx

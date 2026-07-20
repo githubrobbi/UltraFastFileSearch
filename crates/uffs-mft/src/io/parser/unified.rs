@@ -590,12 +590,22 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                         (u64::from(rd_u32(data, offset.saturating_add(16))), 0)
                     };
 
+                    // Already-parsed attribute-header data, free to read —
+                    // `IndexStreamInfo`/`InternalStreamInfo` both reserve
+                    // bit0=is_sparse, bit1=is_resident, but every write site
+                    // below used to hardcode them to 0/false regardless of
+                    // the real attribute.
+                    let is_resident = attr_header.is_non_resident == 0;
+                    let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+
                     // ── Classify and store ───────────────────────────
                     if is_i30 {
                         // $I30: accumulate into first_stream (directory index)
                         let rec = &mut index.records[base_ri];
                         rec.stdinfo.set_directory(true);
-                        rec.first_stream.flags = 0; // type_name_id=0 for $I30
+                        // type_name_id=0 for $I30
+                        rec.first_stream.flags =
+                            u8::from(is_sparse) | (u8::from(is_resident) << 1_u8);
 
                         rec.first_stream.size.length =
                             rec.first_stream.size.length.saturating_add(size);
@@ -624,7 +634,9 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                             rec.first_stream.size.length.saturating_add(size);
                         rec.first_stream.size.allocated =
                             rec.first_stream.size.allocated.saturating_add(alloc);
-                        rec.first_stream.flags = 8_u8 << 2_u8; // type_name_id=8 for $DATA
+                        // type_name_id=8 for $DATA
+                        rec.first_stream.flags =
+                            u8::from(is_sparse) | (u8::from(is_resident) << 1_u8) | (8_u8 << 2_u8);
                     } else if attr_type == AttributeType::DATA_TYPE && aname_len > 0 {
                         // Named $DATA: ADS (user-visible stream).
                         // Output layer filters internal streams.
@@ -651,7 +663,9 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                                 },
                                 next_entry: NO_ENTRY,
                                 name: nr,
-                                flags: 8_u8 << 2_u8,
+                                flags: u8::from(is_sparse)
+                                    | (u8::from(is_resident) << 1_u8)
+                                    | (8_u8 << 2_u8),
                                 _pad0: [0; 3],
                             });
 
@@ -681,7 +695,7 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                                 allocated: alloc,
                             },
                             next_entry: NO_ENTRY,
-                            flags: 0,
+                            flags: u8::from(is_sparse) | (u8::from(is_resident) << 1_u8),
                         });
 
                         // Chain to record's internal stream list

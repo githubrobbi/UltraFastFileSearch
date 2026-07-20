@@ -41,8 +41,30 @@ use core::mem::size_of;
 use smallvec::SmallVec;
 use zerocopy::FromBytes as _;
 
-use super::index_helpers::{add_link_to_index, add_stream_to_index};
+use super::index_helpers::{StreamEntry, add_link_to_index, add_stream_to_index};
 use crate::index::{frs_to_usize, len_to_u16, len_to_u32, nonneg_to_u64, u32_as_usize};
+
+/// Read a little-endian u16 from the given offset, returning 0 if out of
+/// bounds. WI-5.2: mirrors `direct_index.rs`'s helper of the same name — see
+/// its doc comment for why the outer attribute-length gate alone doesn't
+/// guarantee these fixed fields are in bounds.
+#[inline]
+fn rd_u16(buf: &[u8], off: usize) -> u16 {
+    off.checked_add(2)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
+        .map_or(0, u16::from_le_bytes)
+}
+
+/// Read a little-endian u32 from the given offset, returning 0 if out of
+/// bounds. See [`rd_u16`] for the rationale.
+#[inline]
+fn rd_u32(buf: &[u8], off: usize) -> u32 {
+    off.checked_add(4)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 4]>::try_from(sl).ok())
+        .map_or(0, u32::from_le_bytes)
+}
 
 /// Parses an extension record and adds its names/streams to the base record.
 ///
@@ -100,13 +122,15 @@ pub(super) fn parse_extension_to_index(
 
     // Collect names and streams from extension record
     let mut names: SmallVec<[(String, u64); 4]> = SmallVec::new();
-    let mut streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    let mut streams: SmallVec<[StreamEntry; 4]> = SmallVec::new();
     let ext_internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
     // Default $DATA stream (unnamed, name_len == 0) found in extension record
     let mut default_data_size: u64 = 0;
     let mut default_data_allocated: u64 = 0;
+    let mut default_data_is_sparse = false;
+    let mut default_data_is_resident = false;
     let mut found_default_data = false;
 
     while offset + size_of::<AttributeRecordHeader>() <= max_offset {
@@ -128,10 +152,7 @@ pub(super) fn parse_extension_to_index(
             Some(AttributeType::FileName) => {
                 // Parse $FILE_NAME attribute
                 if attr_header.is_non_resident == 0 {
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
+                    let value_offset = usize::from(rd_u16(data, offset + 20));
                     let fn_offset = offset + value_offset;
                     if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
                         let fn_attr = match FileNameAttribute::read_from_prefix(&data[fn_offset..])
@@ -217,10 +238,17 @@ pub(super) fn parse_extension_to_index(
                     }
                 };
 
+                // Already-parsed attribute-header data, free to read: see
+                // `direct_index.rs`'s identical fix for is_sparse/is_resident.
+                let is_resident = attr_header.is_non_resident == 0;
+                let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+
                 if name_len == 0 {
                     // Default $DATA stream — update base record size
                     default_data_size = size;
                     default_data_allocated = allocated;
+                    default_data_is_sparse = is_sparse;
+                    default_data_is_resident = is_resident;
                     found_default_data = true;
                 } else {
                     // ADS (named stream)
@@ -237,18 +265,14 @@ pub(super) fn parse_extension_to_index(
                         // ALL named $DATA streams create regular
                         // stream entries.  Internal ones are filtered from
                         // output by is_internal_windows_stream in the output layer.
-                        streams.push((stream_name, size, allocated));
+                        streams.push((stream_name, size, allocated, is_sparse, is_resident));
                     }
                 }
             }
             Some(AttributeType::ReparsePoint) => {
                 // Parse $REPARSE_POINT - add as stream
                 let (rp_size, rp_allocated) = if attr_header.is_non_resident == 0 {
-                    let value_length_bytes = &data[offset + 16..offset + 20];
-                    let value_length = u64::from(u32::from_le_bytes(
-                        value_length_bytes.try_into().unwrap_or([0; 4]),
-                    ));
-                    (value_length, 0_u64)
+                    (u64::from(rd_u32(data, offset + 16)), 0_u64)
                 } else {
                     let nr_offset = offset + 16;
                     if nr_offset + 48 <= data.len() {
@@ -262,7 +286,15 @@ pub(super) fn parse_extension_to_index(
                         (0_u64, 0_u64)
                     }
                 };
-                streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+                let is_resident = attr_header.is_non_resident == 0;
+                let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                streams.push((
+                    String::from("$REPARSE"),
+                    rp_size,
+                    rp_allocated,
+                    is_sparse,
+                    is_resident,
+                ));
             }
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
@@ -297,11 +329,7 @@ pub(super) fn parse_extension_to_index(
                 if is_i30 {
                     // Accumulate $I30 sizes
                     if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        dir_index_size += value_length;
+                        dir_index_size += u64::from(rd_u32(data, offset + 16));
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {
@@ -333,11 +361,7 @@ pub(super) fn parse_extension_to_index(
 
                     if is_primary {
                         let (size, allocated) = if attr_header.is_non_resident == 0 {
-                            let value_length_bytes = &data[offset + 16..offset + 20];
-                            let value_length = u64::from(u32::from_le_bytes(
-                                value_length_bytes.try_into().unwrap_or([0; 4]),
-                            ));
-                            (value_length, 0_u64)
+                            (u64::from(rd_u32(data, offset + 16)), 0_u64)
                         } else {
                             let nr_offset = offset + 16;
                             if nr_offset + 48 <= data.len() {
@@ -365,7 +389,9 @@ pub(super) fn parse_extension_to_index(
                         } else {
                             attr_name
                         };
-                        streams.push((stream_name, size, allocated));
+                        let is_resident = attr_header.is_non_resident == 0;
+                        let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                        streams.push((stream_name, size, allocated, is_sparse, is_resident));
                     }
                 }
             }
@@ -416,11 +442,7 @@ pub(super) fn parse_extension_to_index(
                     };
 
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
+                        (u64::from(rd_u32(data, offset + 16)), 0_u64)
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {
@@ -458,7 +480,9 @@ pub(super) fn parse_extension_to_index(
                     } else {
                         attr_name
                     };
-                    streams.push((stream_name, size, allocated));
+                    let is_resident = attr_header.is_non_resident == 0;
+                    let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                    streams.push((stream_name, size, allocated, is_sparse, is_resident));
                 }
             }
             Some(AttributeType::StandardInformation) => {
@@ -503,11 +527,7 @@ pub(super) fn parse_extension_to_index(
                     };
 
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
+                        (u64::from(rd_u32(data, offset + 16)), 0_u64)
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {
@@ -528,7 +548,9 @@ pub(super) fn parse_extension_to_index(
                     } else {
                         attr_name
                     };
-                    streams.push((stream_name, size, allocated));
+                    let is_resident = attr_header.is_non_resident == 0;
+                    let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                    streams.push((stream_name, size, allocated, is_sparse, is_resident));
                 }
             }
         }
@@ -557,7 +579,9 @@ pub(super) fn parse_extension_to_index(
         .collect();
     let stream_indices: Vec<u32> = streams
         .iter()
-        .map(|(name, size, alloc)| add_stream_to_index(index, name, *size, *alloc))
+        .map(|(name, size, alloc, is_sparse, is_resident)| {
+            add_stream_to_index(index, name, *size, *alloc, *is_sparse, *is_resident)
+        })
         .collect();
 
     // Ensure parent directories exist for the new names.  Parser-local
@@ -698,6 +722,9 @@ pub(super) fn parse_extension_to_index(
                 // Base has no $DATA — use extension's values
                 record.first_stream.size.length = default_data_size;
                 record.first_stream.size.allocated = default_data_allocated;
+                record.first_stream.flags = u8::from(default_data_is_sparse)
+                    | (u8::from(default_data_is_resident) << 1_u8)
+                    | (8_u8 << 2_u8);
             } else {
                 // Base has partial $DATA — accumulate extension values
                 record.first_stream.size.length = record

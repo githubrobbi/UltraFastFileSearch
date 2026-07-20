@@ -194,6 +194,128 @@ mod tests {
         assert_eq!(direct_rec.stdinfo.owner_id, owner_id);
     }
 
+    /// Regression pin: a named `$DATA` (ADS) attribute's real `is_sparse`/
+    /// `is_resident` status must reach the index's `IndexStreamInfo`, on
+    /// both production parsers. Both fields already existed in the struct
+    /// (`bit0`/`bit1` of `flags`) but every write site hardcoded them to
+    /// `false` regardless of the real attribute — every ADS reported as
+    /// non-sparse/non-resident no matter what it actually was.
+    #[test]
+    fn ads_sparse_and_resident_bits_reach_both_production_parsers() {
+        // Minimal $FILE_NAME so both parsers accept the record and give it a
+        // name (see the extended-standard-info test above for field order).
+        let mut fn_payload = Vec::new();
+        fn_payload.extend_from_slice(&0_u64.to_le_bytes()); // parent_directory
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // creation_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // modification_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // mft_change_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // access_time
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // allocated_size
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // data_size
+        fn_payload.extend_from_slice(&0_u32.to_le_bytes()); // file_attributes
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // packed_ea_size
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+        fn_payload.push(1); // file_name_length = 1 char
+        fn_payload.push(1); // namespace = Win32
+        fn_payload.extend_from_slice(&0x0061_u16.to_le_bytes()); // "a"
+        let file_name_total_len = u32::try_from(24 + fn_payload.len()).expect("fits in u32");
+
+        // Named, non-resident $DATA (an ADS) flagged ATTRIBUTE_FLAG_SPARSE
+        // (0x8000) in the attribute-record header. Layout after the 16-byte
+        // common header: LowestVCN(8)=0, HighestVCN(8), MappingPairsOffset(2)
+        // + CompressionUnit(1) + Reserved(5), AllocatedSize(8), DataSize(8),
+        // InitializedSize(8) — 48 bytes total — then the 6-byte UTF-16LE
+        // name "ads" at name_offset=48+16=64.
+        let allocated_size = 8192_i64;
+        let data_size = 4096_i64;
+        let mut ads_nr = Vec::new();
+        ads_nr.extend_from_slice(&0_i64.to_le_bytes()); // LowestVCN = 0 (primary)
+        ads_nr.extend_from_slice(&0_i64.to_le_bytes()); // HighestVCN
+        ads_nr.extend_from_slice(&[0_u8; 8]); // MappingPairsOffset+CompressionUnit+Reserved
+        ads_nr.extend_from_slice(&allocated_size.to_le_bytes());
+        ads_nr.extend_from_slice(&data_size.to_le_bytes());
+        ads_nr.extend_from_slice(&0_i64.to_le_bytes()); // InitializedSize
+        assert_eq!(ads_nr.len(), 48, "NonResidentAttributeData is 48 bytes");
+        let ads_name: Vec<u8> = "ads".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let ads_total_len = u32::try_from(16 + ads_nr.len() + ads_name.len()).expect("fits in u32");
+
+        let mut record = RecordBuilder::new(56)
+            .attr(0x30, file_name_total_len, 0, 0, 0)
+            .raw(&u32::try_from(fn_payload.len()).expect("fits in u32").to_le_bytes())
+            .raw(&24_u16.to_le_bytes()) // value_offset
+            .raw(&[0_u8; 2])
+            .raw(&fn_payload)
+            .attr_flags(0x80, ads_total_len, 1, 3, 64, 0x8000)
+            .raw(&ads_nr)
+            .raw(&ads_name)
+            .build();
+
+        let total_len = u32::try_from(record.len()).expect("fits in u32");
+        record
+            .get_mut(24..28)
+            .expect("record is well over 28 bytes long")
+            .copy_from_slice(&total_len.to_le_bytes());
+
+        // Path 1: process_record — the default bulk-load pipeline.
+        let mut unified_index = MftIndex::new(crate::platform::DriveLetter::C);
+        let mut name_buf = String::new();
+        process_record(&record, 42, &mut unified_index, &mut name_buf);
+        let unified_rec = unified_index
+            .find(crate::frs::Frs::new(42))
+            .expect("process_record must create the base record");
+        assert_ne!(
+            unified_rec.first_stream.next_entry,
+            crate::index::NO_ENTRY,
+            "the ADS must be chained onto the record"
+        );
+        let unified_stream = unified_index
+            .streams
+            .get(crate::index::u32_as_usize(
+                unified_rec.first_stream.next_entry,
+            ))
+            .expect("chained stream index must be valid");
+        assert!(
+            unified_stream.is_sparse(),
+            "process_record dropped is_sparse"
+        );
+        assert!(
+            !unified_stream.is_resident(),
+            "a non-resident ADS must not report is_resident"
+        );
+        assert_eq!(
+            unified_stream.size.length,
+            u64::try_from(data_size).unwrap()
+        );
+        assert_eq!(
+            unified_stream.size.allocated,
+            u64::try_from(allocated_size).unwrap()
+        );
+
+        // Path 2: crate::parse::parse_record_to_index — the live
+        // USN-journal incremental-update pipeline (direct_index.rs).
+        let mut direct_index = MftIndex::new(crate::platform::DriveLetter::C);
+        assert!(crate::parse::parse_record_to_index(
+            &record,
+            42,
+            &mut direct_index
+        ));
+        let direct_rec = direct_index
+            .find(crate::frs::Frs::new(42))
+            .expect("parse_record_to_index must create the base record");
+        assert_ne!(direct_rec.first_stream.next_entry, crate::index::NO_ENTRY);
+        let direct_stream = direct_index
+            .streams
+            .get(crate::index::u32_as_usize(
+                direct_rec.first_stream.next_entry,
+            ))
+            .expect("chained stream index must be valid");
+        assert!(
+            direct_stream.is_sparse(),
+            "parse_record_to_index dropped is_sparse"
+        );
+        assert!(!direct_stream.is_resident());
+    }
+
     // ── WI-5.2 panic-resistance corpus ──────────────────────────────
     //
     // The daemon builds with `panic = "abort"`: a single parser panic on a
@@ -244,6 +366,28 @@ mod tests {
             self.bytes.push(name_length);
             self.bytes.extend_from_slice(&name_offset.to_le_bytes());
             self.bytes.extend_from_slice(&[0_u8; 4]); // flags + instance
+            self
+        }
+
+        /// Same as [`Self::attr`], but with an explicit NTFS attribute-flags
+        /// value (e.g. `0x8000` = `ATTRIBUTE_FLAG_SPARSE`) instead of always
+        /// zeroing that field.
+        fn attr_flags(
+            mut self,
+            type_code: u32,
+            length: u32,
+            non_resident: u8,
+            name_length: u8,
+            name_offset: u16,
+            attr_flags: u16,
+        ) -> Self {
+            self.bytes.extend_from_slice(&type_code.to_le_bytes());
+            self.bytes.extend_from_slice(&length.to_le_bytes());
+            self.bytes.push(non_resident);
+            self.bytes.push(name_length);
+            self.bytes.extend_from_slice(&name_offset.to_le_bytes());
+            self.bytes.extend_from_slice(&attr_flags.to_le_bytes());
+            self.bytes.extend_from_slice(&[0_u8; 2]); // instance
             self
         }
 

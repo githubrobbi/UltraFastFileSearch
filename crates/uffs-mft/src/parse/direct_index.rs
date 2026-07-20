@@ -3,6 +3,10 @@
 
 //! Single-pass direct-to-index parser.
 //!
+//! Exception: Performance-critical single-pass MFT record parser; monolithic
+//! attribute-dispatch loop kept together for cache locality and to mirror the
+//! NTFS on-disk attribute layout one arm at a time.
+//!
 //! This module implements the high-performance single-pass parser that builds
 //! an `MftIndex` directly from raw MFT records without creating intermediate
 //! `ParsedRecord` allocations.
@@ -40,7 +44,8 @@ use zerocopy::FromBytes as _;
 
 use super::direct_index_extension::parse_extension_to_index;
 use super::index_helpers::{
-    add_child_entry, add_link_to_index, add_stream_to_index, chain_links, chain_streams,
+    StreamEntry, add_child_entry, add_link_to_index, add_stream_to_index, chain_links,
+    chain_streams,
 };
 use crate::index::{nonneg_to_u64, u32_as_usize};
 
@@ -143,8 +148,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut name_parse_counter: u16 = 0;
     let mut default_size = 0_u64;
     let mut default_allocated = 0_u64;
-    // ADS: (stream_name, size, allocated)
-    let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
+    let mut default_is_sparse = false;
+    let mut default_is_resident = false;
+    let mut additional_streams: SmallVec<[StreamEntry; 4]> = SmallVec::new();
     // Internal streams for tree-metrics (size, allocated)
     let internal_streams: SmallVec<[(u64, u64); 4]> = SmallVec::new();
     let mut reparse_tag: u32 = 0;
@@ -298,10 +304,20 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     }
                 };
 
+                // WI-5.2-adjacent correctness fix: `is_resident` was already
+                // computed above (`attr_header.is_non_resident == 0`) but
+                // never carried into the index; `is_sparse` lives in the
+                // attribute header's own `flags` (ATTR_IS_SPARSE = 0x8000),
+                // already-parsed data — both are free to read, no new I/O.
+                let is_resident = attr_header.is_non_resident == 0;
+                let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+
                 if name_len == 0 {
                     // Default stream
                     default_size = size;
                     default_allocated = allocated;
+                    default_is_sparse = is_sparse;
+                    default_is_resident = is_resident;
                 } else {
                     // Alternate Data Stream (ADS)
                     let name_offset = offset + usize::from(attr_header.name_offset);
@@ -317,7 +333,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         // ALL named $DATA streams create regular stream entries.
                         // Internal ones are filtered from
                         // output by is_internal_windows_stream in the output layer.
-                        additional_streams.push((stream_name, size, allocated));
+                        additional_streams.push((
+                            stream_name,
+                            size,
+                            allocated,
+                            is_sparse,
+                            is_resident,
+                        ));
                     }
                 }
             }
@@ -353,7 +375,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 };
 
                 // Add $REPARSE_POINT as a stream (contributes to stream counting)
-                additional_streams.push((String::from("$REPARSE"), rp_size, rp_allocated));
+                let is_resident = attr_header.is_non_resident == 0;
+                let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                additional_streams.push((
+                    String::from("$REPARSE"),
+                    rp_size,
+                    rp_allocated,
+                    is_sparse,
+                    is_resident,
+                ));
             }
             Some(
                 AttributeType::IndexRoot | AttributeType::IndexAllocation | AttributeType::Bitmap,
@@ -454,7 +484,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                         } else {
                             attr_name
                         };
-                        additional_streams.push((stream_name, size, allocated));
+                        let is_resident = attr_header.is_non_resident == 0;
+                        let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                        additional_streams.push((
+                            stream_name,
+                            size,
+                            allocated,
+                            is_sparse,
+                            is_resident,
+                        ));
                     }
                 }
             }
@@ -545,7 +583,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     } else {
                         attr_name
                     };
-                    additional_streams.push((stream_name, size, allocated));
+                    let is_resident = attr_header.is_non_resident == 0;
+                    let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                    additional_streams.push((stream_name, size, allocated, is_sparse, is_resident));
                 }
             }
             _ => {
@@ -611,7 +651,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     } else {
                         attr_name
                     };
-                    additional_streams.push((stream_name, size, allocated));
+                    let is_resident = attr_header.is_non_resident == 0;
+                    let is_sparse = !is_resident && (attr_header.flags & 0x8000) != 0;
+                    additional_streams.push((stream_name, size, allocated, is_sparse, is_resident));
                 }
             }
         }
@@ -646,7 +688,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             let additional_stream_count = additional_streams.len();
             let stream_indices: Vec<u32> = additional_streams
                 .into_iter()
-                .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+                .map(|(name, size, alloc, is_sparse, is_resident)| {
+                    add_stream_to_index(index, &name, size, alloc, is_sparse, is_resident)
+                })
                 .collect();
 
             // Setup record and chain streams.
@@ -658,6 +702,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 length: default_size,
                 allocated: default_allocated,
             };
+            record.first_stream.flags = u8::from(default_is_sparse)
+                | (u8::from(default_is_resident) << 1_u8)
+                | (8_u8 << 2_u8);
 
             if !stream_indices.is_empty() {
                 chain_streams(index, &stream_indices);
@@ -693,7 +740,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let additional_stream_count = additional_streams.len();
     let stream_indices: Vec<u32> = additional_streams
         .into_iter()
-        .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
+        .map(|(name, size, alloc, is_sparse, is_resident)| {
+            add_stream_to_index(index, &name, size, alloc, is_sparse, is_resident)
+        })
         .collect();
 
     // Ensure parent exists (create placeholder if needed) - do this before
@@ -716,6 +765,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         length: default_size,
         allocated: default_allocated,
     };
+    record.first_stream.flags =
+        u8::from(default_is_sparse) | (u8::from(default_is_resident) << 1_u8) | (8_u8 << 2_u8);
     record.first_name = LinkInfo {
         next_entry: NO_ENTRY,
         name: name_ref,

@@ -7,6 +7,7 @@ crates/uffs-core/src/search/field/field_metadata.rs|PERMANENT: Single const fn m
 crates/uffs-core/src/search/filters/tests.rs|PERMANENT: Integration test suite for filter pipeline; splitting further would scatter related test fixtures
 crates/uffs-core/src/search/filters/mod.rs|PERMANENT: Cohesive SearchFilters/SearchFilterParams definitions + from_params construction; kept together so the full per-field filter contract is auditable in one place
 crates/uffs-client/src/schema/field_metadata.rs|PERMANENT: Single const fn match table — one FieldMeta per FieldId variant; mirrors uffs-core version
+crates/uffs-mft/src/parse/direct_index.rs|PERMANENT: Performance-critical single-pass MFT record parser; monolithic loop for cache locality
 crates/uffs-mft/src/parse/direct_index_extension.rs|PERMANENT: Extension record parser for the direct-to-index pipeline; same structural reasoning as its base-record counterpart
 crates/uffs-mft/src/reader/index_read.rs|PERMANENT: Single impl MftReader block with tightly coupled cfg-gated pipeline stages
 crates/uffs-diag/src/bin/compare_scan_parity.rs|PERMANENT: Standalone diagnostic binary; single-file readability outweighs LOC policy for tooling

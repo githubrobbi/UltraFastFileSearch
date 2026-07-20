@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.28] - 2026-07-19
+
+### Added
+
+- content: VSS-snapshot content-ingest pipeline for Docenta (UFI.0-UFI.6) (#563)
+
+### Fixed
+
+- test: deflake ensure_warm parallel-promote assertion (#562)
+
 ## [0.6.27] - 2026-07-14
 
 ### Added
@@ -2697,7 +2707,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.27...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.28...HEAD
+[0.6.28]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.25...v0.6.26
 [0.6.25]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.24...v0.6.25

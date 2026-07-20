@@ -392,23 +392,31 @@ fn lease_error_response(err: &LeaseError) -> SnapshotManagerResponse {
 }
 
 /// Whether `exe_path`'s file name matches the Content Coordinator binary.
+///
+/// Exact-name match only — no `starts_with` fallback. `uffs-content` is
+/// itself a prefix of `uffs-content-reader`, whose own identity is
+/// verified separately by [`is_uffs_content_reader_image`]; a prefix
+/// match here would let the Reader binary also pass as the Coordinator.
 fn is_uffs_content_image(exe_path: &std::ffi::OsStr) -> bool {
     let name = std::path::Path::new(exe_path)
         .file_name()
         .and_then(|file_name| file_name.to_str())
         .unwrap_or("");
-    name == "uffs-content" || name == "uffs-content.exe" || name.starts_with("uffs-content")
+    name == "uffs-content" || name == "uffs-content.exe"
 }
 
 /// Whether `exe_path`'s file name matches the Snapshot Reader binary.
+///
+/// Exact-name match only, for the same reason as
+/// [`is_uffs_content_image`]: a `starts_with` fallback on an identity
+/// check is a standing invitation for a future binary sharing this
+/// prefix to pass unintentionally.
 fn is_uffs_content_reader_image(exe_path: &std::ffi::OsStr) -> bool {
     let name = std::path::Path::new(exe_path)
         .file_name()
         .and_then(|file_name| file_name.to_str())
         .unwrap_or("");
-    name == "uffs-content-reader"
-        || name == "uffs-content-reader.exe"
-        || name.starts_with("uffs-content-reader")
+    name == "uffs-content-reader" || name == "uffs-content-reader.exe"
 }
 
 /// Verify the connected pipe client is a legitimate `uffs-content`

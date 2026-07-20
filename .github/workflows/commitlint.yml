@@ -196,11 +196,24 @@ jobs:
           # comments endpoint (PR comments live there) and jq-filter
           # by marker presence.  `head -1` defends against the
           # (impossible-but-cheap-to-guard) double-managed-comment case.
+          #
+          # A transient GitHub API error (e.g. a 503) makes `gh api`
+          # print its JSON error body to stdout while still exiting
+          # non-zero; the `|| true` swallows the exit code but not
+          # that body, so EXISTING_ID could otherwise become garbage
+          # text instead of a real comment id — which then crashes the
+          # DELETE/PATCH call below and fails this *required* gate for
+          # a reason unrelated to title conformance. Validate the
+          # result is purely numeric (a real id always is) and treat
+          # anything else as "no existing comment found".
           EXISTING_ID=$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" \
               | head -1 || true
           )
+          if ! [[ "${EXISTING_ID}" =~ ^[0-9]+$ ]]; then
+            EXISTING_ID=""
+          fi
 
           if echo "$TITLE" | grep -qE "$PATTERN"; then
             # ── Conforming title ───────────────────────────────────

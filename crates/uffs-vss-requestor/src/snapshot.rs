@@ -151,8 +151,14 @@ fn free_error(error: &mut ffi::VssError) {
 }
 
 /// Read a NUL-terminated UTF-16 string the shim allocated, or `None` if
-/// `ptr` is null. Does not free `ptr` — the caller is responsible for
-/// that via the matching `*_free` function.
+/// `ptr` is null or the bytes aren't valid UTF-16. Does not free `ptr` —
+/// the caller is responsible for that via the matching `*_free` function.
+///
+/// Decodes strictly rather than lossily: `snapshot_device_object` (one of
+/// this function's callers) ends up passed to `CreateFileW` in the
+/// Broker to open the actual snapshot volume — a lossy substitution on
+/// malformed input would silently turn it into a different-but-plausible
+/// path instead of surfacing the problem.
 #[expect(
     unsafe_code,
     reason = "reads a shim-allocated string; see the inline SAFETY comments"
@@ -180,5 +186,5 @@ fn read_optional_wide(ptr: *mut u16) -> Option<String> {
     // SAFETY: `ptr` is non-null and valid for `length` `u16` elements —
     // established by the loop above stopping at the first NUL unit.
     let slice = unsafe { core::slice::from_raw_parts(ptr, length) };
-    Some(String::from_utf16_lossy(slice))
+    String::from_utf16(slice).ok()
 }

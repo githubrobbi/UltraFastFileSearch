@@ -409,6 +409,9 @@ impl VssProvider for WindowsVssProvider {
 
     fn delete_snapshot(&self, snapshot_id: &[u8]) -> Result<(), VssError> {
         tracing::info!(
+            // AUDIT-OK(bytes): display-only log field; the actual lookup
+            // just below keys off the raw `snapshot_id` bytes, not this
+            // lossy string.
             snapshot_id = %String::from_utf8_lossy(snapshot_id),
             "vss: requesting snapshot deletion"
         );

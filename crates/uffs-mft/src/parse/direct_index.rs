@@ -44,6 +44,32 @@ use super::index_helpers::{
 };
 use crate::index::{nonneg_to_u64, u32_as_usize};
 
+/// Read a little-endian u16 from the given offset, returning 0 if out of
+/// bounds. WI-5.2: this file's attribute-length gate (`offset + attr_header.
+/// length <= max_offset`) does not by itself guarantee any *specific* fixed
+/// field inside the attribute is in bounds — a short declared `length` can
+/// pass that gate while still being too small to cover `value_length`/
+/// `value_offset`. Reads of those fields go through this helper instead of
+/// raw slicing so a malformed/truncated record degrades gracefully instead
+/// of panicking (the daemon builds with `panic = "abort"`).
+#[inline]
+fn rd_u16(buf: &[u8], off: usize) -> u16 {
+    off.checked_add(2)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
+        .map_or(0, u16::from_le_bytes)
+}
+
+/// Read a little-endian u32 from the given offset, returning 0 if out of
+/// bounds. See [`rd_u16`] for the rationale.
+#[inline]
+fn rd_u32(buf: &[u8], off: usize) -> u32 {
+    off.checked_add(4)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 4]>::try_from(sl).ok())
+        .map_or(0, u32::from_le_bytes)
+}
+
 /// Parses a record directly into `MftIndex` (single-pass inline parsing).
 ///
 /// This function parses the record and adds it directly to the index,
@@ -157,10 +183,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             Some(AttributeType::FileName) => {
                 if attr_header.is_non_resident == 0 {
                     // Parse $FILE_NAME
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
+                    let value_offset = usize::from(rd_u16(data, offset + 20));
                     let fn_offset = offset + value_offset;
                     if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
                         let fn_attr = match FileNameAttribute::read_from_prefix(&data[fn_offset..])
@@ -304,15 +327,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 // $REPARSE_POINT is counted as a stream (affects descendants).
                 let (rp_size, rp_allocated) = if attr_header.is_non_resident == 0 {
                     // Resident reparse point (common case)
-                    let value_length_bytes = &data[offset + 16..offset + 20];
-                    let value_length = u64::from(u32::from_le_bytes(
-                        value_length_bytes.try_into().unwrap_or([0, 0, 0, 0]),
-                    ));
-
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
+                    let value_length = u64::from(rd_u32(data, offset + 16));
+                    let value_offset = usize::from(rd_u16(data, offset + 20));
                     let rp_offset = offset + value_offset;
                     if rp_offset + 4 <= data.len() {
                         // Read reparse tag (first 4 bytes of reparse point data)
@@ -377,11 +393,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 if is_i30 {
                     // Accumulate $I30 sizes for directories
                     if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        dir_index_size += value_length;
+                        dir_index_size += u64::from(rd_u32(data, offset + 16));
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {
@@ -414,11 +426,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
                     if is_primary {
                         let (size, allocated) = if attr_header.is_non_resident == 0 {
-                            let value_length_bytes = &data[offset + 16..offset + 20];
-                            let value_length = u64::from(u32::from_le_bytes(
-                                value_length_bytes.try_into().unwrap_or([0; 4]),
-                            ));
-                            (value_length, 0_u64)
+                            (u64::from(rd_u32(data, offset + 16)), 0_u64)
                         } else {
                             let nr_offset = offset + 16;
                             if nr_offset + 48 <= data.len() {
@@ -499,11 +507,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     };
 
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
+                        (u64::from(rd_u32(data, offset + 16)), 0_u64)
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {
@@ -586,11 +590,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     };
 
                     let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
+                        (u64::from(rd_u32(data, offset + 16)), 0_u64)
                     } else {
                         let nr_offset = offset + 16;
                         if nr_offset + 48 <= data.len() {

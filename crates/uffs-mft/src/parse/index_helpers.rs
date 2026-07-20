@@ -6,14 +6,9 @@
 //! These helpers reduce code duplication in the main parser while maintaining
 //! performance through inlining.
 
-#![expect(
-    clippy::if_not_else,
-    reason = "!= NO_ENTRY is clearer for sentinel value checks"
-)]
-
 use crate::index::{
-    ChildInfo, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY,
-    SizeInfo, frs_to_usize, len_to_u16, len_to_u32, u32_as_usize,
+    ChildInfo, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, SizeInfo, frs_to_usize,
+    len_to_u16, len_to_u32, u32_as_usize,
 };
 
 /// Adds a stream to the index and returns its index.
@@ -48,57 +43,6 @@ pub(crate) fn add_stream_to_index(
         _pad0: [0; 3],
     });
     stream_idx
-}
-
-/// Result of building an internal stream chain.
-pub(crate) struct InternalStreamChain {
-    /// First index in the chain, or `NO_ENTRY` if empty.
-    pub first: u32,
-    /// Total size of all internal streams.
-    pub size_total: u64,
-    /// Total allocated size of all internal streams.
-    pub alloc_total: u64,
-}
-
-/// Builds an internal stream chain from size/allocated pairs.
-#[inline]
-pub(crate) fn build_internal_stream_chain<I>(
-    index: &mut MftIndex,
-    streams: I,
-) -> InternalStreamChain
-where
-    I: IntoIterator<Item = (u64, u64)>,
-{
-    let mut size_total = 0_u64;
-    let mut alloc_total = 0_u64;
-    let mut first = NO_ENTRY;
-    let mut last = NO_ENTRY;
-
-    for (ist_size, ist_allocated) in streams {
-        size_total = size_total.saturating_add(ist_size);
-        alloc_total = alloc_total.saturating_add(ist_allocated);
-        let new_idx = len_to_u32(index.internal_streams.len());
-        index.internal_streams.push(InternalStreamInfo {
-            size: SizeInfo {
-                length: ist_size,
-                allocated: ist_allocated,
-            },
-            next_entry: NO_ENTRY,
-            flags: 0,
-        });
-        if last == NO_ENTRY {
-            first = new_idx;
-        } else {
-            index.internal_streams[u32_as_usize(last)].next_entry = new_idx;
-        }
-        last = new_idx;
-    }
-
-    InternalStreamChain {
-        first,
-        size_total,
-        alloc_total,
-    }
 }
 
 /// Chains stream indices together and returns the first index.
@@ -193,96 +137,4 @@ pub(crate) fn add_child_entry(
         name_index: name_idx,
         _pad1: [0; 6],
     });
-}
-
-/// Data snapshot from an extension record that needs to be merged into the
-/// base.
-pub(crate) struct ExtensionSnapshot {
-    /// Head of the extension's stream chain.
-    pub stream_head: u32,
-    /// Number of additional streams from extension (excluding default).
-    pub stream_count: u16,
-    /// Total extra count from extension (excluding default).
-    pub total_extra: u16,
-    /// Head of the extension's name chain.
-    pub name_next: u32,
-    /// Number of names from extension.
-    pub name_count: u16,
-    /// Head of the extension's internal stream chain.
-    pub internal_head: u32,
-    /// Size of internal streams from extension.
-    pub internal_size: u64,
-    /// Allocated size of internal streams from extension.
-    pub internal_alloc: u64,
-    /// Default stream length from extension.
-    pub first_stream_len: u64,
-    /// Default stream allocated from extension.
-    pub first_stream_alloc: u64,
-}
-
-/// Merges extension streams into the base record's stream chain.
-#[inline]
-pub(crate) fn merge_extension_streams(
-    index: &mut MftIndex,
-    frs: u64,
-    base_stream_tail: Option<u32>,
-    first_internal: u32,
-    ext: &ExtensionSnapshot,
-) {
-    // Lift parser-local raw `u64` to typed `Frs` once for all the typed
-    // `get_or_create` calls below.
-    let frs_typed = crate::frs::Frs::new(frs);
-    // Merge user-visible streams
-    if ext.stream_count > 0 {
-        let tail = base_stream_tail.unwrap_or(NO_ENTRY);
-        if tail != NO_ENTRY {
-            index.streams[u32_as_usize(tail)].next_entry = ext.stream_head;
-        } else {
-            let record = index.get_or_create(frs_typed);
-            record.first_stream.next_entry = ext.stream_head;
-        }
-        let record = index.get_or_create(frs_typed);
-        record.stream_count += ext.stream_count;
-        record.total_stream_count += ext.stream_count;
-    }
-
-    // Merge internal streams
-    if ext.internal_head != NO_ENTRY {
-        if first_internal != NO_ENTRY {
-            let mut tail = first_internal;
-            while index.internal_streams[u32_as_usize(tail)].next_entry != NO_ENTRY {
-                tail = index.internal_streams[u32_as_usize(tail)].next_entry;
-            }
-            index.internal_streams[u32_as_usize(tail)].next_entry = ext.internal_head;
-        } else {
-            let record = index.get_or_create(frs_typed);
-            record.first_internal_stream = ext.internal_head;
-        }
-        let record = index.get_or_create(frs_typed);
-        record.internal_streams_size += ext.internal_size;
-        record.internal_streams_allocated += ext.internal_alloc;
-        record.total_stream_count += ext.total_extra.saturating_sub(ext.stream_count);
-    }
-}
-
-/// Merges extension names into the base record's name chain.
-#[inline]
-pub(crate) fn merge_extension_names(
-    index: &mut MftIndex,
-    frs: u64,
-    base_name_tail: Option<u32>,
-    ext: &ExtensionSnapshot,
-) {
-    if ext.name_count > 0 {
-        let frs_typed = crate::frs::Frs::new(frs);
-        let tail = base_name_tail.unwrap_or(NO_ENTRY);
-        if tail != NO_ENTRY {
-            index.links[u32_as_usize(tail)].next_entry = ext.name_next;
-        } else {
-            let record = index.get_or_create(frs_typed);
-            record.first_name.next_entry = ext.name_next;
-        }
-        let record = index.get_or_create(frs_typed);
-        record.name_count += ext.name_count;
-    }
 }

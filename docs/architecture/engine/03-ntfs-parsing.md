@@ -430,7 +430,7 @@ impl Iterator for AttributeIterator<'_> {
 
 ### Base Record Parser
 
-**Source:** `io/parser/index.rs` — `parse_record_to_index()`
+**Source:** `parse/direct_index.rs` — `parse_record_to_index()`
 
 This is the **hot path** — called for every 1KB record during IOCP reading.
 
@@ -483,7 +483,7 @@ parse_record_to_index(buffer: &[u8], frs: u64, index: &mut MftIndex) -> bool
 
 ### Extension Record Parser
 
-**Source:** `io/parser/index_extension.rs`
+**Source:** `parse/direct_index_extension.rs`
 
 When `base_file_record_segment != 0`, the record is an extension:
 

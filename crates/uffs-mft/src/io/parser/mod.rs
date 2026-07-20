@@ -7,8 +7,6 @@
 
 mod fragment;
 mod fragment_extension;
-mod index;
-mod index_extension;
 pub(crate) mod unified;
 
 #[expect(
@@ -16,7 +14,6 @@ pub(crate) mod unified;
     reason = "re-exporting deprecated API for backward compatibility"
 )]
 pub use fragment::parse_record_to_fragment;
-pub use index::parse_record_to_index;
 pub use unified::process_record;
 
 pub use crate::parse::{
@@ -29,13 +26,15 @@ pub use crate::parse::{
 mod tests {
     #[expect(deprecated, reason = "testing deprecated parse_record_to_fragment API")]
     use super::parse_record_to_fragment;
-    use super::{parse_record_to_index, process_record};
+    use super::process_record;
     use crate::index::{MftIndex, MftIndexFragment};
 
     #[test]
     fn parse_record_to_index_rejects_short_buffers() {
         let mut index = MftIndex::new(crate::platform::DriveLetter::C);
-        assert!(!parse_record_to_index(&[0_u8; 3], 42, &mut index));
+        assert!(!crate::parse::parse_record_to_index(
+            &[0_u8; 3], 42, &mut index
+        ));
     }
 
     #[test]
@@ -262,13 +261,33 @@ mod tests {
 
     /// Run every malformed record through all three entry points; the test
     /// passes iff none of them panics (the return value is irrelevant).
-    fn assert_all_parsers_survive(record: &[u8]) {
+    fn assert_all_parsers_survive(input: &[u8]) {
+        // `RecordBuilder` leaves `bytes_in_use` (header offset 24..28) at 0,
+        // which makes every parser's attribute loop compute `max_offset = 0`
+        // and exit before touching a single attribute byte -- so unless we
+        // patch it to the record's real length, this whole corpus never
+        // actually reaches the code it claims to stress-test. Patch a local
+        // copy rather than requiring every call site to do it.
+        let mut patched = input.to_vec();
+        if let Some(bytes_in_use_field) = patched.get_mut(24..28) {
+            let len = u32::try_from(input.len()).unwrap_or(u32::MAX);
+            bytes_in_use_field.copy_from_slice(&len.to_le_bytes());
+        }
+        let record = patched.as_slice();
+
         // The return value is irrelevant — reaching the end of this function
         // at all means none of the three parsers panicked, which is the
         // property under test. `black_box` consumes each result so it is
         // neither an unused binding nor an under-typed `let _` discard.
-        let mut index = MftIndex::new(crate::platform::DriveLetter::C);
-        core::hint::black_box(parse_record_to_index(record, 42, &mut index));
+        // `crate::parse::parse_record_to_index` (direct_index.rs) is the
+        // parser actually wired to the live USN-journal incremental update
+        // path (usn::windows).
+        let mut direct_index = MftIndex::new(crate::platform::DriveLetter::C);
+        core::hint::black_box(crate::parse::parse_record_to_index(
+            record,
+            42,
+            &mut direct_index,
+        ));
 
         let mut unified_index = MftIndex::new(crate::platform::DriveLetter::C);
         let mut name_buf = String::new();
@@ -328,5 +347,24 @@ mod tests {
             .map(|n| n.wrapping_mul(31).wrapping_add(7))
             .collect();
         assert_all_parsers_survive(&RecordBuilder::new(56).raw(&garbage).build());
+
+        // 9. Regression pin: a resident attribute whose *declared* length is short
+        //    enough to pass the `offset + length <= max_offset` gate, but too short to
+        //    actually cover the fixed `value_length` (offset+16..20) / `value_offset`
+        //    (offset+20..22) fields the parser reads unconditionally, right at the tail
+        //    of the buffer. `crate::parse::parse_record_to_index` used to read these
+        //    via raw `&data[a..b]` slicing (no bounds check at all beyond the
+        //    attribute-length gate above) and panicked with "range start index ... out
+        //    of range" on exactly this shape. Covers StandardInformation, FileName,
+        //    ReparsePoint, IndexRoot, ObjectId, and the unknown-type catch-all -- every
+        //    arm in direct_index.rs that reads those two fixed fields.
+        for type_code in [0x10, 0x30, 0xC0, 0x90, 0x40, 0x77] {
+            assert_all_parsers_survive(
+                &RecordBuilder::new(56)
+                    .attr(type_code, 17, 0, 0, 0)
+                    .raw(&[0_u8; 2])
+                    .build(),
+            );
+        }
     }
 }

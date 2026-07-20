@@ -18,6 +18,11 @@ mod ext_match;
 mod path_normalize;
 mod time_parsing;
 
+// `apply_search_filters` is a deliberately public re-export — see its
+// own doc comment for why a downstream crate needs to call it directly.
+// The `apply::*` glob below stays `pub(crate)`: everything else in
+// `apply` (e.g. `row_passes_filters`) is an internal helper.
+pub use apply::apply_search_filters;
 pub(crate) use apply::*;
 pub use attr_parsing::*;
 pub(crate) use ext_match::extract_extension_after_dot;

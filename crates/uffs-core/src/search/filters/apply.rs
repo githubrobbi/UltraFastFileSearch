@@ -137,8 +137,20 @@ pub(crate) fn row_passes_filters(
     apply_derived_filters(row, filters)
 }
 
-/// Apply extended search filters to display rows (in-place).
-pub(crate) fn apply_search_filters(rows: &mut Vec<DisplayRow>, filters: &SearchFilters) {
+/// Apply extended search filters to display rows (in-place) — retains
+/// only the rows that pass every non-empty filter in `filters`.
+///
+/// Public so a downstream crate holding its own richer row data (more
+/// fields than [`DisplayRow`] carries) can still reuse this entire
+/// filter engine unchanged: build a [`DisplayRow`] via its public
+/// [`DisplayRow::new`] constructor from whatever subset of fields
+/// overlaps, run it through this function to get every existing filter
+/// axis applied verbatim, then apply any additional filters the extra
+/// fields need as a separate, small pass of its own. This avoids
+/// forking or reimplementing this engine for that case — see
+/// `PRIVATE_RICH_INDEX_DESIGN.md` in the `uffs-products` repo for the
+/// concrete motivating use case.
+pub fn apply_search_filters(rows: &mut Vec<DisplayRow>, filters: &SearchFilters) {
     if filters.is_empty() {
         return;
     }

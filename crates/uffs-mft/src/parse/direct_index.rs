@@ -146,6 +146,14 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut primary_name: Option<(String, u64, u8, u16)> = None; // (name, parent_frs, namespace, parse_index)
     let mut additional_names: SmallVec<[(String, u64, u16); 4]> = SmallVec::new();
     let mut name_parse_counter: u16 = 0;
+    // $FILE_NAME's own timestamps for whichever name is currently primary
+    // (often differ from $STANDARD_INFORMATION). Only the primary name's
+    // values are stored here since FileRecord carries just one set — see
+    // `FileRecord::fn_created`'s doc.
+    let mut primary_fn_created = 0_i64;
+    let mut primary_fn_modified = 0_i64;
+    let mut primary_fn_accessed = 0_i64;
+    let mut primary_fn_mft_changed = 0_i64;
     let mut default_size = 0_u64;
     let mut default_allocated = 0_u64;
     let mut default_is_sparse = false;
@@ -234,6 +242,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                         ));
                                     }
                                     primary_name = Some((name, parent_frs, namespace, parse_idx));
+                                    // $FILE_NAME's own timestamps for the new
+                                    // primary name — free reads of the
+                                    // already-decoded `fn_attr`.
+                                    primary_fn_created = fn_attr.creation_time;
+                                    primary_fn_modified = fn_attr.modification_time;
+                                    primary_fn_accessed = fn_attr.access_time;
+                                    primary_fn_mft_changed = fn_attr.mft_change_time;
                                 } else {
                                     additional_names.push((name, parent_frs, parse_idx));
                                 }
@@ -674,7 +689,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
     // Handle records without a filename in the base record
     // The $FILE_NAME may be in an extension record - we still need to store stdinfo
-    let (name, parent_frs, _namespace, primary_parse_index) = match primary_name {
+    let (name, parent_frs, primary_namespace, primary_parse_index) = match primary_name {
         Some(n) => n,
         None => {
             // No $FILE_NAME in base record - store stdinfo anyway
@@ -697,6 +712,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             // Boundary: lift the raw `u64` FRS argument (kernel/USN buffer)
             // into a typed `Frs` once for the typed index API.
             let record = index.get_or_create(crate::frs::Frs::new(frs));
+            // Pre-existing gap, fixed alongside this one: this early-return
+            // path never set sequence_number/lsn at all (only the main path
+            // below did), so a record whose $FILE_NAME arrives via a later
+            // extension record got neither — nothing else in the pipeline
+            // sets them for it (extension records carry their own,
+            // different-meaning sequence/LSN, per unified.rs's identical
+            // base-record-only scoping).
+            record.sequence_number = header.sequence_number;
+            record.lsn = header.log_file_sequence_number;
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
@@ -760,6 +784,17 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     // `file_ref`; without it a delete-then-reuse of an MFT slot is invisible to
     // the snapshot diff (the slot number alone is stable across reuse).
     record.sequence_number = header.sequence_number;
+    record.lsn = header.log_file_sequence_number;
+    // $FILE_NAME's own namespace/timestamps for the primary name (often
+    // differ from $STANDARD_INFORMATION — e.g. timestomping alters
+    // STD_INFO but leaves FILE_NAME original). Captured above per-name;
+    // only the primary's values are stored since FileRecord carries just
+    // one set.
+    record.namespace = primary_namespace;
+    record.fn_created = primary_fn_created;
+    record.fn_modified = primary_fn_modified;
+    record.fn_accessed = primary_fn_accessed;
+    record.fn_mft_changed = primary_fn_mft_changed;
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,

@@ -316,6 +316,137 @@ mod tests {
         assert!(!direct_stream.is_resident());
     }
 
+    /// Regression pin: `FileRecord.lsn` (from the header's own
+    /// `log_file_sequence_number`) and `$FILE_NAME`'s own
+    /// `namespace`/timestamps (which often differ from
+    /// `$STANDARD_INFORMATION` — e.g. timestomping alters `STD_INFO` but
+    /// leaves `FILE_NAME` original) must reach both production parsers. All
+    /// five fields already existed on `FileRecord`; the header and
+    /// `$FILE_NAME` attribute are both already fully decoded in memory by
+    /// the time these values are read, so populating them is free.
+    #[test]
+    fn lsn_and_file_name_own_fields_reach_both_production_parsers() {
+        let lsn = 0x1122_3344_5566_7788_u64;
+        let sequence_number = 0x2222_u16;
+        let namespace = 1_u8; // Win32
+        let fn_created = 10_i64;
+        let fn_modified = 20_i64;
+        let fn_accessed = 30_i64;
+        let fn_mft_changed = 40_i64;
+
+        let mut fn_payload = Vec::new();
+        fn_payload.extend_from_slice(&0_u64.to_le_bytes()); // parent_directory
+        fn_payload.extend_from_slice(&fn_created.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_modified.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_mft_changed.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_accessed.to_le_bytes());
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // allocated_size
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // data_size
+        fn_payload.extend_from_slice(&0_u32.to_le_bytes()); // file_attributes
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // packed_ea_size
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+        fn_payload.push(1); // file_name_length = 1 char
+        fn_payload.push(namespace);
+        fn_payload.extend_from_slice(&0x0061_u16.to_le_bytes()); // "a"
+        let file_name_total_len = u32::try_from(24 + fn_payload.len()).expect("fits in u32");
+
+        let mut record = RecordBuilder::new(56)
+            .attr(0x30, file_name_total_len, 0, 0, 0)
+            .raw(
+                &u32::try_from(fn_payload.len())
+                    .expect("fits in u32")
+                    .to_le_bytes(),
+            )
+            .raw(&24_u16.to_le_bytes())
+            .raw(&[0_u8; 2])
+            .raw(&fn_payload)
+            .build();
+
+        let total_len = u32::try_from(record.len()).expect("fits in u32");
+        record
+            .get_mut(24..28)
+            .expect("record well over 28 bytes")
+            .copy_from_slice(&total_len.to_le_bytes());
+        // Header: log_file_sequence_number @ offset 8 (u64), sequence_number
+        // @ offset 16 (u16).
+        record
+            .get_mut(8..16)
+            .expect("record well over 16 bytes")
+            .copy_from_slice(&lsn.to_le_bytes());
+        record
+            .get_mut(16..18)
+            .expect("record well over 18 bytes")
+            .copy_from_slice(&sequence_number.to_le_bytes());
+
+        let mut unified_index = MftIndex::new(crate::platform::DriveLetter::C);
+        let mut name_buf = String::new();
+        process_record(&record, 42, &mut unified_index, &mut name_buf);
+        let unified_rec = unified_index
+            .find(crate::frs::Frs::new(42))
+            .expect("process_record must create the base record");
+        assert_eq!(unified_rec.lsn, lsn);
+        assert_eq!(unified_rec.sequence_number, sequence_number);
+        assert_eq!(unified_rec.namespace, namespace);
+        assert_eq!(unified_rec.fn_created, fn_created);
+        assert_eq!(unified_rec.fn_modified, fn_modified);
+        assert_eq!(unified_rec.fn_accessed, fn_accessed);
+        assert_eq!(unified_rec.fn_mft_changed, fn_mft_changed);
+
+        let mut direct_index = MftIndex::new(crate::platform::DriveLetter::C);
+        assert!(crate::parse::parse_record_to_index(
+            &record,
+            42,
+            &mut direct_index
+        ));
+        let direct_rec = direct_index
+            .find(crate::frs::Frs::new(42))
+            .expect("parse_record_to_index must create the base record");
+        assert_eq!(direct_rec.lsn, lsn);
+        assert_eq!(direct_rec.sequence_number, sequence_number);
+        assert_eq!(direct_rec.namespace, namespace);
+        assert_eq!(direct_rec.fn_created, fn_created);
+        assert_eq!(direct_rec.fn_modified, fn_modified);
+        assert_eq!(direct_rec.fn_accessed, fn_accessed);
+        assert_eq!(direct_rec.fn_mft_changed, fn_mft_changed);
+    }
+
+    /// Regression pin: a record whose base segment has **no** `$FILE_NAME`
+    /// at all (name arrives later via an extension record — the normal case
+    /// for files with enough attributes to overflow the base MFT record)
+    /// must still get `sequence_number`/`lsn` from its own header. Before
+    /// this fix, `parse_record_to_index`'s no-name early-return path set
+    /// neither, and nothing else in the pipeline ever would (an extension
+    /// record's header carries a different, per-segment sequence/LSN).
+    #[test]
+    fn sequence_number_and_lsn_set_even_without_a_base_file_name() {
+        let lsn = 0xAABB_CCDD_EEFF_0011_u64;
+        let sequence_number = 0x3333_u16;
+
+        let mut record = RecordBuilder::new(56).build();
+        record
+            .get_mut(8..16)
+            .expect("record well over 16 bytes")
+            .copy_from_slice(&lsn.to_le_bytes());
+        record
+            .get_mut(16..18)
+            .expect("record well over 18 bytes")
+            .copy_from_slice(&sequence_number.to_le_bytes());
+
+        let mut direct_index = MftIndex::new(crate::platform::DriveLetter::C);
+        // Returns false (no name found yet), but must still create the
+        // record with its header-derived identity fields set.
+        assert!(!crate::parse::parse_record_to_index(
+            &record,
+            42,
+            &mut direct_index
+        ));
+        let direct_rec = direct_index
+            .find(crate::frs::Frs::new(42))
+            .expect("the no-name path must still create the base record");
+        assert_eq!(direct_rec.sequence_number, sequence_number);
+        assert_eq!(direct_rec.lsn, lsn);
+    }
+
     // ── WI-5.2 panic-resistance corpus ──────────────────────────────
     //
     // The daemon builds with `panic = "abort"`: a single parser panic on a

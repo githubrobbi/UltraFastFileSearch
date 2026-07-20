@@ -3,6 +3,10 @@
 
 //! Unified MFT record processor.
 //!
+//! Exception: single-pass MFT record processor; the monolithic attribute
+//! loop is kept together for cache locality and to mirror the NTFS on-disk
+//! attribute layout one arm at a time.
+//!
 //! ONE function processes ALL records (base AND extension) through the SAME
 //! attribute loop.  This eliminates the dual-parser architecture that caused
 //! name-ordering and stream-counting discrepancies.
@@ -353,6 +357,12 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
     // sequence, so only a base record's header sets the file's sequence.
     if header.is_base_record() {
         index.records[base_ri].sequence_number = header.sequence_number;
+        // Log File Sequence Number, correlates with the $LogFile journal
+        // (forensic value) — already-parsed header data, free to store.
+        // Same base-record-only scope as sequence_number above: an
+        // extension record segment has its own LSN, a different concept
+        // from the file's own.
+        index.records[base_ri].lsn = header.log_file_sequence_number;
     }
 
     // ── Attribute loop ─────────────────────────────────────────────────
@@ -466,6 +476,20 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                             // Typed `ParentFrs` slot — lift parser-local raw `u64`.
                             index.records[base_ri].first_name.parent_frs =
                                 crate::frs::ParentFrs::new(parent_frs);
+
+                            // $FILE_NAME's own namespace/timestamps (often
+                            // differ from $STANDARD_INFORMATION — e.g.
+                            // timestomping leaves STD_INFO altered but
+                            // FILE_NAME original). `fn_attr` is already fully
+                            // decoded above; these are free reads of already-
+                            // resident memory. Push-to-front: whichever name
+                            // is currently "first" also owns these fields.
+                            let rec = &mut index.records[base_ri];
+                            rec.namespace = fn_attr.file_name_namespace;
+                            rec.fn_created = fn_attr.creation_time;
+                            rec.fn_modified = fn_attr.modification_time;
+                            rec.fn_accessed = fn_attr.access_time;
+                            rec.fn_mft_changed = fn_attr.mft_change_time;
 
                             // Build parent-child relationship.
                             // name_index = name_count BEFORE increment

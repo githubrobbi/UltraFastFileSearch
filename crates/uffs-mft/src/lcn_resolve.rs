@@ -9,7 +9,7 @@
 //! whatever order a search happened to return them in (or even sorted by
 //! ascending FRS, which only weakly-to-moderately correlates with
 //! physical layout on a volume that's been reorganized over years — see
-//! `docs/architecture/content-stream-tool-design.md`) leaves most of a
+//! `docs/dev/architecture/content-stream-tool-design.md`) leaves most of a
 //! drive's achievable seek-distance reduction on the table. Resolving
 //! true LCN up front and sorting by it captures the rest.
 //!

@@ -24,27 +24,23 @@ cargo-features = [
 resolver = "3"
 members = [
   # ── Foundation ──
-  "crates/uffs-polars",                  # 🚀 Polars facade (compilation isolation)
-  "crates/uffs-security",                # 🔒 Crypto, key storage, secure FS ops
-  "crates/uffs-text",                    # 📝 Unicode text processing, i18n foundation
-  "crates/uffs-time",                    # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
-  "crates/uffs-version",                 # 🏷️ Shared --version strings + build-metadata stamp (leaf)
-  "crates/uffs-statusfmt",               # 🎨 Shared operator-status styling (color, glyphs, fields) (leaf)
-  "crates/uffs-broker-protocol",         # 📟 Cross-platform broker wire-protocol types (F5)
-  "crates/uffs-content-protocol",        # 📨 Cross-platform Content Service wire-protocol types
-  "crates/uffs-content-reader-protocol", # 📡 Private Coordinator<->Snapshot Reader wire-protocol types
-  "crates/uffs-winsvc",                  # 🪟 Native Windows service control + broker-pipe probe (leaf)
-  "crates/uffs-mft",                     # 📦 MFT reading → Polars DataFrame
-  "crates/uffs-format",                  # 🧾 Shared CSV formatter (daemon + thin CLI)
-  "crates/uffs-core",                    # 🎯 Query engine + compact search engine
+  "crates/uffs-polars",          # 🚀 Polars facade (compilation isolation)
+  "crates/uffs-security",        # 🔒 Crypto, key storage, secure FS ops
+  "crates/uffs-text",            # 📝 Unicode text processing, i18n foundation
+  "crates/uffs-time",            # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
+  "crates/uffs-version",         # 🏷️ Shared --version strings + build-metadata stamp (leaf)
+  "crates/uffs-statusfmt",       # 🎨 Shared operator-status styling (color, glyphs, fields) (leaf)
+  "crates/uffs-broker-protocol", # 📟 Cross-platform broker wire-protocol types (F5)
+  "crates/uffs-winsvc",          # 🪟 Native Windows service control + broker-pipe probe (leaf)
+  "crates/uffs-mft",             # 📦 MFT reading → Polars DataFrame
+  "crates/uffs-format",          # 🧾 Shared CSV formatter (daemon + thin CLI)
+  "crates/uffs-core",            # 🎯 Query engine + compact search engine
   # ── Daemon Architecture ──
-  "crates/uffs-daemon",         # 🛡️ Background service process
-  "crates/uffs-client",         # 📡 Thin client library
-  "crates/uffs-mcp",            # 🤖 MCP stdio adapter for AI agents
-  "crates/uffs-broker",         # 🔑 Windows elevated handle broker (optional)
-  "crates/uffs-vss-requestor",  # 🩹 Per-run native VSS snapshot helper, spawned by uffs-broker (optional)
-  "crates/uffs-content",        # 📦 Content Service — VSS-snapshot-scoped file content export (optional)
-  "crates/uffs-content-reader", # 📖 Privileged narrow Snapshot Reader, spawned by uffs-content (optional)
+  "crates/uffs-daemon",        # 🛡️ Background service process
+  "crates/uffs-client",        # 📡 Thin client library
+  "crates/uffs-mcp",           # 🤖 MCP stdio adapter for AI agents
+  "crates/uffs-broker",        # 🔑 Windows elevated handle broker (optional)
+  "crates/uffs-vss-requestor", # 🩹 Per-run native VSS snapshot helper, spawned by uffs-broker (optional)
   # ── Surfaces ──
   "crates/uffs-cli",    # 🖥️  Command-line interface
   "crates/uffs-update", # ⬆️  Self-update acquire helper (HTTP/TLS isolated from the CLI)
@@ -154,23 +150,6 @@ uffs-client = { path = "crates/uffs-client", version = "0.6.28" }
 # F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
 # wire-format byte literals.
 uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.28" }
-# `uffs-content-protocol` carries the wire-protocol types shared between
-# `uffs-content` (the unprivileged content-coordinator producer,
-# Windows-only binary) and any downstream consumer (e.g. Docenta).
-# Pure-logic Layer-0 lib — cross-platform tests run on every CI lane,
-# matching the `uffs-broker-protocol` pattern above. Design references
-# (docs/dev/architecture/, local-only, not tracked): the original
-# `content-stream-tool-design.md` sketch, its
-# `uffs-content-stream-enterprise-design-review.md` replacement-design
-# review, and Docenta's `uffs-ingest-protocol-v2-vss.md`.
-uffs-content-protocol = { path = "crates/uffs-content-protocol", version = "0.6.28" }
-# `uffs-content-reader-protocol` — the private wire format between
-# `uffs-content` (Coordinator) and the privileged Snapshot Reader process
-# (addendum §2.1-§2.4). Deliberately does NOT depend on
-# `uffs-content-protocol` — both are Layer 0, and Layer-0-to-Layer-0
-# internal deps are disallowed (see crate-graph.md); see this crate's
-# Cargo.toml for the full rationale.
-uffs-content-reader-protocol = { path = "crates/uffs-content-reader-protocol", version = "0.6.28" }
 # `uffs-winsvc` — native Windows service control (SCM query/start/stop) +
 # the non-connecting broker-pipe readiness probe.  Layer-0 leaf: its only
 # dependency is the `windows` crate (windows-target), with non-Windows
@@ -244,10 +223,11 @@ windows = { version = "0.62.2", features = [
 
 # ───── Windows Build Tooling (build-dependency only) ─────
 # Embeds the UFFS icon + `app.manifest` (asInvoker, PerMonitorV2 DPI, long-path
-# aware) into the `uffs.exe` PE on MSVC targets.  Used exclusively in
-# `crates/uffs-cli/build.rs`; inert on non-Windows and on non-MSVC Windows
-# toolchains.  Kept at workspace scope for version consistency even though
-# only one crate currently imports it.
+# aware) into each binary's PE on MSVC targets; inert on non-Windows and on
+# non-MSVC Windows toolchains.  Used by every binary crate's `build.rs`
+# (uffs-cli, uffs-daemon, uffs-broker, uffs-mcp, uffs-update, uffs-vss-requestor,
+# uffs-bench, uffs-diag, uffs-mft) — kept at workspace scope for version
+# consistency across all of them.
 winresource = "0.1.31"
 
 # ───── Serialization ─────
@@ -331,11 +311,6 @@ rustc-hash = "2.1.3"
 itoa = "1.0.18"
 sha2 = "0.11.0"
 hex = "0.4.3"
-# BLAKE3 is the content-integrity digest mandated by the UFFS Content-Ingest
-# protocol (uffs-content-protocol's manifest/frame checksums and the
-# FILE_END content digest) — chosen there for speed over sha2, which stays
-# in place for its existing unrelated consumers.
-blake3 = "1.8.5"
 
 # ───── Network (self-update acquire helper only) ─────
 # Blocking HTTP with rustls + the system trust store. `rustls-tls-native-roots`

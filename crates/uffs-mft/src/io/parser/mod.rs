@@ -447,6 +447,98 @@ mod tests {
         assert_eq!(direct_rec.lsn, lsn);
     }
 
+    /// Regression pin: when a file's *only* `$FILE_NAME` lives in an
+    /// extension record (the base MFT record segment has none at all --
+    /// the normal case once a record has enough attributes to overflow the
+    /// base segment), `direct_index_extension.rs`'s "promote to primary
+    /// name" merge path used to copy only the name text and parent FRS,
+    /// silently dropping namespace and all four `$FILE_NAME` timestamps
+    /// even though they were already fully decoded from the extension
+    /// record's own bytes.
+    #[test]
+    fn extension_only_file_name_sets_namespace_and_fn_timestamps_on_base_record() {
+        let namespace = 1_u8; // Win32
+        let fn_created = 111_i64;
+        let fn_modified = 222_i64;
+        let fn_accessed = 333_i64;
+        let fn_mft_changed = 444_i64;
+
+        // Base record: no $FILE_NAME attribute at all.
+        let mut base_record = RecordBuilder::new(56).build();
+        let base_len = u32::try_from(base_record.len()).expect("fits in u32");
+        base_record
+            .get_mut(24..28)
+            .expect("record well over 28 bytes")
+            .copy_from_slice(&base_len.to_le_bytes());
+
+        let mut index = MftIndex::new(crate::platform::DriveLetter::C);
+        assert!(!crate::parse::parse_record_to_index(
+            &base_record,
+            42,
+            &mut index
+        ));
+        let base_rec = index
+            .find(crate::frs::Frs::new(42))
+            .expect("the no-name early-return path must still create the record");
+        assert_eq!(base_rec.namespace, 0);
+        assert_eq!(base_rec.fn_created, 0);
+
+        // Extension record: carries the file's only $FILE_NAME.
+        let mut fn_payload = Vec::new();
+        fn_payload.extend_from_slice(&0_u64.to_le_bytes()); // parent_directory
+        fn_payload.extend_from_slice(&fn_created.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_modified.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_mft_changed.to_le_bytes());
+        fn_payload.extend_from_slice(&fn_accessed.to_le_bytes());
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // allocated_size
+        fn_payload.extend_from_slice(&0_i64.to_le_bytes()); // data_size
+        fn_payload.extend_from_slice(&0_u32.to_le_bytes()); // file_attributes
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // packed_ea_size
+        fn_payload.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+        fn_payload.push(1); // file_name_length = 1 char
+        fn_payload.push(namespace);
+        fn_payload.extend_from_slice(&0x0062_u16.to_le_bytes()); // "b"
+        let file_name_total_len = u32::try_from(24 + fn_payload.len()).expect("fits in u32");
+
+        let mut ext_record = RecordBuilder::new(56)
+            .attr(0x30, file_name_total_len, 0, 0, 0)
+            .raw(
+                &u32::try_from(fn_payload.len())
+                    .expect("fits in u32")
+                    .to_le_bytes(),
+            )
+            .raw(&24_u16.to_le_bytes())
+            .raw(&[0_u8; 2])
+            .raw(&fn_payload)
+            .build();
+        let ext_len = u32::try_from(ext_record.len()).expect("fits in u32");
+        ext_record
+            .get_mut(24..28)
+            .expect("record well over 28 bytes")
+            .copy_from_slice(&ext_len.to_le_bytes());
+        // base_file_record_segment @ header offset 32 (u64): nonzero makes
+        // `is_base_record()` false and routes this to the extension-merge
+        // path, targeting FRS 42 (the base record created above).
+        ext_record
+            .get_mut(32..40)
+            .expect("record well over 40 bytes")
+            .copy_from_slice(&42_u64.to_le_bytes());
+
+        assert!(crate::parse::parse_record_to_index(
+            &ext_record,
+            99,
+            &mut index
+        ));
+        let merged_rec = index
+            .find(crate::frs::Frs::new(42))
+            .expect("extension merge must keep the base record");
+        assert_eq!(merged_rec.namespace, namespace);
+        assert_eq!(merged_rec.fn_created, fn_created);
+        assert_eq!(merged_rec.fn_modified, fn_modified);
+        assert_eq!(merged_rec.fn_accessed, fn_accessed);
+        assert_eq!(merged_rec.fn_mft_changed, fn_mft_changed);
+    }
+
     // ── WI-5.2 panic-resistance corpus ──────────────────────────────
     //
     // The daemon builds with `panic = "abort"`: a single parser panic on a

@@ -157,6 +157,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                     // otherwise — see `parse::attribute_helpers` for the
                     // single-source-of-truth rationale.
                     let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                    // Bulk path: `StdInfoParse` has nowhere to live on the
+                    // index record, so the status is dropped here.
                     crate::parse::parse_standard_info_full(data, offset, &mut ext);
                     let mut info = crate::index::StandardInfo::from_extended(&ext);
                     if is_directory {

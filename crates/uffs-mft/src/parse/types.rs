@@ -60,6 +60,14 @@ pub struct ParsedRecord {
     /// Common values: symlink (0xA000000C), junction (0xA0000003), `OneDrive`,
     /// etc.
     pub reparse_tag: u32,
+    /// How `$STANDARD_INFORMATION` decoded for this record.
+    ///
+    /// Consult this before trusting [`Self::std_info`]: on
+    /// [`Malformed`](crate::parse::StdInfoParse::Malformed) and
+    /// [`Absent`](crate::parse::StdInfoParse::Absent) its timestamps are
+    /// struct defaults (FILETIME `0` = 1601-01-01), which is
+    /// indistinguishable from a real 1601-01-01 record by value alone.
+    pub std_info_parse: crate::parse::StdInfoParse,
 
     // P3 Forensic fields (populated when ParseOptions::forensic is true)
     /// True if this record is deleted (`FRH_IN_USE` flag not set).

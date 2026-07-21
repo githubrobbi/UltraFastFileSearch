@@ -59,6 +59,7 @@ mod zero_alloc;
 // tree) calls this directly to share the one extended-aware
 // $STANDARD_INFORMATION parser with the legacy and direct-index pipelines,
 // instead of duplicating it.
+pub use attribute_helpers::StdInfoParse;
 pub(crate) use attribute_helpers::parse_standard_info_full;
 use attribute_helpers::{parse_data_attribute_full, parse_file_name_full};
 pub use columns::ParsedColumns;

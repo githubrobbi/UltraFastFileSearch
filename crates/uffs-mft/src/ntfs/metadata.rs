@@ -292,6 +292,22 @@ pub struct ExtendedStandardInfo {
     pub security_id: u32,
     /// Owner ID - for quota tracking.
     pub owner_id: u32,
+    /// Quota charged - bytes charged to the owner's quota.
+    ///
+    /// Zero on NTFS 1.2 records and on volumes without quotas enabled.
+    pub quota_charged: u64,
+    /// Maximum number of versions (usually 0).
+    ///
+    /// Zero on NTFS 1.2 records, which have no such field.
+    pub max_versions: u32,
+    /// Version number (usually 0).
+    ///
+    /// Zero on NTFS 1.2 records, which have no such field.
+    pub version_number: u32,
+    /// Class ID (usually 0).
+    ///
+    /// Zero on NTFS 1.2 records, which have no such field.
+    pub class_id: u32,
     /// Read-only flag.
     pub is_readonly: bool,
     /// Hidden flag.

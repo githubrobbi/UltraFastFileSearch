@@ -43,7 +43,7 @@ git-fetch-with-cli = true
 # =============================================================================
 [target.aarch64-apple-darwin]
 linker = "clang"
-rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-Wl,-dead_strip"]
+rustflags = ["-C", "target-cpu=apple-m1", "-C", "link-arg=-Wl,-dead_strip"]
 
 # =============================================================================
 # macOS Intel

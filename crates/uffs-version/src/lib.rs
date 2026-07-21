@@ -13,8 +13,8 @@
 //! The macros expand **in the calling crate**, so `CARGO_PKG_VERSION` resolves
 //! to that binary's version and `option_env!("UFFS_GIT_SHA")` (and the other
 //! `UFFS_*` build vars) resolve to what its `build.rs` stamped via
-//! [`emit_build_env`]. On Windows the name carries the real `.exe` suffix so
-//! `--version` matches the on-disk filename.
+//! `emit_build_env` (gated behind the `build` feature). On Windows the name
+//! carries the real `.exe` suffix so `--version` matches the on-disk filename.
 
 /// Executable-name suffix for the compiled target.
 ///
@@ -46,7 +46,7 @@ macro_rules! version_short {
 /// Multi-line build fingerprint for bug reports (`--version --verbose` / `-v`).
 ///
 /// The short line followed by `commit` (sha + date), `rustc`, `target`, and
-/// `profile`, each read from the `UFFS_*` env this crate's [`emit_build_env`]
+/// `profile`, each read from the `UFFS_*` env this crate's `emit_build_env`
 /// stamps at build time (`"unknown"` when a field could not be resolved).
 #[macro_export]
 macro_rules! version_long {

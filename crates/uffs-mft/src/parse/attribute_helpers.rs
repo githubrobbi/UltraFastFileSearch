@@ -8,10 +8,76 @@ use zerocopy::FromBytes as _;
 use crate::index::nonneg_to_u64;
 use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 
+/// Outcome of a `$STANDARD_INFORMATION` parse.
+///
+/// Exists so a failed parse is distinguishable from a record whose `$SI`
+/// genuinely reads 1601-01-01. When the attribute cannot be decoded, the
+/// caller's [`ExtendedStandardInfo`] is left untouched — every timestamp
+/// stays `0`, i.e. FILETIME 1601-01-01 — which is a legitimate value a real
+/// record can hold. Without this status the two are identical, and a
+/// consumer building a forensic record would report the default as fact.
+///
+/// Callers that do not care may simply ignore the returned value; it costs
+/// nothing, because the variant is just which branch the parser already took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StdInfoParse {
+    /// No `$STANDARD_INFORMATION` attribute was seen at all.
+    ///
+    /// Never returned by `parse_standard_info_full` (crate-private, hence no
+    /// doc link), which is only called
+    /// once an `$SI` attribute has been found: it is the initial state a
+    /// record-level parser starts from, and what survives if the attribute
+    /// loop never encounters one.
+    #[default]
+    Absent,
+    /// Decoded as the 72-byte NTFS 3.0+ layout. All fields are populated.
+    V30,
+    /// Decoded as the 36-byte NTFS 1.2 layout. `usn`, `security_id`,
+    /// `owner_id`, `quota_charged`, `max_versions`, `version_number` and
+    /// `class_id` stay zero because that layout has no such fields — this is
+    /// correct, not damage.
+    V12,
+    /// The attribute is present but could not be decoded: its resident
+    /// header ran past the end of the record, its declared value length was
+    /// under the 36-byte minimum, or its payload overran the buffer. The
+    /// timestamps left behind are defaults, **not** data from the volume.
+    Malformed,
+}
+
+impl StdInfoParse {
+    /// Whether the attribute was present but undecodable.
+    ///
+    /// Distinct from [`Self::Absent`]: a record with no `$SI` at all is
+    /// unusual but not evidence of damage, while a malformed one is.
+    #[must_use]
+    pub const fn is_malformed(self) -> bool {
+        matches!(self, Self::Malformed)
+    }
+
+    /// Whether real on-disk values reached the caller's
+    /// [`ExtendedStandardInfo`].
+    ///
+    /// `false` for both [`Self::Absent`] and [`Self::Malformed`], where the
+    /// timestamps are defaults rather than volume data.
+    #[must_use]
+    pub const fn is_decoded(self) -> bool {
+        matches!(self, Self::V30 | Self::V12)
+    }
+}
+
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
 ///
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
-/// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
+/// For NTFS 3.0+, also extracts `usn`, `security_id`, `owner_id`,
+/// `quota_charged`, `max_versions`, `version_number`, and `class_id`; these
+/// stay zero for NTFS 1.2, whose 36-byte layout has no such fields.
+///
+/// Returns which layout was decoded, or [`StdInfoParse::Malformed`] when the
+/// attribute could not be decoded and `result` was left untouched. See
+/// [`StdInfoParse`] for why that distinction matters; callers with no use for
+/// it can discard the value by ignoring it — deliberately not `#[must_use]`,
+/// since the bulk pipelines have nowhere to record it and dropping it is the
+/// correct, zero-cost choice there.
 ///
 /// `pub(crate)`: this is the single source of truth for `$STANDARD_INFORMATION`
 /// parsing and is also called directly from `crate::io::parser::unified`, which
@@ -20,7 +86,7 @@ pub(crate) fn parse_standard_info_full(
     data: &[u8],
     attr_offset: usize,
     result: &mut ExtendedStandardInfo,
-) {
+) -> StdInfoParse {
     use core::mem::size_of;
 
     use crate::ntfs::{
@@ -33,12 +99,12 @@ pub(crate) fn parse_standard_info_full(
     // truncated or malformed record. Slice with `get` so fuzzed / corrupt
     // input yields an early return instead of an out-of-bounds panic.
     let Some(value_length_bytes) = data.get(attr_offset + 16..attr_offset + 20) else {
-        return;
+        return StdInfoParse::Malformed;
     };
     let value_length =
         u32::from_le_bytes(value_length_bytes.try_into().unwrap_or([0, 0, 0, 0])) as usize;
     let Some(value_offset_bytes) = data.get(attr_offset + 20..attr_offset + 22) else {
-        return;
+        return StdInfoParse::Malformed;
     };
     let value_offset = u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
 
@@ -48,7 +114,7 @@ pub(crate) fn parse_standard_info_full(
         && si_offset + size_of::<StandardInformationExtended>() <= data.len()
     {
         let Ok((si, _)) = StandardInformationExtended::read_from_prefix(&data[si_offset..]) else {
-            return;
+            return StdInfoParse::Malformed;
         };
 
         *result = ExtendedStandardInfo {
@@ -59,13 +125,19 @@ pub(crate) fn parse_standard_info_full(
             usn: si.usn,
             security_id: si.security_id,
             owner_id: si.owner_id,
+            quota_charged: si.quota_charged,
+            max_versions: si.max_versions,
+            version_number: si.version_number,
+            class_id: si.class_id,
             ..ExtendedStandardInfo::from_attributes(si.file_attributes)
         };
+
+        StdInfoParse::V30
     } else if value_length >= STANDARD_INFO_SIZE_V12
         && si_offset + size_of::<StandardInformation>() <= data.len()
     {
         let Ok((si, _)) = StandardInformation::read_from_prefix(&data[si_offset..]) else {
-            return;
+            return StdInfoParse::Malformed;
         };
 
         *result = ExtendedStandardInfo {
@@ -78,6 +150,12 @@ pub(crate) fn parse_standard_info_full(
             owner_id: 0,
             ..ExtendedStandardInfo::from_attributes(si.file_attributes)
         };
+
+        StdInfoParse::V12
+    } else {
+        // Attribute present, but its declared length is under the 36-byte
+        // minimum or its payload overruns the record.
+        StdInfoParse::Malformed
     }
 }
 

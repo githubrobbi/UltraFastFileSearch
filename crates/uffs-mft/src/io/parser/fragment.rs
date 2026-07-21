@@ -31,7 +31,7 @@ use crate::index::{
 };
 use crate::ntfs::{
     AttributeRecordHeader, AttributeType, FileNameAttribute, FileRecordSegmentHeader,
-    StandardInformation, file_reference_to_frs,
+    file_reference_to_frs,
 };
 
 /// Parses a record directly into an `MftIndexFragment` (for parallel parsing).
@@ -46,7 +46,13 @@ use crate::ntfs::{
 #[expect(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
-    reason = "monolithic parser kept for performance-critical hot path"
+    reason = "monolithic parser retained verbatim from when this was the bulk-load \
+              path. It is NOT a hot path any more — it is deprecated and has no \
+              callers in the workspace; the live parsers are \
+              `io::parser::unified::process_record` (bulk) and \
+              `parse::direct_index::parse_record_to_index` (USN). Kept, not \
+              restructured, because a future carving/forensics consumer wants \
+              exactly this untrusted-byte handling; see the removal-decision issue."
 )]
 #[expect(
     clippy::indexing_slicing,
@@ -128,27 +134,19 @@ pub fn parse_record_to_fragment(
 
         match AttributeType::from_u32(attr_header.type_code) {
             Some(AttributeType::StandardInformation) if attr_header.is_non_resident == 0 => {
-                let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
-                // `offset + value_offset` is byte-derived; checked, then re-validated
-                // by the `.get()` below.
-                if let Some(si_offset) = offset.checked_add(value_offset)
-                    && let Some(si_slice) = si_offset
-                        .checked_add(size_of::<StandardInformation>())
-                        .filter(|end| *end <= data.len())
-                        .and_then(|_| data.get(si_offset..))
-                {
-                    let Ok((si, _)) = StandardInformation::read_from_prefix(si_slice) else {
-                        break;
-                    };
-                    let ext =
-                        crate::ntfs::ExtendedStandardInfo::from_attributes(si.file_attributes);
-                    let mut info = StandardInfo::from_extended(&ext);
-                    info.created = si.creation_time;
-                    info.modified = si.modification_time;
-                    info.accessed = si.access_time;
-                    info.mft_changed = si.mft_change_time;
-                    std_info = info;
-                }
+                // Shared with the unified and direct-index pipelines: reads
+                // the 72-byte NTFS 3.0+ `StandardInformationExtended` form
+                // (usn/security_id/owner_id) when `value_length` says it's
+                // present, falling back to the 36-byte NTFS 1.2 form
+                // otherwise — see `parse::attribute_helpers` for the
+                // single-source-of-truth rationale. This path used to parse
+                // the v1.2 layout unconditionally, which zeroed those three
+                // fields on every modern NTFS volume.
+                let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                // Fragment records have no status field, so `StdInfoParse`
+                // is dropped here.
+                crate::parse::parse_standard_info_full(data, offset, &mut ext);
+                std_info = StandardInfo::from_extended(&ext);
             }
             Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
                 let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));

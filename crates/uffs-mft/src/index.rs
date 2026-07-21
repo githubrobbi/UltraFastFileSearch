@@ -28,6 +28,7 @@
 mod base;
 mod builder;
 mod child_order;
+mod convert;
 mod dataframe;
 mod extensions;
 mod fragment;
@@ -42,6 +43,11 @@ mod tree;
 mod types;
 mod usn;
 
+pub use self::convert::{
+    bytes_to_mb_f64, f64_to_u64, f64_to_usize, frs_to_usize, len_to_u16, len_to_u32, micros_to_i64,
+    millis_to_u64, nanos_to_u64, nonneg_to_u64, u32_as_usize, u32_to_f64, u64_to_f64, usize_to_f64,
+    usize_to_u64,
+};
 pub use self::extensions::{ExtensionIndex, ExtensionTable};
 pub use self::fragment::MftIndexFragment;
 pub use self::model::{ChildInfo, MftIndex};
@@ -53,9 +59,7 @@ pub use self::storage::IndexHeader;
 pub(crate) use self::types::cmp_ascii_case_insensitive;
 pub use self::types::{
     FileRecord, IndexNameRef, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY, ROOT_FRS,
-    SizeInfo, bytes_to_mb_f64, f64_to_u64, f64_to_usize, frs_to_usize, len_to_u16, len_to_u32,
-    micros_to_i64, millis_to_u64, nanos_to_u64, nonneg_to_u64, u32_as_usize, u32_to_f64,
-    u64_to_f64, usize_to_f64, usize_to_u64,
+    SizeInfo,
 };
 pub use self::usn::UsnApplyStats;
 

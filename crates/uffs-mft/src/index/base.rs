@@ -562,7 +562,7 @@ impl MftIndex {
     pub fn display_stats(&self) {
         use std::io::Write as _;
 
-        use super::types::u64_to_f64;
+        use super::convert::u64_to_f64;
 
         let mut out = std::io::stdout().lock();
         let sep = "═══════════════════════════════════════════════════════════════";

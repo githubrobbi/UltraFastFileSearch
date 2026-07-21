@@ -7,6 +7,8 @@ use super::*;
 use crate::frs::{Frs, ParentFrs};
 use crate::ntfs::{AttributeType, ExtendedStandardInfo, FILE_RECORD_MAGIC, NameInfo, ReparseTag};
 
+mod std_info;
+
 fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
     buffer[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
@@ -103,10 +105,6 @@ fn create_resident_attribute(attr_type: AttributeType, value: &[u8]) -> Vec<u8> 
     attr
 }
 
-#[expect(
-    clippy::single_call_fn,
-    reason = "test helper isolates FileName attribute layout for one targeted regression"
-)]
 fn create_file_name_value(parent_directory: u64, name: &str, namespace: u8) -> Vec<u8> {
     let name_utf16: Vec<u16> = name.encode_utf16().collect();
     let mut value = vec![0_u8; 66 + name_utf16.len() * 2];
@@ -213,42 +211,6 @@ fn apply_fixup_valid_record_on_unaligned_slice() {
     assert!(result, "Fixup should succeed for an unaligned record slice");
     assert_eq!(&storage[511..513], &0x1234_u16.to_le_bytes());
     assert_eq!(&storage[1023..1025], &0x5678_u16.to_le_bytes());
-}
-
-#[test]
-fn parse_standard_info_full_reads_unaligned_v30_payload() {
-    let attr_offset = 1_usize;
-    let value_offset = 24_u16;
-    let si_offset = attr_offset + usize::from(value_offset);
-    let mut data = vec![0_u8; si_offset + 72];
-    let creation_time = 116_444_736_000_000_010_i64;
-    let modification_time = 116_444_736_000_000_020_i64;
-    let mft_change_time = 116_444_736_000_000_030_i64;
-    let access_time = 116_444_736_000_000_040_i64;
-    let owner_id = 44_u32;
-    let security_id = 55_u32;
-    let usn = 66_u64;
-
-    write_u32_le(&mut data, attr_offset + 16, 72);
-    write_u16_le(&mut data, attr_offset + 20, value_offset);
-    write_i64_le(&mut data, si_offset, creation_time);
-    write_i64_le(&mut data, si_offset + 8, modification_time);
-    write_i64_le(&mut data, si_offset + 16, mft_change_time);
-    write_i64_le(&mut data, si_offset + 24, access_time);
-    write_u32_le(&mut data, si_offset + 48, owner_id);
-    write_u32_le(&mut data, si_offset + 52, security_id);
-    write_u64_le(&mut data, si_offset + 64, usn);
-
-    let mut result = ExtendedStandardInfo::default();
-    parse_standard_info_full(&data, attr_offset, &mut result);
-
-    assert_eq!(result.created, creation_time);
-    assert_eq!(result.modified, modification_time);
-    assert_eq!(result.mft_changed, mft_change_time);
-    assert_eq!(result.accessed, access_time);
-    assert_eq!(result.owner_id, owner_id);
-    assert_eq!(result.security_id, security_id);
-    assert_eq!(result.usn, usn);
 }
 
 #[test]
@@ -599,6 +561,7 @@ fn extension_merge_with_empty_base_name() {
         fn_accessed: 0,
         fn_mft_changed: 0,
         reparse_tag: 0,
+        std_info_parse: StdInfoParse::Absent,
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,
@@ -694,6 +657,7 @@ fn extension_before_base_merge() {
         fn_accessed: 0,
         fn_mft_changed: 0,
         reparse_tag: 0,
+        std_info_parse: StdInfoParse::Absent,
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,

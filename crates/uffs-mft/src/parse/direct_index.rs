@@ -267,6 +267,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     // otherwise — see `attribute_helpers::parse_standard_info_full`
                     // for the single-source-of-truth rationale.
                     let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                    // Bulk path: `StdInfoParse` has nowhere to live on the
+                    // index record, so the status is dropped here.
                     super::parse_standard_info_full(data, offset, &mut ext);
                     std_info = StandardInfo::from_extended(&ext);
                 }

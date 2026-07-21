@@ -309,7 +309,7 @@ pub use index::{
 #[cfg(windows)]
 pub use io::{
     AlignedBuffer, ExtensionAttributes, MftExtentMap, MftRecordMerger, ParseResult, ParsedColumns,
-    ParsedRecord, ReadChunk, apply_fixup, generate_read_chunks, parse_record_full,
+    ParsedRecord, ReadChunk, StdInfoParse, apply_fixup, generate_read_chunks, parse_record_full,
     parse_record_zero_alloc,
 };
 #[cfg(windows)]

@@ -93,6 +93,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     let mut names: Vec<NameInfo> = Vec::new();
     let mut streams: Vec<StreamInfo> = Vec::new();
     let mut std_info = ExtendedStandardInfo::default();
+    let mut std_info_parse = crate::parse::StdInfoParse::Absent;
     let mut primary = PrimaryNameTracker::default();
     let mut reparse_tag: u32 = 0;
     let mut reparse_size: u64 = 0; // Size of $REPARSE_POINT attribute (for junctions/symlinks)
@@ -117,7 +118,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
 
         match AttributeType::from_u32(attr_header.type_code) {
             Some(AttributeType::StandardInformation) if attr_header.is_non_resident == 0 => {
-                parse_standard_info_full(data, offset, &mut std_info);
+                std_info_parse = parse_standard_info_full(data, offset, &mut std_info);
             }
             Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
                 if let Some(name_info) = parse_file_name_full(data, offset, frs)
@@ -675,6 +676,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         fn_accessed: primary.fn_accessed,
         fn_mft_changed: primary.fn_mft_changed,
         reparse_tag,
+        std_info_parse,
         // P3 forensic fields (not populated in normal mode)
         is_deleted: false,
         is_corrupt: false,

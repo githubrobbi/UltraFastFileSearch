@@ -5,7 +5,7 @@
 
 use tracing::{debug, info, warn};
 
-use super::ParsedRecord;
+use super::{ParsedRecord, StdInfoParse};
 use crate::frs::{Frs, ParentFrs};
 use crate::ntfs::ExtendedStandardInfo;
 
@@ -47,6 +47,9 @@ pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
         fn_accessed: 0,
         fn_mft_changed: 0,
         reparse_tag: 0,
+        // Synthetic parent placeholder: there is no MFT record behind it,
+        // so there is no $SI to have parsed.
+        std_info_parse: StdInfoParse::Absent,
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,

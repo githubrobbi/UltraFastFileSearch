@@ -17,7 +17,7 @@ pub use fragment::parse_record_to_fragment;
 pub use unified::process_record;
 
 pub use crate::parse::{
-    ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord,
+    ExtensionAttributes, ParseResult, ParsedColumns, ParsedRecord, StdInfoParse,
     add_missing_parent_placeholders_to_vec, create_placeholder_record, parse_record,
     parse_record_full, parse_record_zero_alloc,
 };

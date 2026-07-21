@@ -143,6 +143,8 @@ pub fn parse_record_to_fragment(
                 // the v1.2 layout unconditionally, which zeroed those three
                 // fields on every modern NTFS volume.
                 let mut ext = crate::ntfs::ExtendedStandardInfo::default();
+                // Fragment records have no status field, so `StdInfoParse`
+                // is dropped here.
                 crate::parse::parse_standard_info_full(data, offset, &mut ext);
                 std_info = StandardInfo::from_extended(&ext);
             }

@@ -55,7 +55,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Enforce file size policy
         run: bash scripts/ci/check_file_size_policy.sh
@@ -75,7 +75,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -139,7 +139,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -180,7 +180,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -255,7 +255,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -305,7 +305,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -388,7 +388,7 @@ jobs:
           sudo docker image prune --all --force || true
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         # `rust-toolchain.toml` already pins a known-good nightly
@@ -513,7 +513,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         run: rustup show
@@ -662,7 +662,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned nightly (from rust-toolchain.toml)
         # `cargo-fuzz` requires nightly because `libfuzzer-sys` uses

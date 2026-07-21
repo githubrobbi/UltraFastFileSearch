@@ -11,7 +11,9 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 /// Parses `$STANDARD_INFORMATION` into `ExtendedStandardInfo`.
 ///
 /// Handles both NTFS 1.2 (36 bytes) and NTFS 3.0+ (72 bytes) formats.
-/// For NTFS 3.0+, also extracts `usn`, `security_id`, and `owner_id`.
+/// For NTFS 3.0+, also extracts `usn`, `security_id`, `owner_id`,
+/// `quota_charged`, `max_versions`, `version_number`, and `class_id`; these
+/// stay zero for NTFS 1.2, whose 36-byte layout has no such fields.
 ///
 /// `pub(crate)`: this is the single source of truth for `$STANDARD_INFORMATION`
 /// parsing and is also called directly from `crate::io::parser::unified`, which
@@ -59,6 +61,10 @@ pub(crate) fn parse_standard_info_full(
             usn: si.usn,
             security_id: si.security_id,
             owner_id: si.owner_id,
+            quota_charged: si.quota_charged,
+            max_versions: si.max_versions,
+            version_number: si.version_number,
+            class_id: si.class_id,
             ..ExtendedStandardInfo::from_attributes(si.file_attributes)
         };
     } else if value_length >= STANDARD_INFO_SIZE_V12

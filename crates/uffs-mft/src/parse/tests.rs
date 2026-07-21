@@ -251,6 +251,50 @@ fn parse_standard_info_full_reads_unaligned_v30_payload() {
     assert_eq!(result.usn, usn);
 }
 
+/// The NTFS 3.0+ `$SI` fields that live past the timestamps — quota, version
+/// and class bookkeeping — must survive the parse, and must stay zero for the
+/// 36-byte NTFS 1.2 layout, which has no such fields.
+#[test]
+fn parse_standard_info_full_reads_quota_and_version_fields() {
+    let attr_offset = 0_usize;
+    let value_offset = 24_u16;
+    let si_offset = attr_offset + usize::from(value_offset);
+    let mut data = vec![0_u8; si_offset + 72];
+    let max_versions = 3_u32;
+    let version_number = 2_u32;
+    let class_id = 9_u32;
+    let quota_charged = 4_096_u64;
+
+    write_u32_le(&mut data, attr_offset + 16, 72);
+    write_u16_le(&mut data, attr_offset + 20, value_offset);
+    write_u32_le(&mut data, si_offset + 36, max_versions);
+    write_u32_le(&mut data, si_offset + 40, version_number);
+    write_u32_le(&mut data, si_offset + 44, class_id);
+    write_u64_le(&mut data, si_offset + 56, quota_charged);
+
+    let mut result = ExtendedStandardInfo::default();
+    parse_standard_info_full(&data, attr_offset, &mut result);
+
+    assert_eq!(result.max_versions, max_versions);
+    assert_eq!(result.version_number, version_number);
+    assert_eq!(result.class_id, class_id);
+    assert_eq!(result.quota_charged, quota_charged);
+
+    // NTFS 1.2: the same byte positions are past the end of the attribute
+    // value, so all four must remain zero.
+    let mut v12 = vec![0_u8; si_offset + 36];
+    write_u32_le(&mut v12, attr_offset + 16, 36);
+    write_u16_le(&mut v12, attr_offset + 20, value_offset);
+
+    let mut v12_result = ExtendedStandardInfo::default();
+    parse_standard_info_full(&v12, attr_offset, &mut v12_result);
+
+    assert_eq!(v12_result.max_versions, 0);
+    assert_eq!(v12_result.version_number, 0);
+    assert_eq!(v12_result.class_id, 0);
+    assert_eq!(v12_result.quota_charged, 0);
+}
+
 #[test]
 fn parse_file_name_full_reads_unaligned_payload() {
     let attr_offset = 1_usize;

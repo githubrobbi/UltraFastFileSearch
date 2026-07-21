@@ -72,24 +72,27 @@ mod tests {
         );
     }
 
-    /// Regression pin: both production `$STANDARD_INFORMATION` parsers —
-    /// `process_record` (the default bulk-load pipeline) and
-    /// `crate::parse::parse_record_to_index` (the live USN-journal
-    /// incremental-update pipeline, wired from `usn::windows`) — must
-    /// recognize the NTFS 3.0+ 72-byte `StandardInformationExtended` form
-    /// and populate `usn`/`security_id`/`owner_id`, not just the 4
-    /// timestamps. Before this fix both silently treated every record as
-    /// NTFS 1.2 (36 bytes) and left those three fields at zero.
-    #[test]
-    fn standard_information_extended_fields_reach_both_production_parsers() {
-        let creation_time = 1_i64;
+    /// Creation timestamp stamped into [`v30_std_info_record`].
+    const V30_CREATION_TIME: i64 = 1;
+    /// Owner ID stamped into [`v30_std_info_record`].
+    const V30_OWNER_ID: u32 = 44;
+    /// Security ID stamped into [`v30_std_info_record`].
+    const V30_SECURITY_ID: u32 = 55;
+    /// USN stamped into [`v30_std_info_record`].
+    const V30_USN: u64 = 66;
+
+    /// Builds a minimal in-use base record whose `$STANDARD_INFORMATION` uses
+    /// the 72-byte NTFS 3.0+ layout, plus a 1-char `$FILE_NAME` (the
+    /// direct-index parser only accepts records that have a name).
+    fn v30_std_info_record() -> Vec<u8> {
+        let creation_time = V30_CREATION_TIME;
         let modification_time = 2_i64;
         let mft_change_time = 3_i64;
         let access_time = 4_i64;
         let file_attributes = 0x20_u32; // FILE_ATTRIBUTE_ARCHIVE
-        let owner_id = 44_u32;
-        let security_id = 55_u32;
-        let usn = 66_u64;
+        let owner_id = V30_OWNER_ID;
+        let security_id = V30_SECURITY_ID;
+        let usn = V30_USN;
 
         // 72-byte StandardInformationExtended payload, field order per
         // `ntfs::metadata::StandardInformationExtended`.
@@ -163,6 +166,25 @@ mod tests {
             .expect("record is well over 28 bytes long")
             .copy_from_slice(&total_len.to_le_bytes());
 
+        record
+    }
+
+    /// Regression pin: both production `$STANDARD_INFORMATION` parsers —
+    /// `process_record` (the default bulk-load pipeline) and
+    /// `crate::parse::parse_record_to_index` (the live USN-journal
+    /// incremental-update pipeline, wired from `usn::windows`) — must
+    /// recognize the NTFS 3.0+ 72-byte `StandardInformationExtended` form
+    /// and populate `usn`/`security_id`/`owner_id`, not just the 4
+    /// timestamps. Before this fix both silently treated every record as
+    /// NTFS 1.2 (36 bytes) and left those three fields at zero.
+    #[test]
+    fn standard_information_extended_fields_reach_both_production_parsers() {
+        let record = v30_std_info_record();
+        let creation_time = V30_CREATION_TIME;
+        let owner_id = V30_OWNER_ID;
+        let security_id = V30_SECURITY_ID;
+        let usn = V30_USN;
+
         // Path 1: process_record — the default bulk-load pipeline.
         let mut unified_index = MftIndex::new(crate::platform::DriveLetter::C);
         let mut name_buf = String::new();
@@ -192,6 +214,33 @@ mod tests {
         assert_eq!(direct_rec.stdinfo.usn, usn);
         assert_eq!(direct_rec.stdinfo.security_id, security_id);
         assert_eq!(direct_rec.stdinfo.owner_id, owner_id);
+    }
+
+    /// Regression pin for the same bug on the third parser: the deprecated,
+    /// currently caller-less `parse_record_to_fragment` hand-rolled its own
+    /// `$STANDARD_INFORMATION` read and always used the 36-byte NTFS 1.2
+    /// layout, so `usn`/`security_id`/`owner_id` came back zero on every
+    /// modern volume. It now shares `parse_standard_info_full` with the two
+    /// production parsers.
+    #[test]
+    #[expect(deprecated, reason = "testing deprecated parse_record_to_fragment API")]
+    fn standard_information_extended_fields_reach_the_fragment_parser() {
+        let record = v30_std_info_record();
+
+        let mut fragment = MftIndexFragment::with_capacity(1);
+        assert!(
+            parse_record_to_fragment(&record, 42, &mut fragment),
+            "the fixture record must be accepted by the fragment parser"
+        );
+        let frag_rec = fragment
+            .records
+            .first()
+            .expect("an accepted record must land in the fragment");
+
+        assert_eq!(frag_rec.stdinfo.created, V30_CREATION_TIME);
+        assert_eq!(frag_rec.stdinfo.usn, V30_USN);
+        assert_eq!(frag_rec.stdinfo.security_id, V30_SECURITY_ID);
+        assert_eq!(frag_rec.stdinfo.owner_id, V30_OWNER_ID);
     }
 
     /// Regression pin: a named `$DATA` (ADS) attribute's real `is_sparse`/

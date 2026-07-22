@@ -285,8 +285,16 @@ fn parse_range(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     }))
 }
 
-/// Parse "path,depth=N,top=N" or "drive,top=N" or "ancestor,record=N" → Rollup
-/// spec.
+/// Parse a `drive=<letter>` option value into a drive letter.
+fn parse_drive_letter(val: &str) -> Result<uffs_mft::platform::DriveLetter, ParseAggSpecError> {
+    val.parse()
+        .map_err(|_ignored| ParseAggSpecError::InvalidDriveLetter {
+            val: val.to_owned(),
+        })
+}
+
+/// Parse "path,depth=N,top=N" or "drive,top=N" or
+/// "ancestor,record=N,drive=C" → Rollup spec.
 ///
 /// Nested sub-aggregation syntax: `rollup:drive,sub=terms:type`
 fn parse_rollup(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
@@ -297,6 +305,7 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let mut metrics = vec![BucketMetric::Count, BucketMetric::TotalBytes];
     let mut sample_count: u8 = 0;
     let mut record_idx: Option<u32> = None;
+    let mut drive: Option<uffs_mft::platform::DriveLetter> = None;
     let mut sub_spec: Option<Box<AggregateSpec>> = None;
 
     for (key, val) in &opts {
@@ -313,6 +322,7 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
                         .map_err(invalid_int("record index", (*val).to_owned()))?,
                 );
             }
+            "drive" => drive = Some(parse_drive_letter(val)?),
             "metrics" => {
                 metrics.clear();
                 for metric in val.split('+') {
@@ -338,7 +348,11 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
         "path" | "folder" | "dir" => RollupMode::Path { depth },
         "ancestor" | "drilldown" => {
             let idx = record_idx.ok_or(ParseAggSpecError::AncestorRequiresRecord)?;
-            RollupMode::Ancestor { record_idx: idx }
+            let letter = drive.ok_or(ParseAggSpecError::AncestorRequiresDrive)?;
+            RollupMode::Ancestor {
+                record_idx: idx,
+                drive: letter,
+            }
         }
         _ => {
             return Err(ParseAggSpecError::UnknownRollupMode {

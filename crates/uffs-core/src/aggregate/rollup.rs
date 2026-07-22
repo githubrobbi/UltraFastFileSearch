@@ -15,17 +15,25 @@ use crate::compact::{CompactRecord, DriveCompactIndex};
 
 /// A rollup accumulator — groups records by a key derived from
 /// path ancestry or drive letter.
+///
+/// Group keys are drive-qualified: the drive ordinal lives in the high
+/// 32 bits and the per-drive record index (or drive-letter byte) in the
+/// low 32 bits. Bare record indices would collide across drives when the
+/// per-drive accumulators are merged, silently folding one drive's
+/// folders into another's (and resolving their names against the wrong
+/// drive's name table).
 #[derive(Debug, Clone)]
 pub struct RollupAccumulator {
-    /// Per-group statistics keyed by ancestor record index (or drive ordinal).
-    pub groups: HashMap<u32, StatsAccumulator>,
+    /// Per-group statistics keyed by drive-qualified group key
+    /// (see `encode_rollup_key`).
+    pub groups: HashMap<u64, StatsAccumulator>,
     /// Rollup mode.
     pub mode: RollupMode,
     /// Max groups to track.
     pub top: u16,
     /// Last computed group key (used by nested rollups to route
     /// sub-accumulator feeding without recomputing the key).
-    pub last_key: u32,
+    pub last_key: u64,
 }
 
 impl RollupAccumulator {
@@ -41,19 +49,45 @@ impl RollupAccumulator {
     }
 
     /// Feed a record into the rollup.
+    ///
+    /// `drive_ordinal` is the position of `drive` in the aggregation's
+    /// drive slice; it is encoded into the group key so keys from
+    /// different drives never collide and resolve against the right
+    /// drive's name table.
+    ///
+    /// Returns `true` when the record was bucketed. `Ancestor` rollups
+    /// are scoped to the drive named in the spec — records on other
+    /// drives are skipped (`false`), and callers must not feed nested
+    /// sub-accumulators for skipped records.
     #[inline]
-    pub fn feed(&mut self, record: &CompactRecord, drive: &DriveCompactIndex, idx: usize) {
-        let key = match self.mode {
+    pub fn feed(
+        &mut self,
+        record: &CompactRecord,
+        drive: &DriveCompactIndex,
+        idx: usize,
+        drive_ordinal: u8,
+    ) -> bool {
+        let low = match self.mode {
             RollupMode::Drive => {
                 u32::from(u8::try_from(u32::from(drive.letter.as_byte())).unwrap_or(b'?'))
             }
             RollupMode::Path { depth } => ancestor_at_depth(record, drive, idx, depth),
-            RollupMode::Ancestor { record_idx } => child_of_ancestor(drive, idx, record_idx),
+            RollupMode::Ancestor {
+                record_idx,
+                drive: target,
+            } => {
+                if drive.letter != target {
+                    return false;
+                }
+                child_of_ancestor(drive, idx, record_idx)
+            }
         };
+        let key = encode_rollup_key(drive_ordinal, low);
 
         self.last_key = key;
         let stats = self.groups.entry(key).or_default();
         stats.feed_value(record.size, record.allocated);
+        true
     }
 
     /// The group key computed by the most recent `feed()` call.
@@ -62,7 +96,7 @@ impl RollupAccumulator {
     /// without recomputing the key.
     #[inline]
     #[must_use]
-    pub const fn last_key(&self) -> u32 {
+    pub const fn last_key(&self) -> u64 {
         self.last_key
     }
 
@@ -81,9 +115,10 @@ impl RollupAccumulator {
     }
 
     /// Finalize: sort by total bytes descending, truncate to top-N.
-    /// Returns (key, stats) pairs.
+    /// Returns (key, stats) pairs; keys are drive-qualified
+    /// (see `encode_rollup_key`).
     #[must_use]
-    pub fn finalize(&self) -> Vec<(u32, &StatsAccumulator)> {
+    pub fn finalize(&self) -> Vec<(u64, &StatsAccumulator)> {
         let mut entries: Vec<_> = self.groups.iter().map(|(&key, val)| (key, val)).collect();
         entries.sort_by_key(|entry| core::cmp::Reverse(entry.1.sum));
         entries.truncate(usize::from(self.top));
@@ -164,26 +199,54 @@ fn child_of_ancestor(drive: &DriveCompactIndex, idx: usize, ancestor_idx: u32) -
     uffs_mft::len_to_u32(idx)
 }
 
-/// Resolve a rollup key (record index) to a display name.
-///
-/// For drive rollups, key is the drive letter ordinal.
-/// For path/ancestor rollups, key is the record index → look up name.
+/// Encode a drive-qualified rollup group key: drive ordinal in the high
+/// 32 bits, per-drive value (record index or drive-letter byte) in the
+/// low 32 bits.
+#[inline]
 #[must_use]
-pub(crate) fn resolve_rollup_key(key: u32, mode: RollupMode, drive: &DriveCompactIndex) -> String {
+pub(crate) fn encode_rollup_key(drive_ordinal: u8, low: u32) -> u64 {
+    (u64::from(drive_ordinal) << 32_u32) | u64::from(low)
+}
+
+/// Split a drive-qualified rollup key back into (drive ordinal, low bits).
+#[inline]
+#[must_use]
+fn decode_rollup_key(key: u64) -> (usize, u32) {
+    // Both conversions are infallible after the shift/mask; the fallbacks
+    // exist only to satisfy the no-panic lint policy.
+    let ordinal = usize::try_from(key >> 32_u32).unwrap_or(usize::MAX);
+    let low = u32::try_from(key & u64::from(u32::MAX)).unwrap_or(u32::MAX);
+    (ordinal, low)
+}
+
+/// Resolve a drive-qualified rollup key to a display name.
+///
+/// For drive rollups, the low bits are the drive-letter byte.
+/// For path/ancestor rollups, the low bits are a record index into the
+/// drive selected by the key's ordinal — never any other drive.
+#[must_use]
+pub(crate) fn resolve_rollup_key(
+    key: u64,
+    mode: RollupMode,
+    drives: &[&DriveCompactIndex],
+) -> String {
+    let (ordinal, low) = decode_rollup_key(key);
     match mode {
         RollupMode::Drive => {
-            let ch = char::from(u8::try_from(key).unwrap_or(b'?'));
+            let ch = char::from(u8::try_from(low).unwrap_or(b'?'));
             format!("{ch}:")
         }
         RollupMode::Path { .. } | RollupMode::Ancestor { .. } => {
-            let idx = uffs_mft::u32_as_usize(key);
-            drive.records.get(idx).map_or_else(
-                || format!("record_{key}"),
-                |record| {
-                    let name = record.name(&drive.names);
-                    format!("{}:\\{name}", drive.letter)
-                },
-            )
+            let idx = uffs_mft::u32_as_usize(low);
+            drives
+                .get(ordinal)
+                .and_then(|drive| {
+                    drive.records.get(idx).map(|record| {
+                        let name = record.name(&drive.names);
+                        format!("{}:\\{name}", drive.letter)
+                    })
+                })
+                .unwrap_or_else(|| format!("record_{low}"))
         }
     }
 }
@@ -213,8 +276,12 @@ mod tests {
 
     #[test]
     fn rollup_accumulator_ancestor_mode() {
-        let acc = RollupAccumulator::new(RollupMode::Ancestor { record_idx: 42 }, 20);
-        assert_eq!(acc.mode, RollupMode::Ancestor { record_idx: 42 });
+        let ancestor = RollupMode::Ancestor {
+            record_idx: 42,
+            drive: uffs_mft::platform::DriveLetter::C,
+        };
+        let acc = RollupAccumulator::new(ancestor, 20);
+        assert_eq!(acc.mode, ancestor);
         assert_eq!(acc.top, 20);
     }
 
@@ -371,8 +438,29 @@ mod tests {
     #[test]
     fn resolve_rollup_key_ancestor_mode() {
         let drive = build_ancestor_test_drive();
-        let mode = RollupMode::Ancestor { record_idx: 0 };
-        let name = resolve_rollup_key(1, mode, &drive);
+        let mode = RollupMode::Ancestor {
+            record_idx: 0,
+            drive: uffs_mft::platform::DriveLetter::C,
+        };
+        let name = resolve_rollup_key(encode_rollup_key(0, 1), mode, &[&drive]);
         assert_eq!(name, "C:\\folder_a");
+    }
+
+    #[test]
+    fn rollup_key_roundtrip_encodes_drive_ordinal() {
+        let key = encode_rollup_key(3, 0x00AB_CDEF);
+        assert_eq!(decode_rollup_key(key), (3, 0x00AB_CDEF));
+        // Same record index on different drives must produce distinct keys.
+        assert_ne!(encode_rollup_key(0, 7), encode_rollup_key(1, 7));
+    }
+
+    #[test]
+    fn resolve_rollup_key_out_of_range_ordinal_falls_back() {
+        let drive = build_ancestor_test_drive();
+        let mode = RollupMode::Path { depth: 1 };
+        // Ordinal 5 with only one drive present — must not resolve against
+        // the wrong drive.
+        let name = resolve_rollup_key(encode_rollup_key(5, 1), mode, &[&drive]);
+        assert_eq!(name, "record_1");
     }
 }

@@ -252,7 +252,7 @@ impl BucketRow {
 }
 
 /// Finalize accumulated results into a response.
-/// Finalize aggregate results, optionally using a cross-drive
+/// Finalize aggregate results using the cross-drive
 /// [`crate::aggregate::ExtensionMap`] for correct extension key resolution.
 pub(crate) fn finalize_with_ext_map(
     accumulators: Vec<GroupAccumulator>,
@@ -260,7 +260,7 @@ pub(crate) fn finalize_with_ext_map(
     drives: &[&DriveCompactIndex],
     options: &FinalizeOptions,
     total_matched: u64,
-    ext_map: Option<&super::ExtensionMap>,
+    ext_map: &super::ExtensionMap,
 ) -> AggregateResponse {
     let global_total_bytes = compute_global_bytes(&accumulators);
 
@@ -301,6 +301,7 @@ fn finalize_accumulator(
     total_matched: u64,
     total_bytes: u64,
     drives: &[&DriveCompactIndex],
+    ext_map: &super::ExtensionMap,
     _predicates: &[DrilldownPredicate],
 ) -> AggregateResult {
     finalize_one(
@@ -309,7 +310,7 @@ fn finalize_accumulator(
         total_bytes,
         &FinalizeOptions::default(),
         drives,
-        None,
+        ext_map,
     )
 }
 
@@ -337,7 +338,7 @@ fn finalize_one(
     total_bytes: u64,
     options: &FinalizeOptions,
     drives: &[&DriveCompactIndex],
-    ext_map: Option<&super::ExtensionMap>,
+    ext_map: &super::ExtensionMap,
 ) -> AggregateResult {
     let label = acc.label.clone();
     let field = acc.field;
@@ -385,25 +386,14 @@ fn finalize_one(
             buckets,
             boundaries,
             ..
-        } => {
-            let rows: Vec<_> = buckets
-                .iter()
-                .enumerate()
-                .filter(|(_, stats)| options.include_empty_buckets || stats.count > 0)
-                .map(|(i, stats)| {
-                    let key = format_range_key(i, &boundaries);
-                    BucketRow::from_stats(key, stats, total_matched, total_bytes)
-                })
-                .collect();
-
-            AggregateResultData::Buckets {
-                field: field_name,
-                rows,
-                other_count: 0,
-                total_groups: buckets.len(),
-                exact: true,
-            }
-        }
+        } => finalize_histogram(
+            field_name,
+            &buckets,
+            &boundaries,
+            total_matched,
+            total_bytes,
+            options,
+        ),
 
         AccumulatorKind::DateHistogram { buckets, .. } => {
             let rows: Vec<_> = buckets
@@ -438,7 +428,14 @@ fn finalize_one(
             inner,
             sub_accumulators,
             ..
-        } => finalize_rollup(&inner, sub_accumulators, total_matched, total_bytes, drives),
+        } => finalize_rollup(
+            &inner,
+            sub_accumulators,
+            total_matched,
+            total_bytes,
+            drives,
+            ext_map,
+        ),
 
         AccumulatorKind::Duplicates { inner, sample_spec } => {
             finalize_duplicates(inner, sample_spec, drives)
@@ -446,6 +443,35 @@ fn finalize_one(
     };
 
     AggregateResult { label, data }
+}
+
+/// Finalize a `Histogram` accumulator: format range keys, drop empty
+/// buckets unless requested otherwise.
+fn finalize_histogram(
+    field_name: String,
+    buckets: &[StatsAccumulator],
+    boundaries: &[u64],
+    total_matched: u64,
+    total_bytes: u64,
+    options: &FinalizeOptions,
+) -> AggregateResultData {
+    let rows: Vec<_> = buckets
+        .iter()
+        .enumerate()
+        .filter(|(_, stats)| options.include_empty_buckets || stats.count > 0)
+        .map(|(i, stats)| {
+            let key = format_range_key(i, boundaries);
+            BucketRow::from_stats(key, stats, total_matched, total_bytes)
+        })
+        .collect();
+
+    AggregateResultData::Buckets {
+        field: field_name,
+        rows,
+        other_count: 0,
+        total_groups: buckets.len(),
+        exact: true,
+    }
 }
 
 /// Finalize a `Terms` accumulator: sort buckets by count, take top-N, attach
@@ -465,7 +491,7 @@ fn finalize_terms(
     total_bytes: u64,
     options: &FinalizeOptions,
     drives: &[&DriveCompactIndex],
-    ext_map: Option<&super::ExtensionMap>,
+    ext_map: &super::ExtensionMap,
 ) -> AggregateResultData {
     let total_groups = groups.len();
 
@@ -536,32 +562,30 @@ fn finalize_terms(
 /// rollup, attach nested sub-aggregation rows where present.
 fn finalize_rollup(
     inner: &super::rollup::RollupAccumulator,
-    mut sub_accumulators: Option<std::collections::HashMap<u32, GroupAccumulator>>,
+    mut sub_accumulators: Option<std::collections::HashMap<u64, GroupAccumulator>>,
     total_matched: u64,
     total_bytes: u64,
     drives: &[&DriveCompactIndex],
+    ext_map: &super::ExtensionMap,
 ) -> AggregateResultData {
     let mode_str = match inner.mode {
         super::spec::RollupMode::Drive => "drive".to_owned(),
         super::spec::RollupMode::Path { depth } => format!("path(depth={depth})"),
-        super::spec::RollupMode::Ancestor { record_idx } => {
-            format!("ancestor(record={record_idx})")
+        super::spec::RollupMode::Ancestor { record_idx, drive } => {
+            format!("ancestor(record={record_idx}, drive={drive})")
         }
     };
     let entries = inner.finalize();
     let rows: Vec<_> = entries
         .into_iter()
         .map(|(key, stats)| {
-            let key_str = drives.first().map_or_else(
-                || format!("{key}"),
-                |drive| super::rollup::resolve_rollup_key(key, inner.mode, drive),
-            );
+            let key_str = super::rollup::resolve_rollup_key(key, inner.mode, drives);
             let mut row = BucketRow::from_stats(key_str, stats, total_matched, total_bytes);
 
             // Attach sub-aggregation from nested sub-accumulator.
             if let Some(sub_acc) = sub_accumulators.as_mut().and_then(|map| map.remove(&key)) {
                 let sub_result =
-                    finalize_accumulator(sub_acc, total_matched, total_bytes, drives, &[]);
+                    finalize_accumulator(sub_acc, total_matched, total_bytes, drives, ext_map, &[]);
                 row.sub_buckets = sub_result_to_bucket_rows(&sub_result);
             }
 
@@ -710,31 +734,19 @@ fn format_field(
 
 /// Resolve a u64 group key to a display string.
 ///
-/// For `Extension`, the key encodes `(drive_ordinal << 16) | extension_id`.
-/// The extension is resolved using the specific drive's intern table.
+/// For `Extension`, group keys are canonical cross-drive IDs from the
+/// [`super::ExtensionMap`]; the map is the only correct way to resolve
+/// them (a raw per-drive intern table would map the same id to
+/// different extensions on different drives).
 fn resolve_group_key(
     field: Option<crate::search::field::FieldId>,
     key: u64,
-    drives: &[&DriveCompactIndex],
-    ext_map: Option<&super::ExtensionMap>,
+    _drives: &[&DriveCompactIndex],
+    ext_map: &super::ExtensionMap,
 ) -> String {
     use crate::search::field::FieldId;
     match field {
-        Some(FieldId::Extension) => {
-            // When an ExtensionMap is available, group keys are canonical
-            // IDs that can be resolved directly.
-            if let Some(map) = ext_map {
-                return map.resolve(key);
-            }
-            // Legacy fallback: raw extension_id, first-drive lookup.
-            let ext_id = u16::try_from(key).unwrap_or(u16::MAX);
-            for drive in drives {
-                if let Some(name) = drive.ext_names.get(usize::from(ext_id)) {
-                    return name.to_string();
-                }
-            }
-            format!("ext:{ext_id}")
-        }
+        Some(FieldId::Extension) => ext_map.resolve(key),
         Some(FieldId::Drive) => {
             let ch = char::from(u8::try_from(key).unwrap_or(b'?'));
             format!("{ch}:")

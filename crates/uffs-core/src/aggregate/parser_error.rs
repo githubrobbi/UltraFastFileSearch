@@ -81,6 +81,17 @@ pub enum ParseAggSpecError {
     /// `record=<idx>` option (also known as `frs=` / `ancestor=`).
     #[error("rollup:ancestor requires record=<idx> option")]
     AncestorRequiresRecord,
+    /// `rollup:ancestor` was supplied without the required
+    /// `drive=<letter>` option. The record index is per-drive, so the
+    /// drilldown must name the drive it belongs to.
+    #[error("rollup:ancestor requires drive=<letter> option")]
+    AncestorRequiresDrive,
+    /// The `drive=` option did not parse as a drive letter (`A`–`Z`).
+    #[error("Invalid drive letter: `{val}`")]
+    InvalidDriveLetter {
+        /// The unrecognised drive-letter value.
+        val: String,
+    },
     /// The rollup mode did not match `path` / `folder` / `dir` /
     /// `drive` / `ancestor` / `drilldown`.
     #[error("Unknown rollup mode: `{mode}`. Use 'path', 'drive', or 'ancestor'.")]

@@ -37,7 +37,27 @@ const TS_JUN_2024: i64 = 133_633_536_000_000_000;
 ///
 /// Totals (files only): 7 files, 17400 bytes logical, 30628 bytes alloc.
 fn build_agg_test_drive() -> DriveCompactIndex {
-    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
+    build_drive_with_folder(uffs_mft::platform::DriveLetter::C, "Projects", &[
+        ("main.rs", 101, 2000, 4096, TS_JAN_2024),
+        ("lib.rs", 102, 3000, 4096, TS_JAN_2024),
+        ("util.rs", 103, 1000, 4096, TS_MAR_2024),
+        ("README.md", 104, 500, 512, TS_JAN_2024),
+        ("CHANGELOG.md", 105, 800, 1024, TS_JUN_2024),
+        ("config.toml", 106, 100, 512, TS_MAR_2024),
+        ("data.bin", 107, 10000, 16384, TS_JUN_2024),
+    ])
+}
+
+/// Build a synthetic single-folder drive: `<letter>:\<folder>\<files...>`.
+///
+/// `files` entries are `(name, frs, size, allocated, modified_timestamp)`.
+/// The folder directory record uses FRS 100.
+fn build_drive_with_folder(
+    letter: uffs_mft::platform::DriveLetter,
+    folder: &str,
+    files: &[(&str, u64, u64, u64, i64)],
+) -> DriveCompactIndex {
+    let mut idx = MftIndex::new(letter);
 
     // Root directory.
     let root_off = idx.add_name(".");
@@ -46,27 +66,15 @@ fn build_agg_test_drive() -> DriveCompactIndex {
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
     root.first_name.parent_frs = Into::into(ROOT_FRS);
 
-    // Projects directory.
-    let dir_name = "Projects";
-    let dir_off = idx.add_name(dir_name);
-    let dir_ext = idx.intern_extension(dir_name);
+    // Folder directory.
+    let dir_off = idx.add_name(folder);
+    let dir_ext = idx.intern_extension(folder);
     let dir = idx.get_or_create(100.into());
     dir.stdinfo.set_directory(true);
     dir.stdinfo.flags = 0x10;
     dir.first_name.name =
-        IndexNameRef::new(dir_off, uffs_mft::len_to_u16(dir_name.len()), true, dir_ext);
+        IndexNameRef::new(dir_off, uffs_mft::len_to_u16(folder.len()), true, dir_ext);
     dir.first_name.parent_frs = Into::into(ROOT_FRS);
-
-    // Files: (name, frs, size, allocated, modified_timestamp)
-    let files: &[(&str, u64, u64, u64, i64)] = &[
-        ("main.rs", 101, 2000, 4096, TS_JAN_2024),
-        ("lib.rs", 102, 3000, 4096, TS_JAN_2024),
-        ("util.rs", 103, 1000, 4096, TS_MAR_2024),
-        ("README.md", 104, 500, 512, TS_JAN_2024),
-        ("CHANGELOG.md", 105, 800, 1024, TS_JUN_2024),
-        ("config.toml", 106, 100, 512, TS_MAR_2024),
-        ("data.bin", 107, 10000, 16384, TS_JUN_2024),
-    ];
 
     for &(name, frs, size, allocated, modified) in files {
         let off = idx.add_name(name);
@@ -82,7 +90,7 @@ fn build_agg_test_drive() -> DriveCompactIndex {
         rec.stdinfo.modified = modified;
     }
 
-    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+    let (drive, _, _) = build_compact_index(letter, &idx);
     drive
 }
 
@@ -592,12 +600,144 @@ fn s2f4_top_folders_preset() {
 
         let total_bytes: u64 = rows.iter().map(|r| r.total_bytes).sum();
         assert!(total_bytes > 0, "top_folders should report non-zero bytes");
+
+        // Keys must be real folder paths, not raw record indices.
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert!(
+            keys.contains(&"C:\\Projects"),
+            "top_folders should resolve the folder name, got {keys:?}"
+        );
+        assert!(
+            !keys.iter().any(|k| k.starts_with("record_")),
+            "no unresolvable rollup keys expected, got {keys:?}"
+        );
     } else {
         panic!(
             "expected Rollup result from top_folders, got {:?}",
             result.data
         );
     }
+}
+
+// ── Regression: multi-drive top_folders keys must resolve per drive ──
+//
+// 2026-07-21, found live via the MCP `top_folders` preset over multiple
+// drives: rollup group keys were bare per-drive record indices. The
+// cross-drive merge collided buckets from different drives, and finalize
+// resolved every key against the FIRST drive's records — producing
+// malformed folder names (or `record_N` fallbacks). Keys must carry the
+// drive they came from and resolve against that drive's name table.
+
+#[test]
+fn top_folders_multi_drive_keys_resolve_per_drive() {
+    let drive_c = build_agg_test_drive(); // C:\Projects — 17400 bytes of files
+    // Same record layout as drive C (identical compact indices) so a bare
+    // record-index key collides across drives; different names and sizes so
+    // the collision is observable.
+    let drive_d = build_drive_with_folder(uffs_mft::platform::DriveLetter::D, "Photos", &[
+        ("img_001.jpg", 101, 5000, 8192, TS_JAN_2024),
+        ("img_002.jpg", 102, 7000, 8192, TS_MAR_2024),
+    ]);
+
+    let specs = AggregatePreset::TopFolders.expand();
+    let output = run_aggregate(&[&drive_c, &drive_d], &specs, &FinalizeOptions::default()).unwrap();
+    let result = &output.response.results[0];
+
+    let AggregateResultData::Rollup { rows, .. } = &result.data else {
+        panic!(
+            "expected Rollup result from top_folders, got {:?}",
+            result.data
+        );
+    };
+    let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+
+    // Each drive's folder must appear under its own drive letter and name.
+    let projects = rows
+        .iter()
+        .find(|r| r.key == "C:\\Projects")
+        .unwrap_or_else(|| panic!("missing C:\\Projects bucket, got {keys:?}"));
+    let photos = rows
+        .iter()
+        .find(|r| r.key == "D:\\Photos")
+        .unwrap_or_else(|| panic!("missing D:\\Photos bucket, got {keys:?}"));
+
+    // No cross-drive merging: each bucket carries only its own drive's bytes.
+    assert_eq!(
+        projects.total_bytes, 17_400,
+        "C:\\Projects must not absorb drive D records"
+    );
+    assert_eq!(
+        photos.total_bytes, 12_000,
+        "D:\\Photos must not absorb drive C records"
+    );
+
+    // And no unresolvable keys anywhere.
+    assert!(
+        !keys.iter().any(|k| k.starts_with("record_")),
+        "no unresolvable rollup keys expected, got {keys:?}"
+    );
+}
+
+// ── Regression: ancestor rollups are scoped to their drive ──────
+//
+// An ancestor drilldown's record index is per-drive. Before drive
+// scoping, the index was interpreted against EVERY scanned drive:
+// records on other drives were bucketed against an arbitrary unrelated
+// record that happened to sit at that index (or flooded the result
+// with one-file self buckets). Records on other drives must be
+// skipped entirely — in the top-level rows AND in nested sub-buckets.
+
+#[test]
+fn ancestor_rollup_scoped_to_named_drive() {
+    let drive_c = build_agg_test_drive(); // C:\Projects — 7 files, 17400 B
+    let drive_d = build_drive_with_folder(uffs_mft::platform::DriveLetter::D, "Photos", &[
+        ("img_001.jpg", 101, 5000, 8192, TS_JAN_2024),
+        ("img_002.jpg", 102, 7000, 8192, TS_MAR_2024),
+    ]);
+
+    // Find C's "Projects" record index in the compact index.
+    let projects_idx = drive_c
+        .records
+        .iter()
+        .position(|rec| rec.name(&drive_c.names) == "Projects")
+        .expect("Projects record");
+
+    // Drill into C:\Projects — its children are the 7 files themselves.
+    let spec = AggregateSpec::new(AggregateKind::Rollup {
+        mode: RollupMode::Ancestor {
+            record_idx: uffs_mft::len_to_u32(projects_idx),
+            drive: uffs_mft::platform::DriveLetter::C,
+        },
+        top: 30,
+        metrics: vec![BucketMetric::Count, BucketMetric::TotalBytes],
+        sample: None,
+        sub: None,
+    });
+    let output =
+        run_aggregate(&[&drive_c, &drive_d], &[spec], &FinalizeOptions::default()).unwrap();
+
+    let AggregateResultData::Rollup { rows, mode } = &output.response.results[0].data else {
+        panic!("expected Rollup result");
+    };
+    assert_eq!(
+        *mode,
+        format!("ancestor(record={projects_idx}, drive=C)"),
+        "mode label should carry the drive scope"
+    );
+
+    // Every bucket must be a C:\ key — drive D records are out of scope.
+    for row in rows {
+        assert!(
+            row.key.starts_with("C:\\"),
+            "ancestor drilldown into C must not bucket drive D records, got {}",
+            row.key
+        );
+    }
+    let total_bytes: u64 = rows.iter().map(|r| r.total_bytes).sum();
+    assert_eq!(
+        total_bytes, 17_400,
+        "drilldown totals must cover exactly drive C's Projects files"
+    );
 }
 
 #[test]

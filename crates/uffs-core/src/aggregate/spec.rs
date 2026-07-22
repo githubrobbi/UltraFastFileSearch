@@ -151,9 +151,16 @@ pub enum RollupMode {
     /// whichever direct child of that record they descend from.
     /// Files *directly* inside the ancestor (i.e. whose parent IS
     /// the ancestor) use themselves as the group key.
+    ///
+    /// `record_idx` is a per-drive record index, so the drilldown is
+    /// scoped to exactly one drive: records on other drives are skipped
+    /// (interpreting the index against a different drive's records
+    /// would bucket by an arbitrary unrelated folder).
     Ancestor {
         /// Record index of the ancestor to drill into.
         record_idx: u32,
+        /// The drive the ancestor's `record_idx` belongs to.
+        drive: uffs_mft::platform::DriveLetter,
     },
 }
 

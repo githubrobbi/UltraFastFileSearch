@@ -312,8 +312,9 @@ pub use io::{
     ParsedRecord, ReadChunk, StdInfoParse, apply_fixup, generate_read_chunks, parse_record_full,
     parse_record_zero_alloc,
 };
+pub use lcn_resolve::first_data_lcn;
 #[cfg(windows)]
-pub use lcn_resolve::resolve_frs_to_lcn;
+pub use lcn_resolve::{for_each_record, resolve_frs_to_lcn};
 // Re-export NTFS constants and types (pure Rust data structures, cross-platform)
 pub use ntfs::SECTOR_SIZE;
 pub use ntfs::{

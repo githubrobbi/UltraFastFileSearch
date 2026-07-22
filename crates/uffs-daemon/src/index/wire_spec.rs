@@ -94,6 +94,11 @@ pub(crate) enum WireSpecError {
         /// The unrecognised kind identifier as supplied on the wire.
         kind: String,
     },
+    /// An `ancestor`/`drilldown` rollup arrived without a usable
+    /// `drive` slot. The rollup's record index is per-drive, so the
+    /// drilldown must name the drive it belongs to.
+    #[error("ancestor rollup requires a valid 'drive' letter")]
+    AncestorDriveMissing,
 }
 
 impl IndexManager {
@@ -211,9 +216,16 @@ impl IndexManager {
                 let mode = match mode_str {
                     "drive" => RollupMode::Drive,
                     "ancestor" | "drilldown" => {
-                        // Use interval field as the record index.
+                        // Use interval field as the record index. The
+                        // index is per-drive, so the wire spec must also
+                        // name the drive it belongs to.
                         let record_idx = u32::try_from(ws.interval.unwrap_or(0)).unwrap_or(0);
-                        RollupMode::Ancestor { record_idx }
+                        let drive = ws
+                            .drive
+                            .as_deref()
+                            .and_then(|letter| letter.parse().ok())
+                            .ok_or(WireSpecError::AncestorDriveMissing)?;
+                        RollupMode::Ancestor { record_idx, drive }
                     }
                     _ => {
                         let depth = u32::try_from(ws.interval.unwrap_or(1)).unwrap_or(1);
@@ -480,5 +492,29 @@ mod tests {
             kind: "bogus-kind".to_owned(),
         },);
         assert_eq!(err.to_string(), "unknown aggregate kind: `bogus-kind`");
+    }
+
+    #[test]
+    fn ancestor_rollup_without_drive_errors() {
+        let mut spec = ws("rollup");
+        spec.field = Some("ancestor".to_owned());
+        spec.interval = Some(42);
+        let err = IndexManager::convert_wire_spec(&spec)
+            .expect_err("ancestor rollup without 'drive' must error");
+        assert_eq!(err, WireSpecError::AncestorDriveMissing);
+        assert_eq!(
+            err.to_string(),
+            "ancestor rollup requires a valid 'drive' letter"
+        );
+    }
+
+    #[test]
+    fn ancestor_rollup_with_drive_converts() {
+        let mut spec = ws("rollup");
+        spec.field = Some("ancestor".to_owned());
+        spec.interval = Some(42);
+        spec.drive = Some("C".to_owned());
+        let specs = IndexManager::convert_wire_spec(&spec).expect("valid ancestor rollup");
+        assert_eq!(specs.len(), 1);
     }
 }

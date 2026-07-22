@@ -225,5 +225,6 @@ fn default_agg_spec() -> AggregateSpecWire {
         sample_desc: None,
         verify: None,
         verify_bytes: None,
+        drive: None,
     }
 }

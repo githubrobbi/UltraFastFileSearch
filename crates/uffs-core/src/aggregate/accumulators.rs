@@ -201,9 +201,10 @@ pub enum AccumulatorKind {
         inner: super::rollup::RollupAccumulator,
         /// Requested metrics.
         metrics: Vec<BucketMetric>,
-        /// Per-group sub-accumulators for nested rollups.
+        /// Per-group sub-accumulators for nested rollups, keyed by the
+        /// drive-qualified rollup group key.
         /// `None` when no sub-aggregation is requested.
-        sub_accumulators: Option<std::collections::HashMap<u32, GroupAccumulator>>,
+        sub_accumulators: Option<std::collections::HashMap<u64, GroupAccumulator>>,
         /// The sub-aggregation spec (cloned from `AggregateKind::Rollup.sub`).
         sub_kind: Option<super::spec::AggregateSpec>,
     },
@@ -313,7 +314,7 @@ impl GroupAccumulator {
             } => {
                 let sub_accumulators = sub
                     .as_ref()
-                    .map(|_| std::collections::HashMap::<u32, Self>::new());
+                    .map(|_| std::collections::HashMap::<u64, Self>::new());
                 let sub_kind = sub.as_deref().cloned();
                 (
                     AccumulatorKind::Rollup {
@@ -369,7 +370,7 @@ impl GroupAccumulator {
         drive: &DriveCompactIndex,
         idx: usize,
         drive_ordinal: u8,
-        ext_map: Option<&super::ExtensionMap>,
+        ext_map: &super::ExtensionMap,
     ) {
         let field = self.field;
         match &mut self.kind {
@@ -438,12 +439,16 @@ impl GroupAccumulator {
                 ..
             } => {
                 // Compute group key and feed the top-level stats.
-                inner.feed(record, drive, idx);
+                // `feed` returns false when the record is out of scope
+                // (ancestor rollups skip records on other drives) — such
+                // records must not reach the sub-accumulators either.
+                let bucketed = inner.feed(record, drive, idx, drive_ordinal);
 
                 // If nested sub-aggregation is configured, feed the
                 // per-group sub-accumulator.
-                if let (Some(sub_map), Some(sub_spec)) =
-                    (sub_accumulators.as_mut(), sub_kind.as_ref())
+                if bucketed
+                    && let (Some(sub_map), Some(sub_spec)) =
+                        (sub_accumulators.as_mut(), sub_kind.as_ref())
                 {
                     let key = inner.last_key();
                     let sub_acc = sub_map
@@ -603,22 +608,21 @@ const fn extract_timestamp(field: Option<FieldId>, record: &CompactRecord) -> i6
 
 /// Extract a group key (encoded as u64) from a record.
 ///
-/// For `Extension`, uses the `ExtensionMap` (when provided) to return a
-/// canonical cross-drive extension ID.  This ensures that `"exe"` on
-/// drive C and `"exe"` on drive D share the same group key.
+/// For `Extension`, uses the `ExtensionMap` to return a canonical
+/// cross-drive extension ID.  This ensures that `"exe"` on drive C and
+/// `"exe"` on drive D share the same group key.  The map is required:
+/// raw per-drive `extension_id`s must never enter a cross-drive merge
+/// key (the same id means different extensions on different drives).
 #[inline]
 fn extract_group_key(
     field: Option<FieldId>,
     record: &CompactRecord,
     drive: &DriveCompactIndex,
     drive_ordinal: u8,
-    ext_map: Option<&super::ExtensionMap>,
+    ext_map: &super::ExtensionMap,
 ) -> u64 {
     match field {
-        Some(FieldId::Extension) => ext_map.map_or_else(
-            || u64::from(record.extension_id),
-            |map| map.canonical_id(drive_ordinal, record.extension_id),
-        ),
+        Some(FieldId::Extension) => ext_map.canonical_id(drive_ordinal, record.extension_id),
         Some(FieldId::Drive) => u64::from(u32::from(drive.letter.as_byte())),
         Some(FieldId::Type) => {
             use crate::search::derived::{

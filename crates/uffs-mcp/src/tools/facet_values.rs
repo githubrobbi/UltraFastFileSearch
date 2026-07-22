@@ -85,6 +85,7 @@ pub(crate) async fn run(
         sample_desc: None,
         verify: None,
         verify_bytes: None,
+        drive: None,
     };
 
     let mut params = SearchParams {

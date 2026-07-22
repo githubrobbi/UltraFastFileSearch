@@ -223,9 +223,12 @@ fn parse_rollup_dir_alias() {
 
 #[test]
 fn parse_rollup_ancestor_mode() {
-    let spec = parse_agg_spec("rollup:ancestor,record=42,top=10").unwrap();
+    let spec = parse_agg_spec("rollup:ancestor,record=42,drive=C,top=10").unwrap();
     if let AggregateKind::Rollup { mode, top, .. } = &spec.kind {
-        assert_eq!(*mode, RollupMode::Ancestor { record_idx: 42 });
+        assert_eq!(*mode, RollupMode::Ancestor {
+            record_idx: 42,
+            drive: uffs_mft::platform::DriveLetter::C,
+        });
         assert_eq!(*top, 10);
     } else {
         panic!("expected Rollup");
@@ -234,9 +237,12 @@ fn parse_rollup_ancestor_mode() {
 
 #[test]
 fn parse_rollup_ancestor_frs_alias() {
-    let spec = parse_agg_spec("rollup:ancestor,frs=100").unwrap();
+    let spec = parse_agg_spec("rollup:ancestor,frs=100,drive=D").unwrap();
     if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-        assert_eq!(*mode, RollupMode::Ancestor { record_idx: 100 });
+        assert_eq!(*mode, RollupMode::Ancestor {
+            record_idx: 100,
+            drive: uffs_mft::platform::DriveLetter::D,
+        });
     } else {
         panic!("expected Rollup");
     }
@@ -244,15 +250,36 @@ fn parse_rollup_ancestor_frs_alias() {
 
 #[test]
 fn parse_rollup_ancestor_missing_record_errors() {
-    let err = parse_agg_spec("rollup:ancestor,top=10");
+    let err = parse_agg_spec("rollup:ancestor,drive=C,top=10");
     assert!(err.is_err(), "ancestor without record= should fail");
 }
 
 #[test]
+fn parse_rollup_ancestor_missing_drive_errors() {
+    let err = parse_agg_spec("rollup:ancestor,record=42,top=10").expect_err("must error");
+    assert_eq!(
+        err,
+        ParseAggSpecError::AncestorRequiresDrive,
+        "ancestor without drive= should fail — the record index is per-drive"
+    );
+}
+
+#[test]
+fn parse_rollup_ancestor_invalid_drive_errors() {
+    let err = parse_agg_spec("rollup:ancestor,record=42,drive=nope").expect_err("must error");
+    assert_eq!(err, ParseAggSpecError::InvalidDriveLetter {
+        val: "nope".to_owned(),
+    });
+}
+
+#[test]
 fn parse_rollup_drilldown_alias() {
-    let spec = parse_agg_spec("rollup:drilldown,record=5").unwrap();
+    let spec = parse_agg_spec("rollup:drilldown,record=5,drive=C").unwrap();
     if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-        assert_eq!(*mode, RollupMode::Ancestor { record_idx: 5 });
+        assert_eq!(*mode, RollupMode::Ancestor {
+            record_idx: 5,
+            drive: uffs_mft::platform::DriveLetter::C,
+        });
     } else {
         panic!("expected Rollup");
     }

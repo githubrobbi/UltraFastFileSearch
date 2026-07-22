@@ -62,6 +62,13 @@ pub struct AggregateSpecWire {
     /// Byte count for `verify=first_bytes` mode (default: 4096).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify_bytes: Option<u32>,
+    /// Drive letter scoping an `ancestor`/`drilldown` rollup (e.g. `"C"`).
+    ///
+    /// Required when `kind` is `"rollup"` with `field` = `"ancestor"` —
+    /// the rollup's record index is per-drive, so the drilldown must
+    /// name the drive it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<String>,
 }
 
 /// Wire format for an aggregate result.

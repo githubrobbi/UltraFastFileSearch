@@ -253,7 +253,7 @@ pub fn run_aggregate(
         .map(|(drive_ordinal, drive)| {
             let ordinal = u8::try_from(drive_ordinal).unwrap_or(u8::MAX);
             let per_drive_start = std::time::Instant::now();
-            let (local, scanned, matched) = scan_drive(drive, &plan, ordinal, Some(&ext_map));
+            let (local, scanned, matched) = scan_drive(drive, &plan, ordinal, &ext_map);
             tracing::debug!(
                 drive = %drive.letter,
                 scanned,
@@ -275,14 +275,8 @@ pub fn run_aggregate(
     let scan_ms = start.elapsed().as_millis();
 
     // 3. Finalize
-    let response = finalize::finalize_with_ext_map(
-        merged,
-        &plan,
-        drives,
-        options,
-        total_matched,
-        Some(&ext_map),
-    );
+    let response =
+        finalize::finalize_with_ext_map(merged, &plan, drives, options, total_matched, &ext_map);
     let total_ms = start.elapsed().as_millis();
     tracing::info!(
         drives = drives.len(),
@@ -367,7 +361,7 @@ pub(crate) fn run_aggregate_filtered(
                 }
                 matched += 1;
                 for acc in &mut local {
-                    acc.feed(record, drive, idx, ordinal, Some(&ext_map));
+                    acc.feed(record, drive, idx, ordinal, &ext_map);
                 }
             }
             (local, scanned, matched)
@@ -384,14 +378,8 @@ pub(crate) fn run_aggregate_filtered(
     let t_fin = std::time::Instant::now();
 
     // 3. Finalize.
-    let response = finalize::finalize_with_ext_map(
-        merged,
-        &plan,
-        drives,
-        options,
-        total_matched,
-        Some(&ext_map),
-    );
+    let response =
+        finalize::finalize_with_ext_map(merged, &plan, drives, options, total_matched, &ext_map);
     tracing::info!(
         drives = drives.len(),
         records_scanned = total_scanned,
@@ -511,7 +499,7 @@ pub fn run_aggregate_with_filters(
 
                 matched += 1;
                 for acc in &mut local {
-                    acc.feed(record, drive, idx, ordinal, Some(&ext_map));
+                    acc.feed(record, drive, idx, ordinal, &ext_map);
                 }
             }
             (local, scanned, matched)
@@ -528,14 +516,8 @@ pub fn run_aggregate_with_filters(
     let t_fin = std::time::Instant::now();
 
     // 3. Finalize.
-    let response = finalize::finalize_with_ext_map(
-        merged,
-        &plan,
-        drives,
-        options,
-        total_matched,
-        Some(&ext_map),
-    );
+    let response =
+        finalize::finalize_with_ext_map(merged, &plan, drives, options, total_matched, &ext_map);
     tracing::info!(
         drives = drives.len(),
         records_scanned = total_scanned,
@@ -591,7 +573,7 @@ fn scan_drive(
     drive: &DriveCompactIndex,
     plan: &AggregatePlan,
     drive_ordinal: u8,
-    ext_map: Option<&ExtensionMap>,
+    ext_map: &ExtensionMap,
 ) -> (Vec<GroupAccumulator>, u64, u64) {
     let records = &drive.records;
     let mut accumulators = plan.create_accumulators();

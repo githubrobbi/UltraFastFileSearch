@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.29] - 2026-07-22
+
+### Added
+
+- core: expose apply_search_filters as a public API (#568)
+- mft: extended $SI fields, parse status, and macOS target-cpu fix (#574)
+
+### Fixed
+
+- test: stop asserting concurrency via a wall-clock threshold (#566)
+- ci: don't let a transient GitHub API error fail the commitlint gate (#565)
+- mft: default-pipeline MFT correctness gaps + panic hardening (#569)
+- core: drive-qualify aggregate rollup and duplicate keys (#575)
+
 ## [0.6.28] - 2026-07-19
 
 ### Added
@@ -2707,7 +2721,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.28...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.29...HEAD
+[0.6.29]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.25...v0.6.26

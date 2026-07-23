@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.30] - 2026-07-23
+
+### Added
+
+- mft: for_each_record — streaming fixed-up targeted record reads (#577)
+
+### Fixed
+
+- mft: real overlapped re-open for snapshot devices + snapshot-correct $MFT fallback (#578)
+- mft: demote IOCP-fallback chain messages from WARN to INFO (#579)
+- version: re-stamp build info on every HEAD movement via the reflog
+
 ## [0.6.29] - 2026-07-22
 
 ### Added
@@ -2721,7 +2733,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.29...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.30...HEAD
+[0.6.30]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.26...v0.6.27

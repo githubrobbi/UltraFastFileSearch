@@ -4390,7 +4390,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uffs-bench"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "chrono",
  "clap",
@@ -4407,7 +4407,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-broker"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "serde",
@@ -4425,14 +4425,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-broker-protocol"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "uffs-ci-pipeline"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4451,7 +4451,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-cli"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4473,7 +4473,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-client"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "dirs-next",
  "libc",
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-core"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4524,7 +4524,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-daemon"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -4557,7 +4557,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-diag"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4572,7 +4572,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-format"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "chrono",
  "itoa",
@@ -4583,7 +4583,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-gen-hooks"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -4595,7 +4595,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-gen-workflow"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-manifest-audit"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -4620,7 +4620,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mcp"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "axum",
@@ -4644,7 +4644,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-mft"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -4685,14 +4685,14 @@ dependencies = [
 
 [[package]]
 name = "uffs-polars"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "polars",
 ]
 
 [[package]]
 name = "uffs-security"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "aes-gcm",
  "dirs-next",
@@ -4707,22 +4707,22 @@ dependencies = [
 
 [[package]]
 name = "uffs-statusfmt"
-version = "0.6.29"
+version = "0.6.30"
 
 [[package]]
 name = "uffs-text"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "bytemuck",
 ]
 
 [[package]]
 name = "uffs-time"
-version = "0.6.29"
+version = "0.6.30"
 
 [[package]]
 name = "uffs-update"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "dirs-next",
@@ -4741,11 +4741,11 @@ dependencies = [
 
 [[package]]
 name = "uffs-version"
-version = "0.6.29"
+version = "0.6.30"
 
 [[package]]
 name = "uffs-vss-requestor"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "cc",
@@ -4757,7 +4757,7 @@ dependencies = [
 
 [[package]]
 name = "uffs-winsvc"
-version = "0.6.29"
+version = "0.6.30"
 dependencies = [
  "anyhow",
  "windows 0.62.2",

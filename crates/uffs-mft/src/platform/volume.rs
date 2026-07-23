@@ -884,6 +884,27 @@ impl VolumeHandle {
 
     /// Opens a new handle to the same volume with `FILE_FLAG_OVERLAPPED`.
     ///
+    /// Broker-adopted handles are duplicated instead of re-opened: this
+    /// process isn't elevated enough to `CreateFileW` the volume itself
+    /// (non-elevated → access-denied), and the broker's handle is
+    /// already opened overlapped, so an independent duplicate is both
+    /// sufficient and the only option.
+    ///
+    /// Every other handle gets a **real re-open of the exact original
+    /// path** ([`Self::reopen_path`]) with `FILE_FLAG_OVERLAPPED`. Two
+    /// traps that combination avoids:
+    ///
+    /// - re-deriving `\\.\<letter>:` would silently switch a snapshot-device
+    ///   handle ([`Self::open_device_path`]) to the *live* volume — the
+    ///   wrong-device class already fixed in `get_mft_extents` /
+    ///   [`Self::open_unbuffered_handle`];
+    /// - `DuplicateHandle` preserves the original open's *synchronous* mode —
+    ///   overlapped-ness is a property of the file object fixed at
+    ///   `CreateFileW` time, so a duplicate is **not** overlapped and IOCP
+    ///   reads on it fail with `ERROR_INVALID_PARAMETER` (`0x80070057`). This
+    ///   was exactly the observed first-try IOCP failure on VSS snapshot
+    ///   devices before this re-open existed.
+    ///
     /// # Errors
     ///
     /// Returns `MftError::VolumeOpen` if `CreateFileW` fails.
@@ -891,32 +912,18 @@ impl VolumeHandle {
     pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
 
-        // Duplicate instead of re-opening `\\.\<letter>:` whenever that
-        // would be wrong or unsafe to do:
-        // - `broker_backed`: this process isn't elevated enough to `CreateFileW` the
-        //   volume itself (non-elevated → access-denied); the broker/adopted handle is
-        //   already overlapped, so hand back an independent duplicate the caller can
-        //   close on its own.
-        // - `!is_live_letter`: this handle doesn't correspond to the live volume at all
-        //   (e.g. a VSS snapshot device from `open_device_path`) — re-deriving
-        //   `\\.\<letter>:` here would silently open the *live* volume instead, the
-        //   same class of bug already fixed in
-        //   `get_mft_extents`/`get_mft_bitmap_internal`.
-        if self.broker_backed || !self.is_live_letter {
+        if self.broker_backed {
             return self.duplicate();
         }
 
-        let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
-            .encode_utf16()
-            .chain(core::iter::once(0))
-            .collect();
+        let path = Self::reopen_path(self.opened_path.as_deref(), volume);
 
-        // SAFETY: `volume_path` is UTF-16 and NUL-terminated for the duration of
+        // SAFETY: `path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are passed as `None`, and ownership of
         // any returned handle is transferred to the caller.
         let handle = unsafe {
             CreateFileW(
-                PCWSTR::from_raw(volume_path.as_ptr()),
+                PCWSTR::from_raw(path.as_ptr()),
                 FILE_READ_DATA | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 None,
@@ -997,10 +1004,8 @@ impl VolumeHandle {
         enable_backup_privilege();
 
         let volume = self.volume;
-        let mft_path: Vec<u16> = format!("{volume}:\\$MFT")
-            .encode_utf16()
-            .chain(core::iter::once(0))
-            .collect();
+        let mft_path =
+            Self::mft_reopen_path(self.opened_path.as_deref(), self.is_live_letter, volume);
 
         // SAFETY: `mft_path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are passed as `None`, and ownership of
@@ -1048,7 +1053,7 @@ impl VolumeHandle {
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub(crate) fn open_unbuffered_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
-        let path = Self::unbuffered_reopen_path(self.opened_path.as_deref(), volume);
+        let path = Self::reopen_path(self.opened_path.as_deref(), volume);
 
         // SAFETY: `path` is UTF-16 and NUL-terminated for the duration of
         // the call, optional pointers are passed as `None`, and the
@@ -1071,14 +1076,15 @@ impl VolumeHandle {
         })
     }
 
-    /// The exact NUL-terminated UTF-16 path [`Self::open_unbuffered_handle`]
-    /// re-opens: `opened_path` when present, else `"\\.\{volume}:"`
-    /// re-derived from the drive letter (only correct when there is no
-    /// stored path — i.e. a broker-adopted/duplicated handle, which is
-    /// always the live volume). Extracted from
-    /// [`Self::open_unbuffered_handle`] so this path-selection decision is
+    /// The exact NUL-terminated UTF-16 path a re-open of this volume
+    /// must use — shared by [`Self::open_unbuffered_handle`] and
+    /// [`Self::open_overlapped_handle`]: `opened_path` when present,
+    /// else `"\\.\{volume}:"` re-derived from the drive letter (only
+    /// correct when there is no stored path — i.e. a
+    /// broker-adopted/duplicated handle, which is always the live
+    /// volume). Extracted so this path-selection decision is
     /// unit-testable without touching the filesystem.
-    fn unbuffered_reopen_path(opened_path: Option<&[u16]>, volume: super::DriveLetter) -> Vec<u16> {
+    fn reopen_path(opened_path: Option<&[u16]>, volume: super::DriveLetter) -> Vec<u16> {
         opened_path.map_or_else(
             || {
                 format!("\\\\.\\{volume}:")
@@ -1088,6 +1094,39 @@ impl VolumeHandle {
             },
             <[u16]>::to_vec,
         )
+    }
+
+    /// The NUL-terminated UTF-16 path [`Self::open_mft_read_handle`]
+    /// opens `$MFT` through.
+    ///
+    /// For a live-letter handle this is the classic `"{volume}:\$MFT"`.
+    /// For a device-path handle (VSS snapshot) it is
+    /// `"<opened_path>\$MFT"` — appending to the stored snapshot device
+    /// path (`\\?\GLOBALROOT\…\$MFT` is a valid file path on a shadow
+    /// copy). Re-deriving from the drive letter here would silently open
+    /// the **live** volume's `$MFT` while the caller believes it is
+    /// reading the snapshot — the wrong-device class already fixed for
+    /// the unbuffered and overlapped re-opens.
+    fn mft_reopen_path(
+        opened_path: Option<&[u16]>,
+        is_live_letter: bool,
+        volume: super::DriveLetter,
+    ) -> Vec<u16> {
+        match opened_path {
+            Some(device_path) if !is_live_letter => {
+                let mut path: Vec<u16> = device_path
+                    .strip_suffix(&[0])
+                    .unwrap_or(device_path)
+                    .to_vec();
+                path.extend("\\$MFT".encode_utf16());
+                path.push(0);
+                path
+            }
+            _ => format!("{volume}:\\$MFT")
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect(),
+        }
     }
 
     /// Returns the byte offset of the MFT on the volume.
@@ -1865,25 +1904,30 @@ mod tests {
         );
     }
 
-    // ── unbuffered_reopen_path regression tests ──────────────────────────
+    // ── reopen_path regression tests ─────────────────────────────────────
     //
-    // Pins the write-protect-fallback fix: re-opening a snapshot-device
-    // handle for FILE_FLAG_NO_BUFFERING must re-open the *same* device
-    // path, never silently fall back to the live volume's "\\.\{letter}:"
-    // — that would defeat point-in-time consistency exactly like the bug
+    // Pins the snapshot re-open fix, now shared by BOTH the
+    // write-protect fallback (FILE_FLAG_NO_BUFFERING) and the IOCP
+    // re-open (FILE_FLAG_OVERLAPPED): re-opening a snapshot-device
+    // handle must re-open the *same* device path, never silently fall
+    // back to the live volume's "\\.\{letter}:" — that would defeat
+    // point-in-time consistency exactly like the bug
     // `Self::from_duplicated_handle`'s own doc comment describes for the
-    // async re-open path.
+    // async re-open path. (The overlapped path previously used
+    // `DuplicateHandle` instead, which preserves the original open's
+    // synchronous mode — IOCP reads on the duplicate failed with
+    // ERROR_INVALID_PARAMETER on every VSS snapshot device.)
 
     fn wide_nul_terminated(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(core::iter::once(0)).collect()
     }
 
     #[test]
-    fn unbuffered_reopen_path_uses_the_stored_snapshot_device_path() {
+    fn reopen_path_uses_the_stored_snapshot_device_path() {
         let snapshot_path = wide_nul_terminated(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy7");
         let volume = super::super::DriveLetter::parse('C').expect("valid drive letter");
 
-        let reopen_path = VolumeHandle::unbuffered_reopen_path(Some(&snapshot_path), volume);
+        let reopen_path = VolumeHandle::reopen_path(Some(&snapshot_path), volume);
 
         assert_eq!(
             reopen_path, snapshot_path,
@@ -1893,16 +1937,55 @@ mod tests {
     }
 
     #[test]
-    fn unbuffered_reopen_path_falls_back_to_the_live_volume_when_no_path_is_stored() {
+    fn reopen_path_falls_back_to_the_live_volume_when_no_path_is_stored() {
         let volume = super::super::DriveLetter::parse('D').expect("valid drive letter");
 
-        let reopen_path = VolumeHandle::unbuffered_reopen_path(None, volume);
+        let reopen_path = VolumeHandle::reopen_path(None, volume);
 
         assert_eq!(
             reopen_path,
             wide_nul_terminated(r"\\.\D:"),
             "a broker-adopted/duplicated handle has no stored path, but is always the live \
              volume, so re-deriving the live-volume path is correct here"
+        );
+    }
+
+    // ── mft_reopen_path regression tests ─────────────────────────────────
+    //
+    // Pins the $MFT-file fallback (Fallback 1) against the same
+    // wrong-device class: on a snapshot-device handle, "{letter}:\$MFT"
+    // re-derived from the drive letter opens the LIVE volume's $MFT —
+    // silently indexing the wrong volume if it ever succeeds.
+
+    #[test]
+    fn mft_reopen_path_appends_to_the_stored_snapshot_device_path() {
+        let snapshot_path = wide_nul_terminated(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy7");
+        let volume = super::super::DriveLetter::parse('C').expect("valid drive letter");
+
+        let mft_path = VolumeHandle::mft_reopen_path(Some(&snapshot_path), false, volume);
+
+        assert_eq!(
+            mft_path,
+            wide_nul_terminated(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy7\$MFT"),
+            "a snapshot-device handle must open the SNAPSHOT's $MFT, never the live volume's"
+        );
+    }
+
+    #[test]
+    fn mft_reopen_path_uses_the_drive_letter_for_live_handles() {
+        let volume = super::super::DriveLetter::parse('C').expect("valid drive letter");
+        let live_path = wide_nul_terminated(r"\\.\C:");
+
+        // Live-letter handle with a stored path: the letter form is
+        // canonical (unchanged from the pre-fix behaviour).
+        assert_eq!(
+            VolumeHandle::mft_reopen_path(Some(&live_path), true, volume),
+            wide_nul_terminated(r"C:\$MFT"),
+        );
+        // Broker-adopted handle (no stored path): always the live volume.
+        assert_eq!(
+            VolumeHandle::mft_reopen_path(None, true, volume),
+            wide_nul_terminated(r"C:\$MFT"),
         );
     }
 }

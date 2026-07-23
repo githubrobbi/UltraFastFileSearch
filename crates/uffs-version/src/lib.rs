@@ -152,7 +152,15 @@ pub fn emit_build_env() {
     println!("cargo:rustc-env=UFFS_TARGET={}", env_or_unknown("TARGET"));
     println!("cargo:rustc-env=UFFS_PROFILE={}", env_or_unknown("PROFILE"));
     // Re-stamp when the checked-out commit or the compiler changes.
+    //
+    // `.git/HEAD` alone is not enough: a pull, commit, or reset onto the
+    // *current* branch leaves HEAD's symref unchanged (`ref: refs/heads/...`),
+    // so the SHA would go stale and `--version` would report the previous
+    // build's commit — exactly the "am I running the fix?" trap this stamp
+    // exists to prevent. `.git/logs/HEAD` (the reflog) appends on every HEAD
+    // movement, so it is the reliable trigger.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
     println!("cargo:rerun-if-env-changed=RUSTC");
 }
 

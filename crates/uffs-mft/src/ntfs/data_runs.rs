@@ -60,60 +60,104 @@ impl DataRun {
 }
 
 /// Parses data runs (mapping pairs) from a non-resident attribute.
+///
+/// Convenience over [`parse_data_runs_iter`] that collects the whole
+/// runlist. Prefer the iterator on hot paths that only need a prefix of
+/// the runs (e.g. the first non-sparse LCN) — it decodes lazily and
+/// never allocates.
 #[must_use]
-#[expect(clippy::similar_names, reason = "vcn and lcn are standard NTFS terms")]
 pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
-    let mut runs = Vec::new();
-    let mut offset = 0;
-    let mut current_vcn = lowest_vcn;
-    let mut current_lcn: i64 = 0;
+    parse_data_runs_iter(data, lowest_vcn).collect()
+}
 
-    while let Some(&header) = data.get(offset) {
+/// Lazily parses data runs (mapping pairs) from a non-resident
+/// attribute's mapping-pairs bytes.
+///
+/// Decodes one run per `next()` call with no heap allocation. Stops at
+/// the runlist terminator or at the first malformed/truncated field
+/// (identical stopping behaviour to [`parse_data_runs`], which is this
+/// iterator collected).
+#[must_use]
+pub const fn parse_data_runs_iter(data: &[u8], lowest_vcn: i64) -> DataRunIter<'_> {
+    DataRunIter {
+        data,
+        offset: 0,
+        current_vcn: lowest_vcn,
+        current_lcn: 0,
+    }
+}
+
+/// Lazy decoder over NTFS mapping-pairs bytes — see
+/// [`parse_data_runs_iter`].
+#[derive(Debug, Clone)]
+pub struct DataRunIter<'a> {
+    /// The mapping-pairs bytes (starting at the first run header).
+    data: &'a [u8],
+    /// Byte offset of the next run header; pushed past the end of
+    /// `data` on termination so the iterator is fused.
+    offset: usize,
+    /// Running VCN total across decoded runs.
+    current_vcn: i64,
+    /// Running LCN total across decoded runs (deltas are relative).
+    current_lcn: i64,
+}
+
+impl Iterator for DataRunIter<'_> {
+    type Item = DataRun;
+
+    fn next(&mut self) -> Option<DataRun> {
+        let &header = self.data.get(self.offset)?;
         if header == 0 {
-            break;
+            self.offset = self.data.len();
+            return None;
         }
 
         let length_size = (header & 0x0F) as usize;
         let offset_size = ((header >> 4_i32) & 0x0F) as usize;
-        offset += 1;
+        let mut offset = self.offset + 1;
 
-        let Some(length_bytes) = data.get(offset..offset + length_size) else {
-            break;
+        let Some(length_bytes) = self.data.get(offset..offset + length_size) else {
+            self.offset = self.data.len();
+            return None;
         };
         let run_length = parse_variable_length_unsigned(length_bytes);
         offset += length_size;
 
         let lcn_delta = if offset_size > 0 {
-            let Some(offset_bytes) = data.get(offset..offset + offset_size) else {
-                break;
+            let Some(offset_bytes) = self.data.get(offset..offset + offset_size) else {
+                self.offset = self.data.len();
+                return None;
             };
             parse_variable_length_signed(offset_bytes)
         } else {
             0
         };
         offset += offset_size;
-        current_lcn += lcn_delta;
+        self.offset = offset;
+        self.current_lcn += lcn_delta;
 
-        runs.push(DataRun {
-            vcn: current_vcn,
+        let run = DataRun {
+            vcn: self.current_vcn,
             cluster_count: run_length,
             // A run with no encoded LCN offset is sparse; emit
             // `Lcn::ZERO` so `is_sparse()` keeps returning true
             // without consulting `offset_size` downstream.
             lcn: if offset_size > 0 {
-                crate::platform::Lcn::new(current_lcn)
+                crate::platform::Lcn::new(self.current_lcn)
             } else {
                 crate::platform::Lcn::ZERO
             },
-        });
+        };
 
         if let Ok(len_i64) = i64::try_from(run_length) {
-            current_vcn += len_i64;
+            self.current_vcn += len_i64;
         }
-    }
 
-    runs
+        Some(run)
+    }
 }
+
+impl core::iter::FusedIterator for DataRunIter<'_> {}
 
 #[expect(
     clippy::single_call_fn,
@@ -156,34 +200,53 @@ fn parse_variable_length_signed(data: &[u8]) -> i64 {
 }
 
 /// Extracts data runs from a non-resident attribute record.
+///
+/// Convenience over [`data_runs_iter_from_attribute`] that collects the
+/// whole runlist.
 #[must_use]
 pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
+    data_runs_iter_from_attribute(attr_data).collect()
+}
+
+/// Lazily extracts data runs from a non-resident attribute record.
+///
+/// Returns an empty iterator for a resident, truncated, or otherwise
+/// unparseable attribute — the same inputs for which
+/// [`extract_data_runs_from_attribute`] returns an empty `Vec`.
+/// Allocation-free; decodes one run per `next()` call.
+#[must_use]
+pub fn data_runs_iter_from_attribute(attr_data: &[u8]) -> DataRunIter<'_> {
+    /// The shared "nothing to decode" result for malformed inputs.
+    const fn empty() -> DataRunIter<'static> {
+        parse_data_runs_iter(&[], 0)
+    }
+
     let header_size = size_of::<AttributeRecordHeader>();
     let Some(header_slice) = attr_data.get(0..header_size) else {
-        return Vec::new();
+        return empty();
     };
 
     let Some(header) = parse_attribute_record_header(header_slice) else {
-        return Vec::new();
+        return empty();
     };
     if header.is_non_resident == 0 {
-        return Vec::new();
+        return empty();
     }
 
     let nr_size = size_of::<NonResidentAttributeData>();
     let Some(nr_slice) = attr_data.get(header_size..header_size + nr_size) else {
-        return Vec::new();
+        return empty();
     };
 
     let Some(nr_data) = parse_non_resident_attribute_data(nr_slice) else {
-        return Vec::new();
+        return empty();
     };
     let mapping_pairs_offset = nr_data.mapping_pairs_offset as usize;
     let Some(mapping_pairs_data) = attr_data.get(mapping_pairs_offset..) else {
-        return Vec::new();
+        return empty();
     };
 
-    parse_data_runs(mapping_pairs_data, nr_data.lowest_vcn)
+    parse_data_runs_iter(mapping_pairs_data, nr_data.lowest_vcn)
 }
 
 #[cfg(test)]

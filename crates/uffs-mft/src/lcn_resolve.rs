@@ -85,10 +85,49 @@ pub fn resolve_frs_to_lcn(
     frs_list: &[u64],
 ) -> Result<HashMap<u64, Option<Lcn>>> {
     let mut result = HashMap::with_capacity(frs_list.len());
-    for_each_record(volume, frs_list, |frs, record| {
-        result.insert(frs, record.and_then(first_data_lcn));
+    for_each_record(volume, frs_list, |frs, outcome| {
+        result.insert(frs, outcome.bytes().and_then(first_data_lcn));
     })?;
     Ok(result)
+}
+
+/// Per-record outcome delivered to `for_each_record`'s callback.
+///
+/// Success carries the fixed-up bytes; the three failure variants
+/// preserve *why* a record yielded no bytes, because the distinction is
+/// itself a signal: a [`Self::Corrupt`] record **exists and is marked
+/// torn/damaged** (forensically interesting), while [`Self::NotInMft`]
+/// is a benign "no such record on this volume". Callers that only care
+/// about "bytes or not" (the content service) collapse the variants via
+/// [`Self::bytes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordOutcome<'a> {
+    /// The record was read and its Update-Sequence-Array fixup
+    /// verified — the full fixed-up record bytes.
+    Bytes(&'a [u8]),
+    /// The FRS lies outside `$MFT`'s mapped extents (or in a sparse
+    /// region): no such record exists on this volume. Benign.
+    NotInMft,
+    /// The record's location is known but reading it failed
+    /// (transient I/O error, short read). Worth a retry elsewhere.
+    Io,
+    /// The record was read but failed fixup verification — a torn
+    /// write or corrupt sector-boundary sentinel. The record exists
+    /// and is damaged; its unverified bytes are deliberately withheld.
+    Corrupt,
+}
+
+impl<'a> RecordOutcome<'a> {
+    /// The verified record bytes, or `None` for any non-success
+    /// outcome — the "fall back to the filesystem" collapse used by
+    /// callers without forensic interest.
+    #[must_use]
+    pub const fn bytes(self) -> Option<&'a [u8]> {
+        match self {
+            Self::Bytes(record) => Some(record),
+            Self::NotInMft | Self::Io | Self::Corrupt => None,
+        }
+    }
 }
 
 /// Reads the raw MFT record for each FRS in `frs_list`, applies the NTFS
@@ -102,40 +141,42 @@ pub fn resolve_frs_to_lcn(
 /// field.
 ///
 /// # Memory
-/// Bounded by design. Records pass through a **single reused scratch
-/// buffer** (never one allocation per record), and `visit` receives a
-/// **borrow** valid only for the duration of that call — the borrow
-/// makes accidental whole-want-list retention impossible and forces the
-/// caller to copy out only the distilled bytes it keeps. `frs_list` is
-/// de-duplicated and read in ascending FRS order, keeping the targeted
-/// reads near-sequential within `$MFT`.
+/// Bounded by design. Exactly **two reused record-sized buffers** exist
+/// for the whole pass — the reader's internal aligned I/O buffer and
+/// the fixup scratch copy — never one allocation per record. `visit`
+/// receives a **borrow** valid only for the duration of that call — the
+/// borrow makes accidental whole-want-list retention impossible and
+/// forces the caller to copy out only the distilled bytes it keeps.
+/// `frs_list` is de-duplicated and read in ascending FRS order, keeping
+/// the targeted reads near-sequential within `$MFT`.
 ///
 /// # Fixup (mandatory)
-/// The fixup is applied before `visit` sees the bytes. It is not
+/// The fixup is applied before `visit` sees any bytes. It is not
 /// hygiene: NTFS overwrites the last two bytes of every 512-byte sector
 /// with an update-sequence sentinel, so any field straddling offset
 /// 510–511 (a resident `$DATA` value, a runlist) reads the sentinel
 /// instead of data without it. A record that fails fixup verification
-/// is reported as `None`.
+/// is reported as [`RecordOutcome::Corrupt`] — its unverified bytes are
+/// withheld.
 ///
 /// # Arguments
 /// * `volume` — must be open against the **same device** the FRS values came
 ///   from: a live drive via [`VolumeHandle::open`], or a VSS snapshot device
 ///   via [`VolumeHandle::open_device_path`] (the content-service case). Same
 ///   requirement as `resolve_frs_to_lcn`.
-/// * `visit(frs, record)` — called once per **distinct** FRS, in ascending
-///   order. `record` is `Some(&[u8])` with the fixed-up record on success, or
-///   `None` when that record could not be read or fixed up (outside the MFT,
-///   transient I/O error, torn write). A `None` for one record never aborts the
-///   rest.
+/// * `visit(frs, outcome)` — called once per **distinct** FRS, in ascending
+///   order, with a [`RecordOutcome`]: verified fixed-up bytes on success, or a
+///   classified failure (`NotInMft` / `Io` / `Corrupt`). No failure aborts the
+///   rest of the pass. Callers without forensic interest collapse it with
+///   [`RecordOutcome::bytes`].
 ///
 /// # Errors
 /// Returns `Err` only if `$MFT`'s own extents can't be determined at
 /// all (e.g. a bad handle) — i.e. the whole pass cannot start.
-/// Per-record failures are delivered as `None` to `visit`, never
-/// propagated.
+/// Per-record failures are delivered as [`RecordOutcome`] variants to
+/// `visit`, never propagated.
 #[cfg(windows)]
-pub fn for_each_record<V: FnMut(u64, Option<&[u8]>)>(
+pub fn for_each_record<V: FnMut(u64, RecordOutcome<'_>)>(
     volume: &VolumeHandle,
     frs_list: &[u64],
     mut visit: V,
@@ -153,20 +194,29 @@ pub fn for_each_record<V: FnMut(u64, Option<&[u8]>)>(
     let mut reader = MftRecordReader::new_with_extents(extent_map);
     let handle = volume.raw_handle();
 
-    // One scratch buffer for the whole pass — records are copied into it
+    // One scratch copy for the whole pass — records are copied into it
     // so the fixup can mutate them without touching the reader's own
     // aligned I/O buffer. No per-record allocation.
     let mut scratch: Vec<u8> = Vec::new();
 
     for frs in sorted_deduped(frs_list) {
-        let fixed = reader
-            .read_record(handle, frs)
-            .is_ok_and(|raw| fix_into_scratch(raw, &mut scratch));
-        if fixed {
-            visit(frs, Some(&scratch));
-        } else {
-            visit(frs, None);
+        if !reader.covers(frs) {
+            visit(frs, RecordOutcome::NotInMft);
+            continue;
         }
+        // `None` = read failed; `Some(bool)` = read succeeded, bool =
+        // fixup verified. Splitting the fallible step out keeps the
+        // scratch borrow out of the Result combinators.
+        let read_and_fixed = reader
+            .read_record(handle, frs)
+            .map(|raw| fix_into_scratch(raw, &mut scratch))
+            .ok();
+        let outcome = match read_and_fixed {
+            Some(true) => RecordOutcome::Bytes(&scratch),
+            Some(false) => RecordOutcome::Corrupt,
+            None => RecordOutcome::Io,
+        };
+        visit(frs, outcome);
     }
 
     Ok(())
@@ -233,9 +283,11 @@ pub fn first_data_lcn(record: &[u8]) -> Option<Lcn> {
     if !data_attr.is_non_resident() {
         return None;
     }
+    // Lazy runlist decode: stops at the first non-sparse run without
+    // materialising the full runlist — this is the per-candidate LCN
+    // path that runs on every content job, so it must not allocate.
     data_attr
-        .data_runs()
-        .into_iter()
+        .data_runs_iter()
         .find(|run| !run.is_sparse())
         .map(|run| run.lcn)
 }
@@ -472,6 +524,16 @@ mod tests {
     }
 
     #[test]
+    fn record_outcome_bytes_collapses_failures_to_none() {
+        use super::RecordOutcome;
+        let payload = [1_u8, 2, 3];
+        assert_eq!(RecordOutcome::Bytes(&payload).bytes(), Some(&payload[..]));
+        assert_eq!(RecordOutcome::NotInMft.bytes(), None);
+        assert_eq!(RecordOutcome::Io.bytes(), None);
+        assert_eq!(RecordOutcome::Corrupt.bytes(), None);
+    }
+
+    #[test]
     fn sorted_deduped_yields_ascending_distinct_frs() {
         assert_eq!(sorted_deduped(&[5, 3, 5, 1, 3]), vec![1, 3, 5]);
         assert_eq!(sorted_deduped(&[]), Vec::<u64>::new());
@@ -566,14 +628,19 @@ mod tests {
         let volume =
             crate::platform::VolumeHandle::open(crate::platform::DriveLetter::C).expect("open C:");
         // Shuffled with duplicates on purpose: 0 ($MFT) and low
-        // metafiles always exist; u64::MAX never does (must fold to None).
+        // metafiles always exist; u64::MAX never does (must classify as
+        // NotInMft without aborting the pass).
         let want = [16_u64, 0, 5, u64::MAX, 5, 0, 11];
 
         let mut seen: Vec<u64> = Vec::new();
         let mut derived = std::collections::HashMap::new();
-        super::for_each_record(&volume, &want, |frs, record| {
+        let mut absent_outcome = None;
+        super::for_each_record(&volume, &want, |frs, outcome| {
             seen.push(frs);
-            derived.insert(frs, record.and_then(first_data_lcn));
+            if frs == u64::MAX {
+                absent_outcome = Some(outcome == super::RecordOutcome::NotInMft);
+            }
+            derived.insert(frs, outcome.bytes().and_then(first_data_lcn));
         })
         .expect("for_each_record");
 
@@ -583,9 +650,9 @@ mod tests {
             "ascending + deduplicated"
         );
         assert_eq!(
-            derived.get(&u64::MAX),
-            Some(&None),
-            "an FRS outside the MFT folds to None without aborting the pass"
+            absent_outcome,
+            Some(true),
+            "an FRS outside the MFT classifies as NotInMft without aborting the pass"
         );
 
         let resolved = super::resolve_frs_to_lcn(&volume, &want).expect("resolve_frs_to_lcn");

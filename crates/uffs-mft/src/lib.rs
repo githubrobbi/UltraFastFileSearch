@@ -312,18 +312,18 @@ pub use io::{
     ParsedRecord, ReadChunk, StdInfoParse, apply_fixup, generate_read_chunks, parse_record_full,
     parse_record_zero_alloc,
 };
-pub use lcn_resolve::first_data_lcn;
+pub use lcn_resolve::{RecordOutcome, first_data_lcn};
 #[cfg(windows)]
 pub use lcn_resolve::{for_each_record, resolve_frs_to_lcn};
 // Re-export NTFS constants and types (pure Rust data structures, cross-platform)
 pub use ntfs::SECTOR_SIZE;
 pub use ntfs::{
     AttributeIterator, AttributeListEntry, AttributeRecordHeader, AttributeRef, AttributeType,
-    DataRun, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader, IndexHeader,
-    IndexRoot, MultiSectorHeader, NameInfo, NonResidentAttributeData, NtfsBootSector,
+    DataRun, DataRunIter, ExtendedStandardInfo, FileNameAttribute, FileRecordSegmentHeader,
+    IndexHeader, IndexRoot, MultiSectorHeader, NameInfo, NonResidentAttributeData, NtfsBootSector,
     ReparseMountPointBuffer, ReparsePointHeader, ReparseTag, ResidentAttributeData,
-    StandardInformation, StreamInfo, apply_usa_fixup, extract_data_runs_from_attribute,
-    fixup_file_record, parse_data_runs,
+    StandardInformation, StreamInfo, apply_usa_fixup, data_runs_iter_from_attribute,
+    extract_data_runs_from_attribute, fixup_file_record, parse_data_runs, parse_data_runs_iter,
 };
 // Caller's effective uid (Unix-only) — daemon-management uses it to decide
 // whether managing the *running* daemon needs elevation (owner comparison).

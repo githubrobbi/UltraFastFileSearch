@@ -7,8 +7,6 @@ use core::mem::size_of;
 
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
-use crate::ntfs::extract_data_runs_from_attribute;
-
 /// Magic number for FILE records ("FILE" in little-endian).
 pub(crate) const FILE_RECORD_MAGIC: u32 = 0x454C_4946;
 
@@ -513,13 +511,22 @@ impl<'a> AttributeRef<'a> {
     }
 
     /// Parses data runs from a non-resident attribute.
+    ///
+    /// Collects the whole runlist; prefer [`Self::data_runs_iter`] on
+    /// hot paths that only need a prefix of the runs.
     #[must_use]
     pub fn data_runs(&self) -> Vec<crate::ntfs::DataRun> {
-        if !self.is_non_resident() {
-            return Vec::new();
-        }
+        self.data_runs_iter().collect()
+    }
 
-        extract_data_runs_from_attribute(self.data)
+    /// Lazily parses data runs from a non-resident attribute —
+    /// allocation-free, one run decoded per `next()` call.
+    ///
+    /// Empty for resident or unparseable attributes, mirroring
+    /// [`Self::data_runs`].
+    #[must_use]
+    pub fn data_runs_iter(&self) -> crate::ntfs::DataRunIter<'a> {
+        crate::ntfs::data_runs_iter_from_attribute(self.data)
     }
 
     /// Returns the decoded attribute name (UTF-16 code units), if present.

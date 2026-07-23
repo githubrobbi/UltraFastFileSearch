@@ -37,7 +37,10 @@ mod tests;
 // (kept as items here but not part of the crate's public surface).
 
 pub use self::boot_sector::NtfsBootSector;
-pub use self::data_runs::{DataRun, extract_data_runs_from_attribute, parse_data_runs};
+pub use self::data_runs::{
+    DataRun, DataRunIter, data_runs_iter_from_attribute, extract_data_runs_from_attribute,
+    parse_data_runs, parse_data_runs_iter,
+};
 pub use self::metadata::{
     AttributeListEntry, ExtendedStandardInfo, FileNameAttribute, IndexHeader, IndexRoot, NameInfo,
     ReparseMountPointBuffer, ReparsePointHeader, ReparseTag, StandardInformation, StreamInfo,

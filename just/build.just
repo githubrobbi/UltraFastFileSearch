@@ -123,75 +123,22 @@ copy-binary profile:
     done
     if ! echo "$PATH" | grep -q "$HOME/bin"; then printf "\033[1;33m⚠️  ~/bin not in PATH. Add this to your shell profile:\033[0m\n"; printf "   export PATH=\"\$HOME/bin:\$PATH\"\n"; fi
 
-# Build the entire workspace (release) locally and copy ALL binary artifacts
-# to ~/bin.  One `cargo build --release --workspace` does the heavy lifting;
-# then every binary in target/release/ is installed.
+# Build the whole workspace from source and install every binary to ~/bin.
 #
 # Use this when you want to test in-development code.  Prefer `just use`
 # when you want the reproducible, GitHub-built release binaries — those
 # bytes are what your end users download.
 #
+# Body is a rust-script (scripts/dev/install-bins.rs) so it runs identically
+# under just's unix shell and its powershell windows-shell — a just shebang
+# recipe eats Windows temp-path backslashes, and a `bash script.sh` line hits
+# WSL's cargo-less bash.  The script stops the running daemon/MCP first,
+# builds once, then installs every binary cargo reports having built
+# (auto-discovered — a new [[bin]] anywhere is picked up automatically).
+#
 # Build workspace from source and install all binaries to ~/bin (dev).
-[unix]
 use-local:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    printf "\033[1;34m📦 Build + install ALL UFFS binaries to ~/bin\033[0m\n"
-    echo "========================================================"
-
-    # 0. Stop the running daemon + MCP so the old binaries release their locks
-    #    and no stale in-memory index shadows the freshly installed build.
-    printf "\n\033[1;33m🔪 Stopping daemon + MCP...\033[0m\n"
-    timeout 10 uffs --daemon kill >/dev/null 2>&1 || true
-    pkill -x uffsd   2>/dev/null || true
-    pkill -x uffsmcp 2>/dev/null || true
-
-    # 1. Single workspace-wide release build
-    printf "\n\033[0;34m🔨 Building release workspace...\033[0m\n"
-    START=$(date +%s)
-    cargo build --release --workspace
-    END=$(date +%s)
-    printf "\033[0;32m  → Built in %ds\033[0m\n" $((END - START))
-
-    # 2. Copy every binary artifact to ~/bin
-    BIN_DIR="$HOME/bin"
-    mkdir -p "$BIN_DIR"
-    INSTALLED=0
-    printf "\n\033[0;34m📦 Installing to %s\033[0m\n" "$BIN_DIR"
-    for SRC in target/release/*; do
-        [[ -f "$SRC" && -x "$SRC" ]] || continue
-        NAME=$(basename "$SRC")
-        # Skip non-binaries (shared libs, build scripts, deps fingerprints, etc.)
-        [[ "$NAME" == *.d ]] && continue
-        [[ "$NAME" == *.dylib ]] && continue
-        [[ "$NAME" == *.so ]] && continue
-        [[ "$NAME" == *.rlib ]] && continue
-        # Skip if it contains a dot (e.g. libfoo.a) — real binaries have no extension on Unix
-        [[ "$NAME" == *.* ]] && continue
-        DEST="$BIN_DIR/$NAME"
-        # If a directory exists with the same name, remove it first
-        if [[ -d "$DEST" ]]; then
-            printf "  \033[1;33m⚠️  Removing stale directory %s\033[0m\n" "$DEST"
-            rm -rf "$DEST"
-        fi
-        # rm -f before cp so the new file gets a fresh inode — overwrites in
-        # place share the inode, which lets macOS re-use a path-cached launch
-        # services deny verdict against an earlier broken copy at the same path.
-        rm -f "$DEST"
-        cp "$SRC" "$DEST"
-        chmod +x "$DEST"
-        SIZE=$(du -sh "$BIN_DIR/$NAME" | cut -f1)
-        printf "  \033[0;32m✅ %-30s %s\033[0m\n" "$NAME" "$SIZE"
-        INSTALLED=$((INSTALLED + 1))
-    done
-
-    printf "\n\033[0;32m✅ Installed %d binaries to ~/bin\033[0m\n" "$INSTALLED"
-
-    # Check PATH
-    if ! echo "$PATH" | grep -q "$HOME/bin"; then
-        printf "\n\033[1;33m⚠️  ~/bin not in PATH. Add to your shell profile:\033[0m\n"
-        printf "   export PATH=\"\$HOME/bin:\$PATH\"\n"
-    fi
+    rust-script scripts/dev/install-bins.rs
 
 # Install UFFS binaries from GitHub Release (cached in dist/) to ~/bin.
 #

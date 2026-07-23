@@ -803,7 +803,13 @@ impl MftReader {
                         // 1. Open `X:\$MFT` as a file (filesystem-mediated)
                         // 2. Re-open volume with FILE_FLAG_NO_BUFFERING (bypasses cache manager,
                         //    direct device I/O)
-                        warn!(
+                        // INFO, not WARN: the cascade below is designed,
+                        // automatically-handled resilience — a normal run
+                        // stays quiet (WARN-default subscribers show
+                        // nothing) and `-v`/verbose reveals the chain when
+                        // debugging. If every fallback fails too, the `?`
+                        // propagates a real error.
+                        info!(
                             volume = %self.volume,
                             error = %iocp_err,
                             "⚠️  IOCP inline read failed — trying fallback strategies"
@@ -920,7 +926,10 @@ impl MftReader {
                 return result;
             }
             Err(err) => {
-                warn!(
+                // INFO for the same reason as the IOCP-failure line: an
+                // intermediate rung of the handled fallback chain, not an
+                // operator-actionable warning.
+                info!(
                     volume = %self.volume,
                     error = %err,
                     "⚠️  Fallback 1 ($MFT file) failed — trying unbuffered volume I/O"

@@ -7,8 +7,6 @@ use core::mem::size_of;
 
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
-use crate::ntfs::extract_data_runs_from_attribute;
-
 /// Magic number for FILE records ("FILE" in little-endian).
 pub(crate) const FILE_RECORD_MAGIC: u32 = 0x454C_4946;
 
@@ -513,20 +511,42 @@ impl<'a> AttributeRef<'a> {
     }
 
     /// Parses data runs from a non-resident attribute.
+    ///
+    /// Collects the whole runlist; prefer [`Self::data_runs_iter`] on
+    /// hot paths that only need a prefix of the runs.
     #[must_use]
     pub fn data_runs(&self) -> Vec<crate::ntfs::DataRun> {
-        if !self.is_non_resident() {
-            return Vec::new();
-        }
+        self.data_runs_iter().collect()
+    }
 
-        extract_data_runs_from_attribute(self.data)
+    /// Lazily parses data runs from a non-resident attribute —
+    /// allocation-free, one run decoded per `next()` call.
+    ///
+    /// Empty for resident or unparseable attributes, mirroring
+    /// [`Self::data_runs`].
+    #[must_use]
+    pub fn data_runs_iter(&self) -> crate::ntfs::DataRunIter<'a> {
+        crate::ntfs::data_runs_iter_from_attribute(self.data)
+    }
+
+    /// Whether this attribute has no name — i.e. it is the primary
+    /// stream of its type (the unnamed `$DATA` is the file's main
+    /// content stream).
+    ///
+    /// Allocation-free header check; prefer this over
+    /// `name().is_none()`, which decodes the name into a `Vec<u16>`
+    /// just to discard it.
+    #[must_use]
+    pub const fn is_unnamed(&self) -> bool {
+        self.header.name_length == 0
     }
 
     /// Returns the decoded attribute name (UTF-16 code units), if present.
     ///
     /// The name is stored as UTF-16LE bytes at an offset that carries no
     /// alignment guarantee, so the units are decoded into an owned `Vec`
-    /// rather than reinterpreted in place.
+    /// rather than reinterpreted in place. To merely test for a name,
+    /// use the allocation-free [`Self::is_unnamed`].
     #[must_use]
     pub fn name(&self) -> Option<Vec<u16>> {
         if self.header.name_length == 0 {

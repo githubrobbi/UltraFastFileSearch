@@ -22,6 +22,15 @@ pub(crate) struct MftRecordReader {
 }
 
 impl MftRecordReader {
+    /// Whether `frs` falls inside the mapped `$MFT` extents, i.e. a
+    /// targeted read of it can be attempted at all. Lets callers
+    /// distinguish "no such record on this volume" (benign) from a
+    /// failed read of a record that does exist.
+    #[must_use]
+    pub(crate) fn covers(&self, frs: u64) -> bool {
+        self.extent_map.physical_offset(frs).is_some()
+    }
+
     /// Creates a new MFT record reader with explicit extent mapping.
     ///
     /// This constructor should be used when the MFT is fragmented.

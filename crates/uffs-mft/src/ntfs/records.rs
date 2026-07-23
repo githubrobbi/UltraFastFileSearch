@@ -529,11 +529,24 @@ impl<'a> AttributeRef<'a> {
         crate::ntfs::data_runs_iter_from_attribute(self.data)
     }
 
+    /// Whether this attribute has no name — i.e. it is the primary
+    /// stream of its type (the unnamed `$DATA` is the file's main
+    /// content stream).
+    ///
+    /// Allocation-free header check; prefer this over
+    /// `name().is_none()`, which decodes the name into a `Vec<u16>`
+    /// just to discard it.
+    #[must_use]
+    pub const fn is_unnamed(&self) -> bool {
+        self.header.name_length == 0
+    }
+
     /// Returns the decoded attribute name (UTF-16 code units), if present.
     ///
     /// The name is stored as UTF-16LE bytes at an offset that carries no
     /// alignment guarantee, so the units are decoded into an owned `Vec`
-    /// rather than reinterpreted in place.
+    /// rather than reinterpreted in place. To merely test for a name,
+    /// use the allocation-free [`Self::is_unnamed`].
     #[must_use]
     pub fn name(&self) -> Option<Vec<u16>> {
         if self.header.name_length == 0 {

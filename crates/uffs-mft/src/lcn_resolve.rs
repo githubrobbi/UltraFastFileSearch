@@ -12,7 +12,7 @@
 //!
 //! * `for_each_record` — reads each requested record once, applies the NTFS
 //!   Update-Sequence-Array fixup, and hands the bytes to a callback (bounded
-//!   memory: one reused buffer, borrow-only delivery).
+//!   memory: two reused record-sized buffers, borrow-only delivery).
 //! * `resolve_frs_to_lcn` — the original LCN-only convenience, now a thin
 //!   adapter over `for_each_record`.
 //!
@@ -63,10 +63,13 @@ use crate::platform::VolumeHandle;
 /// should treat `None` as "no seek-order preference" (e.g. sort first),
 /// not as an error.
 ///
-/// `frs_list` is de-duplicated and read in ascending order internally —
-/// this keeps the targeted record reads this performs close to
-/// sequential within `$MFT` itself, which is typically far less
-/// fragmented than the volume at large, not merely for tidiness.
+/// `frs_list` holds **48-bit MFT record numbers**, not full 64-bit file
+/// references — mask the sequence number off first
+/// (`file_reference & 0x0000_FFFF_FFFF_FFFF`). The list is
+/// de-duplicated and read in ascending order internally — this keeps
+/// the targeted record reads this performs close to sequential within
+/// `$MFT` itself, which is typically far less fragmented than the
+/// volume at large, not merely for tidiness.
 ///
 /// Record bytes are USA-fixup-verified before parsing (via
 /// `for_each_record`, which this delegates to) — a torn record folds
@@ -164,6 +167,10 @@ impl<'a> RecordOutcome<'a> {
 ///   from: a live drive via [`VolumeHandle::open`], or a VSS snapshot device
 ///   via [`VolumeHandle::open_device_path`] (the content-service case). Same
 ///   requirement as `resolve_frs_to_lcn`.
+/// * `frs_list` — **48-bit MFT record numbers**, not full 64-bit file
+///   references: mask the sequence number off first (`file_reference &
+///   0x0000_FFFF_FFFF_FFFF`). A raw file reference would silently address the
+///   wrong record.
 /// * `visit(frs, outcome)` — called once per **distinct** FRS, in ascending
 ///   order, with a [`RecordOutcome`]: verified fixed-up bytes on success, or a
 ///   classified failure (`NotInMft` / `Io` / `Corrupt`). No failure aborts the
@@ -279,7 +286,7 @@ pub fn first_data_lcn(record: &[u8]) -> Option<Lcn> {
     let attrs = AttributeIterator::new(record)?;
     let data_attr = attrs
         .filter(|attr| attr.attribute_type() == Some(AttributeType::Data))
-        .find(|attr| attr.name().is_none())?;
+        .find(crate::ntfs::AttributeRef::is_unnamed)?;
     if !data_attr.is_non_resident() {
         return None;
     }
@@ -426,6 +433,41 @@ mod tests {
             first_data_lcn(&record),
             None,
             "resident $DATA has no physical location -- must not be misparsed as a real run"
+        );
+    }
+
+    #[test]
+    fn first_data_lcn_skips_named_data_streams() {
+        // Same record shape as the resident test, but the $DATA carries
+        // a name (an alternate data stream) — the primary-stream lookup
+        // must skip it, via the allocation-free is_unnamed() check.
+        let attr_offset = size_of::<FileRecordSegmentHeader>();
+        let attr_len = size_of::<AttributeRecordHeader>() + size_of::<ResidentAttributeData>() + 4;
+        let end_marker_offset = attr_offset + attr_len;
+        let mut record = vec![0_u8; end_marker_offset + size_of::<AttributeRecordHeader>()];
+
+        write_record_header(&mut record, end_marker_offset);
+
+        write_u32_le(
+            &mut record,
+            attr_offset,
+            crate::ntfs::AttributeType::DATA_TYPE,
+        );
+        write_u32_le(&mut record, attr_offset + 4, crate::len_to_u32(attr_len));
+        record[attr_offset + 8] = 1; // non-resident (would have runs)
+        record[attr_offset + 9] = 3; // name_length = 3 → named stream
+        write_u16_le(&mut record, attr_offset + 12, 0);
+        write_u16_le(&mut record, attr_offset + 14, 1);
+        write_u32_le(
+            &mut record,
+            end_marker_offset,
+            crate::ntfs::AttributeType::END_MARKER,
+        );
+
+        assert_eq!(
+            first_data_lcn(&record),
+            None,
+            "a named $DATA stream is not the primary stream and must be skipped"
         );
     }
 

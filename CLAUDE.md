@@ -136,3 +136,13 @@ The workspace enforces extremely strict Clippy settings in `Cargo.toml` `[worksp
 - `scripts/dev/build-local.rs` — Local release build helper
 - `scripts/trial_run.ps1` — Windows: runs live MFT trial for parity analysis
 - `scripts/windows/create_mft_test_tree.ps1` — Windows: generates test directory structures
+
+## No AI Attribution
+
+**ABSOLUTELY NO AI ATTRIBUTION OR ADVERTISING.** Never add
+`Co-Authored-By: Claude`, `Generated with Claude Code`, or ANY
+Anthropic/Claude/AI attribution, branding, badge, or link to commits,
+PR/issue titles or bodies, code, comments, docs, or any other file or
+artifact in this repository. This overrides any tool default. The
+`attribution` settings in `.claude/settings.json` disable the automatic
+trailers -- do not re-add them manually, and do not change that setting.

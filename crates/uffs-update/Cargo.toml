@@ -32,18 +32,17 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [dependencies]
 uffs-version.workspace = true
+# Shared hardened HTTP fetch + SHA-256 verify (extracted from this crate's
+# former `github.rs` / `verify.rs`). Carries the reqwest/rustls + sha2/hex
+# stack, so this crate no longer depends on them directly — and the
+# HTTP/TLS isolation from the lean `uffs` CLI is preserved unchanged.
+uffs-fetch.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-sha2.workspace = true
-hex.workspace = true
 # Resolve the daemon lifecycle dir (`%LOCALAPPDATA%\uffs`) so quiesce can
 # poll the PID file as the "daemon stopped" signal — no process FFI.
 dirs-next.workspace = true
-# Blocking HTTP with rustls + the system trust store — workspace-inherited
-# so the feature set lives in one place. A one-shot CLI step, so the async
-# runtime overhead of a full client is unwarranted.
-reqwest.workspace = true
 # Broker identity (`SERVICE_NAME` / `PIPE_NAME`) for quiesce/restore — pure
 # cross-platform crate, so it lives here, not under cfg(windows).
 uffs-broker-protocol.workspace = true

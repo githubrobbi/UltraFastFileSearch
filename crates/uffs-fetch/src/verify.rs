@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Verification of downloaded artifacts.
+//! SHA-256 verification of downloaded artifacts.
 //!
-//! This phase (acquire) applies the **SHA-256** integrity gate against
-//! the release's published `SHA256SUMS`. The **Authenticode** authenticity
-//! gate — the now-shared `uffs_security::authenticode` — is applied to the
-//! extracted `.exe`s just before they replace anything (the apply phase),
-//! so it is wired in there, not here.
+//! The **integrity** gate: hash a downloaded file and compare it against
+//! the release's published `SHA256SUMS`. Authenticity gates (code
+//! signing, etc.) are a separate concern the consumer applies at its own
+//! trust boundary — in `uffs-update` that is Authenticode just before an
+//! extracted `.exe` replaces anything.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -21,7 +21,7 @@ use sha2::{Digest as _, Sha256};
 /// # Errors
 ///
 /// Propagates any read error.
-pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+pub fn sha256_file(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening {} for hashing", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
@@ -42,7 +42,7 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
 ///
 /// Pure — unit-testable without I/O.
 #[must_use]
-pub(crate) fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
+pub fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
@@ -62,7 +62,7 @@ pub(crate) fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
 /// Return the expected hash for `file_name` from parsed sums, matching on
 /// the base file name only (sums may list paths).
 #[must_use]
-pub(crate) fn expected_hash<'a>(sums: &'a [(String, String)], file_name: &str) -> Option<&'a str> {
+pub fn expected_hash<'a>(sums: &'a [(String, String)], file_name: &str) -> Option<&'a str> {
     sums.iter().find_map(|(name, hash)| {
         let base = Path::new(name).file_name().and_then(|os| os.to_str());
         (base == Some(file_name)).then_some(hash.as_str())
@@ -75,7 +75,7 @@ pub(crate) fn expected_hash<'a>(sums: &'a [(String, String)], file_name: &str) -
 /// # Errors
 ///
 /// Propagates a hashing/read error.
-pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<bool> {
+pub fn verify_sha256(path: &Path, expected: &str) -> Result<bool> {
     let actual = sha256_file(path)?;
     Ok(actual.eq_ignore_ascii_case(expected))
 }

@@ -32,6 +32,7 @@ members = [
   "crates/uffs-statusfmt",       # 🎨 Shared operator-status styling (color, glyphs, fields) (leaf)
   "crates/uffs-broker-protocol", # 📟 Cross-platform broker wire-protocol types (F5)
   "crates/uffs-winsvc",          # 🪟 Native Windows service control + broker-pipe probe (leaf)
+  "crates/uffs-fetch",           # 🌐 Hardened HTTP fetch + SHA-256 verify (public lib, leaf)
   "crates/uffs-mft",             # 📦 MFT reading → Polars DataFrame
   "crates/uffs-format",          # 🧾 Shared CSV formatter (daemon + thin CLI)
   "crates/uffs-core",            # 🎯 Query engine + compact search engine
@@ -157,6 +158,12 @@ uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.30
 # Single source of truth for the `sc`/SCM mechanics previously duplicated
 # across uffs-broker, uffs-update, and uffs-cli.
 uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.30" }
+# `uffs-fetch` — hardened release-asset transport (blocking reqwest +
+# rustls with retry/timeout/byte-cap, plus `SHA256SUMS` verification),
+# extracted from `uffs-update` as a small public lib so external products
+# can reuse it. Cross-platform pure-logic leaf; keeps the HTTP/TLS stack
+# out of the lean `uffs` CLI exactly as before.
+uffs-fetch = { path = "crates/uffs-fetch", version = "0.6.30" }
 # NOTE: no `uffs-broker` workspace dependency alias on purpose —
 # `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
 # this protocol module's now-extracted sibling); no other workspace

@@ -19,9 +19,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
+use uffs_fetch::{github, verify};
 
 use crate::orchestrate::{asset_name, exe_name};
-use crate::{github, verify};
 
 /// Inputs for one acquire run.
 pub(crate) struct AcquirePlan {
@@ -48,7 +48,7 @@ pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(&plan.stage)
         .with_context(|| format!("creating stage dir {}", plan.stage.display()))?;
 
-    let release = github::fetch_release(&plan.repo, plan.tag.as_deref())?;
+    let release = github::fetch_release(crate::USER_AGENT, &plan.repo, plan.tag.as_deref())?;
 
     // Checksums first.
     let sums_url = release
@@ -57,7 +57,12 @@ pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
         .browser_download_url
         .clone();
     let sums_path = plan.stage.join(&plan.sums);
-    github::download_to(&sums_url, &sums_path)?;
+    github::download_to(
+        crate::USER_AGENT,
+        &sums_url,
+        &sums_path,
+        crate::MAX_ASSET_BYTES,
+    )?;
     let sums_text = std::fs::read_to_string(&sums_path)
         .with_context(|| format!("reading {}", sums_path.display()))?;
     let sums = verify::parse_sha256sums(&sums_text);
@@ -74,7 +79,7 @@ pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
             .browser_download_url
             .clone();
         let dest = plan.stage.join(exe_name(stem));
-        github::download_to(&url, &dest)?;
+        github::download_to(crate::USER_AGENT, &url, &dest, crate::MAX_ASSET_BYTES)?;
 
         let expected = verify::expected_hash(&sums, &asset)
             .with_context(|| format!("{asset} is not listed in {}", plan.sums))?;

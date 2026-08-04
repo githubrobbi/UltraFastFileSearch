@@ -3,10 +3,15 @@
 
 //! GitHub Releases fetch + asset download (blocking `reqwest` + rustls).
 //!
-//! One-shot HTTP for the acquire step — a release lookup plus streaming
+//! One-shot HTTP for an acquire step — a release lookup plus streaming
 //! asset downloads. TLS is rustls with the system trust store; we never
 //! follow off-host redirects beyond what `reqwest` validates against the
 //! pinned `api.github.com` / release host.
+//!
+//! [`fetch_release`] is GitHub-specific; [`download_to`] streams **any**
+//! URL, so it also serves non-GitHub hosts (model registries, package
+//! feeds, …). The caller supplies the user-agent product string (GitHub
+//! requires one for API requests) and the per-download byte cap.
 
 use core::time::Duration;
 use std::io::{Read, Write};
@@ -14,9 +19,6 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
-
-/// User-agent GitHub requires for API requests.
-const USER_AGENT: &str = concat!("uffs-update/", env!("CARGO_PKG_VERSION"));
 
 /// Cap on how long we wait to establish a TCP/TLS connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -32,44 +34,40 @@ const MAX_ATTEMPTS: u32 = 4;
 /// Base back-off; the delay before attempt *n* is `BASE_BACKOFF * 2^(n-1)`.
 const BASE_BACKOFF: Duration = Duration::from_millis(500);
 
-/// Hard ceiling on a single downloaded asset, defending the disk against
-/// a truncated, malicious, or runaway response. Our largest binary is a
-/// few tens of MiB; 512 MiB is generous head-room.
-const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
-
 /// Streaming copy buffer size.
 const CHUNK_BYTES: usize = 64 * 1024;
 
 /// A GitHub release (only the fields we use).
 #[derive(Debug, Deserialize)]
-pub(crate) struct Release {
+pub struct Release {
     /// The release tag (e.g. `v0.6.2`).
-    pub(crate) tag_name: String,
+    pub tag_name: String,
     /// Downloadable assets attached to the release.
-    pub(crate) assets: Vec<Asset>,
+    pub assets: Vec<Asset>,
 }
 
 /// One downloadable release asset.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Asset {
+pub struct Asset {
     /// Asset file name (e.g. `uffs-windows-x64.zip`).
-    pub(crate) name: String,
+    pub name: String,
     /// Direct download URL.
-    pub(crate) browser_download_url: String,
+    pub browser_download_url: String,
 }
 
 impl Release {
     /// Find an asset by exact file name.
-    pub(crate) fn asset(&self, name: &str) -> Option<&Asset> {
+    #[must_use]
+    pub fn asset(&self, name: &str) -> Option<&Asset> {
         self.assets.iter().find(|asset| asset.name == name)
     }
 }
 
-/// Build a blocking client with the required user agent and the connect
-/// + read timeouts (a hung socket can never wedge an update forever).
-fn client() -> Result<reqwest::blocking::Client> {
+/// Build a blocking client with the caller's user agent and the connect
+/// + read timeouts (a hung socket can never wedge a download forever).
+fn client(user_agent: &str) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent(user_agent)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(READ_TIMEOUT)
         .build()
@@ -87,10 +85,15 @@ fn is_retryable(err: &reqwest::Error) -> bool {
         .is_some_and(|status| status.as_u16() == 429 || status.is_server_error())
 }
 
-/// Run `op` with bounded exponential back-off, retrying only transient
-/// failures (see [`is_retryable`]). `label` describes the operation for
-/// the final error context.
-fn with_retry<T, F>(label: &str, mut op: F) -> Result<T>
+/// Run `op` with bounded exponential back-off (4 attempts, 500ms base),
+/// retrying only transient failures (see [`is_retryable`]). `label`
+/// describes the operation for the final error context.
+///
+/// # Errors
+///
+/// Returns the last `op` error once attempts are exhausted, or the first
+/// non-retryable one, wrapped with `label` and the attempt count.
+pub fn with_retry<T, F>(label: &str, mut op: F) -> Result<T>
 where
     F: FnMut() -> reqwest::Result<T>,
 {
@@ -133,15 +136,18 @@ fn copy_capped<R: Read, W: Write>(reader: &mut R, writer: &mut W, cap: u64) -> R
 /// Fetch a release from `owner/repo`: the `latest` release, or the
 /// specific `tag` when given.
 ///
+/// `user_agent` is the product string sent with the request (e.g.
+/// `myproduct/1.2.3`) — GitHub rejects agent-less API calls.
+///
 /// # Errors
 ///
 /// Propagates HTTP, status, and JSON-decode failures.
-pub(crate) fn fetch_release(repo: &str, tag: Option<&str>) -> Result<Release> {
+pub fn fetch_release(user_agent: &str, repo: &str, tag: Option<&str>) -> Result<Release> {
     let url = tag.map_or_else(
         || format!("https://api.github.com/repos/{repo}/releases/latest"),
         |wanted| format!("https://api.github.com/repos/{repo}/releases/tags/{wanted}"),
     );
-    let client = client()?;
+    let client = client(user_agent)?;
     let response = with_retry(&format!("requesting {url}"), || {
         client
             .get(&url)
@@ -152,19 +158,24 @@ pub(crate) fn fetch_release(repo: &str, tag: Option<&str>) -> Result<Release> {
     response.json::<Release>().context("parsing release JSON")
 }
 
-/// Stream an asset URL to `dest`.
+/// Stream `url` (any host, not just GitHub) to `dest`, aborting once
+/// the body exceeds `max_bytes`.
+///
+/// The cap defends the disk against a truncated, malicious, or runaway
+/// response — size it to the largest asset the caller legitimately
+/// expects.
 ///
 /// # Errors
 ///
-/// Propagates HTTP, status, and file-write failures.
-pub(crate) fn download_to(url: &str, dest: &Path) -> Result<()> {
-    let client = client()?;
+/// Propagates HTTP, status, cap-exceeded, and file-write failures.
+pub fn download_to(user_agent: &str, url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
+    let client = client(user_agent)?;
     let mut response = with_retry(&format!("downloading {url}"), || {
         client.get(url).send()?.error_for_status()
     })?;
     let mut file =
         std::fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
-    copy_capped(&mut response, &mut file, MAX_ASSET_BYTES)
+    copy_capped(&mut response, &mut file, max_bytes)
         .with_context(|| format!("writing {}", dest.display()))?;
     Ok(())
 }

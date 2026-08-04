@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+
+# ============================================================================
+# uffs-fetch: Hardened release-asset transport (blocking HTTP + SHA-256)
+# ============================================================================
+# Small public library crate extracted from `uffs-update` so other products
+# can reuse the acquire step's hardened HTTP machinery without duplicating
+# it: GitHub release lookup, streaming asset download (retry with bounded
+# exponential back-off, connect/inactivity timeouts, per-call byte cap),
+# and `SHA256SUMS` verification.
+#
+# Deliberately a SEPARATE crate rather than a `[lib]` on `uffs-update`:
+# the HTTP/TLS stack (reqwest + rustls) never bloats the lean `uffs` CLI,
+# and consumers don't drag in the updater's journal/quiesce/restore
+# dependency tree.  Updater-specific logic (doctor, apply, journal,
+# quiesce, restore) intentionally stays behind in `uffs-update`.
+#
+# Cross-platform pure library — no Windows FFI, no cfg-gated I/O.
+# ============================================================================
+
+[package]
+name = "uffs-fetch"
+description = "Hardened blocking HTTP fetch (retry, timeouts, size cap) + SHA-256 verification for release assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# External consumers pin against a git semver tag; the crates.io name is
+# reserved but never carries content (same policy as the other libs —
+# see `docs/refactor/crates-io-publishability-deep-dive.md` §7.4).
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+anyhow.workspace = true
+# `Release` / `Asset` deserialization from the GitHub release JSON.
+serde = { workspace = true, features = ["derive"] }
+# Blocking HTTP with rustls + the system trust store — workspace-inherited
+# so the feature set lives in one place. One-shot fetch steps, so the async
+# runtime overhead of a full client is unwarranted.
+reqwest.workspace = true
+# SHA-256 integrity gate against a release's published `SHA256SUMS`.
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

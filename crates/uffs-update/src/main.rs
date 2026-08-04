@@ -15,7 +15,6 @@
 mod acquire;
 mod apply;
 mod doctor;
-mod github;
 mod journal;
 mod orchestrate;
 mod plan;
@@ -23,11 +22,14 @@ mod proc;
 mod quiesce;
 mod recover;
 mod restore;
-mod verify;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+// HTTP fetch + SHA-256 verify live in the shared `uffs-fetch` lib
+// (extracted from this crate); the updater supplies its own user-agent
+// and byte-cap policy via `USER_AGENT` / `MAX_ASSET_BYTES` below.
+use uffs_fetch::github;
 
 use crate::acquire::AcquirePlan;
 
@@ -242,6 +244,15 @@ fn run_recover(args: &[String]) -> Result<()> {
 /// Default upstream repository for self-update artifacts.
 const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
 
+/// User-agent product string for all release-metadata and asset requests
+/// (GitHub rejects agent-less API calls).
+pub(crate) const USER_AGENT: &str = concat!("uffs-update/", env!("CARGO_PKG_VERSION"));
+
+/// Hard ceiling on a single downloaded asset, defending the disk against
+/// a truncated, malicious, or runaway response. Our largest binary is a
+/// few tens of MiB; 512 MiB is generous head-room.
+pub(crate) const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Parse the `doctor` flags and run the end-to-end health check. Exits
 /// non-zero when a hard failure is found so it composes in scripts/CI.
 fn run_doctor(args: &[String]) -> Result<()> {
@@ -271,7 +282,7 @@ fn run_doctor(args: &[String]) -> Result<()> {
 )]
 fn run_check(args: &[String]) -> Result<()> {
     let repo = flag(args, "--repo").unwrap_or_else(|| DEFAULT_REPO.to_owned());
-    let release = github::fetch_release(&repo, flag(args, "--version").as_deref())?;
+    let release = github::fetch_release(USER_AGENT, &repo, flag(args, "--version").as_deref())?;
     println!("latest={}", release.tag_name);
     Ok(())
 }

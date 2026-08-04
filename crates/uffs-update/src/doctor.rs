@@ -18,9 +18,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use uffs_fetch::github;
 
 use crate::orchestrate::asset_name;
-use crate::{apply, github, journal, plan, proc, restore};
+use crate::{apply, journal, plan, proc, restore};
 
 /// How long the doctor waits on the broker pipe before calling it down
 /// (short — this is a probe, not the restore-time readiness gate; off
@@ -450,7 +451,7 @@ fn check_broker(report: &mut Report) {
 /// Reach the release, report update availability, and confirm every
 /// installed binary has a downloadable asset + a checksum entry.
 fn check_release(opts: &DoctorOpts, snapshot: Option<&plan::Snapshot>, report: &mut Report) {
-    let release = match github::fetch_release(&opts.repo, opts.tag.as_deref()) {
+    let release = match github::fetch_release(crate::USER_AGENT, &opts.repo, opts.tag.as_deref()) {
         Ok(rel) => rel,
         Err(err) => {
             report.add(

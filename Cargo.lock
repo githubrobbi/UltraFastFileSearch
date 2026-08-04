@@ -4571,6 +4571,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "uffs-fetch"
+version = "0.6.30"
+dependencies = [
+ "anyhow",
+ "hex",
+ "reqwest",
+ "serde",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "uffs-format"
 version = "0.6.30"
 dependencies = [
@@ -4726,13 +4737,11 @@ version = "0.6.30"
 dependencies = [
  "anyhow",
  "dirs-next",
- "hex",
  "libc",
- "reqwest",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "uffs-broker-protocol",
+ "uffs-fetch",
  "uffs-version",
  "uffs-winsvc",
  "windows 0.62.2",

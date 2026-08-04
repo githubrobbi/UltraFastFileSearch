@@ -2,7 +2,7 @@
 
 **Audience:** Contributors deciding where to put new code, which crate to depend on, or whether to extract a new crate.
 
-**Scope:** The 17-member UFFS workspace (`/Cargo.toml::[workspace.members]`).  This document defines the workspace's **crate-level** architecture — module layout *within* a crate is Phase-3 / #190 territory.
+**Scope:** The 18-member UFFS workspace (`/Cargo.toml::[workspace.members]`).  This document defines the workspace's **crate-level** architecture — module layout *within* a crate is Phase-3 / #190 territory.
 
 **Source of truth for:**
 
@@ -47,7 +47,7 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Layer 0 — Foundation (zero internal deps; only external crates)             │
 │   uffs-polars  uffs-security  uffs-text  uffs-time  uffs-broker-protocol     │
-│   uffs-winsvc                                                                │
+│   uffs-winsvc  uffs-fetch                                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──── Parallel tree (not part of the layer hierarchy) ────┐
@@ -58,7 +58,7 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 
 ## 2. Per-layer crate inventory
 
-### Layer 0 — Foundation (6 crates, all publishable)
+### Layer 0 — Foundation (7 crates, all publishable)
 
 | Crate | Description | External-dep footprint |
 |---|---|---|
@@ -68,6 +68,7 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 | `uffs-time` | NTFS FILETIME arithmetic (`const fn`) | Pure logic; zero deps |
 | `uffs-broker-protocol` | Cross-platform broker wire-protocol types (`PIPE_NAME`, `SERVICE_NAME`) | Pure logic; zero unsafe |
 | `uffs-winsvc` | Native Windows service control (SCM) + broker-pipe readiness probe; the single home for the `sc`/SCM mechanics shared by uffs-broker, uffs-update, uffs-cli | `windows` (windows-target only); pure stubs off Windows |
+| `uffs-fetch` | Hardened release-asset transport: GitHub release lookup, streaming any-URL download (retry, connect/inactivity timeouts, caller-chosen byte cap, caller-supplied user-agent), `SHA256SUMS` verification. Extracted from `uffs-update` for reuse by external products; keeps the HTTP/TLS stack out of the lean `uffs` CLI | reqwest (blocking, rustls-tls-native-roots), sha2, hex; cross-platform, zero unsafe |
 
 **Layer-0 contract:** Zero internal-crate dependencies.  Any new Layer-0 crate must compile against `cargo check -p <crate>` with no `uffs-*` deps in `[dependencies]`.
 

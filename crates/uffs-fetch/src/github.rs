@@ -85,9 +85,11 @@ fn is_retryable(err: &reqwest::Error) -> bool {
         .is_some_and(|status| status.as_u16() == 429 || status.is_server_error())
 }
 
-/// Run `op` with bounded exponential back-off (4 attempts, 500ms base),
-/// retrying only transient failures (see [`is_retryable`]). `label`
-/// describes the operation for the final error context.
+/// Run `op` with bounded exponential back-off (4 attempts, 500ms base).
+///
+/// Only transient failures are retried: connect/read timeouts, HTTP 429,
+/// and 5xx statuses. `label` describes the operation for the final error
+/// context.
 ///
 /// # Errors
 ///

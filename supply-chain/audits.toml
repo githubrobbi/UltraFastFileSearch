@@ -7,11 +7,29 @@ criteria = "safe-to-deploy"
 delta = "0.10.3 -> 0.11.0"
 notes = "Delta audit (cargo vet diff 0.10.3 -> 0.11.0). Single-file crate; src change is only src/lib.rs (rest is docs/tests/Wycheproof vectors). Changes are the RustCrypto 2024-editions migration: aead 0.6 (AeadInPlace -> AeadInOut with InOutBuf), cipher 0.5 + hybrid-array (GenericArray -> Array). Crypto flow is IDENTICAL: init_ctr -> Ctr32BE keystream + GHASH compute_tag; decrypt still verifies the tag via subtle::ConstantTimeEq BEFORE applying the keystream. Length limits corrected to NIST SP 800-38D exactly (P_MAX 2^36 -> 2^36-32 bytes, i.e. tightened; A_MAX 2^36 -> 2^61-1 per spec). New: hazmat feature gates U4/U8 short tags with an SP 800-38D usage warning; manual Debug impl via finish_non_exhaustive leaks no key material. grep confirms ZERO unsafe in 0.11.0 src (crate was previously deny(unsafe_code), still none). No fs/net/process/env surface. Publisher tarcieri (Tony Arcieri, lead RustCrypto maintainer, same publisher as 0.10.3)."
 
+[[audits.aho-corasick]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.4 -> 1.1.5"
+notes = 'Delta audit (cargo vet diff 1.1.4 -> 1.1.5). Source changes are limited to Span::offset and Match::offset switching from unchecked `+` to `checked_add(...).expect(...)` with new "# Panics" doc sections (overflow hardening), plus a doc-only panic note in packed/api.rs. Remaining diff is CI workflow action pinning, a dependabot config, and Cargo.lock/manifest version bumps. No unsafe changes, no fs/net/process/env/FFI surface changes, no build.rs, no new dependencies or features.'
+
+[[audits.alloc-stdlib]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.2 -> 0.2.4"
+notes = """Delta audit (cargo vet diff 0.2.2 -> 0.2.4). Adds `#![cfg_attr(not(feature="unsafe"), forbid(unsafe_code))]` to lib.rs, gates the example binary's `extern` calloc/free declarations and calloc-backed pool behind the "unsafe" feature, and removes an unsafe-feature test. Cargo.toml widens the alloc-no-stdlib range to ">=2.0.4, <3.0.0" and makes the "unsafe" feature forward to alloc-no-stdlib/unsafe. Net reduction in default unsafe surface; no build.rs, no new capabilities."""
+
 [[audits.anyhow]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.102 -> 1.0.103"
 notes = "Delta audit (cargo vet diff). Source changes: src/error.rs + src/lib.rs (test_context.rs is test-only). error.rs reworks the two type-erased downcast helpers to replace intermediate reference creation (deref() then &_object.context/error) with raw-pointer field projection (ptr::addr_of! + Ref::from_raw(NonNull::new_unchecked(..))) -- a soundness improvement that avoids forming references into a possibly-aliased erased object; downcast logic otherwise identical. lib.rs is only the html_root_url version bump. No new unsafe blocks, no new fs/net/process/FFI/ambient-capability surface. Patch release by dtolnay (anyhow maintainer)."
+
+[[audits.ar_archive_writer]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.1 -> 0.5.3"
+notes = "Delta audit (cargo vet diff 0.5.1 -> 0.5.3). Source change is an overflow fix: write_symbols now takes the member index as usize instead of u16 (converting to u16 only on the COFF sym_map path), plus `is_multiple_of` / `values_mut` cleanups. Manifest bumps the object dependency 0.37 -> 0.39 and sets rust-version 1.88; test files updated for LLVM 21 import-library naming and a new (ignored) many-objects regression test. No unsafe code, no build.rs, no fs/net/process/env capability changes; Cargo.lock churn is dev-only."
 
 [[audits.assert_cmd]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -43,17 +61,35 @@ criteria = "safe-to-deploy"
 delta = "2.13.0 -> 2.13.1"
 notes = "Reviewed diff (6 files, 30/18 lines): pure perf change in the generated all() macro body (computes the ALL flags mask in a const block instead of a runtime loop, per upstream changelog 'Lower the LLVM IR output'). No new unsafe, no capability changes."
 
+[[audits.block-buffer]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.12.1"
+notes = "Delta audit (cargo vet diff 0.12.0 -> 0.12.1). Fixes an exception-safety bug (RustCrypto/utils#1487): new ResetGuard drop guards reset the buffer if a user-supplied compress/gen_block closure panics while the buffer invariant is temporarily broken. digest_pad is rewritten to initialize the block via `ptr::write`/`ptr::write_bytes` inside a guarded unsafe block; the modified unsafe was reviewed and fully initializes the buffer before `assume_init_mut`, with safety comments updated. zeroize minimum bumped 1.4 -> 1.8; new exception-safety and pad-combination tests. No new dependencies, no build.rs, no capability changes."
+
 [[audits.brotli]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "8.0.2 -> 8.0.3"
 notes = "Delta audit (cargo vet diff 8.0.2 -> 8.0.3). Bulk of the diff is tests (src/enc/threading/test.rs +309, src/bin/test_broccoli.rs +292, test_custom_dict.rs) and the CLI binary src/bin/brotli.rs (the TMPDIR/TEMP std::env::var + std::fs::File::create probe flagged by scanning lives in the bin/test harness, NOT the library — bins are not linked when brotli is consumed as a dependency). Library changes: src/concat/mod.rs adds a fallible BroCatli::try_new_with_window_size(u8) -> Result<BroCatli, BroCatliResult> constructor (returns InvalidWindowSize for ws not in 10..=24-style range) and reduces the legacy panicking new_with_window_size to a thin .expect() wrapper over it; src/ffi/broccoli.rs mirrors the window-size handling at the C-ABI boundary. src/enc/{threading,encode,backward_references/{mod,hash_to_binary_tree,hq}}.rs is internal compression-encoder refactoring that threads a `ringbuffer_break` parameter through the H10 hasher path (initialize_h10 / StitchToPreviousBlockH10). Pure-Rust codec; no NEW unsafe, extern, network, or process capability added to the library path. Publisher danielrh (Dropbox, brotli-rust maintainer)."
 
+[[audits.brotli]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.3 -> 8.0.4"
+notes = """Delta audit (cargo vet diff 8.0.3 -> 8.0.4). Hardening release: BroCatli::deserialize_from_buffer now validates state fields (last_bytes_len, bit offset, window size, pending-stream counters) before constructing state; a new bounds check returns BrotliFileNotCraftedForConcatenation instead of underflowing on truncated metadata headers; BrotliEncoderCreateInstance/CreateWorkPool null-check the caller-provided allocator's return before `ptr::write`; and the Broccoli FFI entry points are wrapped in catch_unwind (matching the existing encoder FFI convention), logging to stderr and returning an error code on panic. Changes touch existing `unsafe extern "C"` functions but are purely defensive. alloc-no-stdlib range tightened to ">=2.0.4, <3"; a dev-only dependency enables alloc-no-stdlib/unsafe for the test suite. No build.rs, no new runtime dependencies."""
+
 [[audits.brotli-decompressor]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "5.0.0 -> 5.0.1"
 notes = 'Delta audit (cargo vet diff 5.0.0 -> 5.0.1, small). src/decode.rs + src/writer.rs: adds a few #[cfg(feature="std")] gates and a buffer-size fallback (`if buffer_size == 0 { 4096 } else { buffer_size }`) so a zero requested buffer size no longer yields a zero-length allocation, plus a loop `break;` fix. src/bin/error_handling_tests.rs + src/test.rs are test/bin only. No new unsafe, no new deps, no new I/O/FFI/process/network capability — defensive bugfix release of the pure-Rust brotli decoder. Publisher danielrh (Dropbox, brotli-rust maintainer).'
+
+[[audits.brotli-decompressor]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "5.0.1 -> 5.0.3"
+notes = 'Delta audit (cargo vet diff 5.0.1 -> 5.0.3). Adds `forbid(unsafe_code)` to the library unless the "unsafe"/"ffi-api" features are enabled, and likewise to the CLI binary unless "unsafe"/"seccomp". Dependency ranges pinned to alloc-no-stdlib 2.x and alloc-stdlib 0.2.x (with in-manifest rationale about trait-identity splits), and the "seccomp" feature now enables alloc-no-stdlib/unsafe. The seccomp-gated Linux binary path is reworked to allocate a custom-dictionary cell and flush output before its pre-existing `syscall(60)` exit; prctl/syscall use existed before this delta. No library capability changes, no build.rs, no new dependencies.'
 
 [[audits.bytemuck]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -66,6 +102,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.25.1 -> 1.25.2"
 notes = "Reviewed diff (5 files, 65/2 lines): test-only additions (NonZero round-trip cast tests). No production code changes."
+
+[[audits.bytemuck_derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.10.2 -> 1.11.0"
+notes = 'Proc-macro crate; delta relaxes derive(NoUninit) generic-parameter checks to match derive(Pod): repr(transparent)/repr(packed(1)) generic structs are now accepted, with the compile-time no-padding assertion correctly retained for non-packed/non-transparent types (src/traits.rs). Also accepts repr(packed) structs for NoUninit where padding assertions still apply. Remaining changes are doc typo fixes ("the the"), endianness/pointer-width fixes in tests, and a new compile-check test file. No unsafe, no build.rs, no fs/net/process/env access, no new dependencies; Cargo.lock only bumps proc-macro toolchain crates. Emitted code changes only affect which const assertions are generated, not runtime behavior of consumers.'
 
 [[audits.chrono]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -97,11 +139,29 @@ criteria = "safe-to-deploy"
 delta = "0.5.15 -> 0.5.16"
 notes = "Delta audit (cargo vet diff 0.5.15 -> 0.5.16). Files: CHANGELOG/Cargo.toml(.orig) (version bump only, no dependency changes), src/channel.rs, src/flavors/{never,zero}.rs, src/select_macro.rs, src/utils.rs, src/waker.rs, tests/mpsc.rs. Net unsafe: 0 added, 0 removed. Two upstream changes: (1) #1250 constify never() and the zero/never Channel::new() (pub fn -> pub const fn, Channel {..} -> Self {..}) — no runtime behavior change; (2) #1240 change the select!/select_biased! body matcher from => $body:block to => { $($body:tt)* } so rust-analyzer can auto-complete inside the block — semantically equivalent token capture. channel.rs/waker.rs additionally switch from std::sync::Mutex to the crate internal crate::utils::Mutex wrapper, dropping the .lock().unwrap() poison-handling at each call site; the wrapper is a thin non-poisoning shim over the same std Mutex (no new unsafe). No build script, no new dependencies, no new ambient-capability surface. Publisher taiki-e (crossbeam maintainer, same publisher already trusted for the crossbeam-epoch 0.9.18 -> 0.9.20 delta). Strictly a constification + tooling + internal-mutex refactor; trust extends from the audited 0.5.15 base."
 
+[[audits.crossbeam-deque]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.6 -> 0.8.7"
+notes = 'Adds a build.rs that only reads CARGO_CFG_SANITIZE and emits cfg(crossbeam_sanitize_thread) — same probe pattern already used by crossbeam-utils; no other env/fs/net/process activity. Source change replaces Release stores after Release fences with Relaxed stores (Release retained only under TSan cfg), a valid weakening since the preceding fence already provides the release ordering; the old code even documented that Relaxed would be correct absent TSan. Also fixes a Debug impl string (Injector printed "Worker") and a doc typo. No new unsafe blocks; Cargo.toml adds no features (section reordered only) and a dev-only Cargo.lock. Matches upstream crossbeam #1233.'
+
 [[audits.crossbeam-epoch]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.9.18 -> 0.9.20"
 notes = "Delta audit (cargo vet diff 0.9.18 -> 0.9.20), anchored on the existing 0.9.18 exemption. Fixes RUSTSEC-2026-0204: the fmt::Pointer impl for Atomic/Shared no longer dereferences the underlying raw pointer (UB when the pointer is invalid or null) — it prints the address directly (raw as *const ()), covering the invalid-ptr (#1276) and null-ptr (#1273) cases. Net -2 unsafe over the delta (3 removed, 1 added); the one added unsafe is Guard::defer_destroy re-emitted with a broadened bound (<T> -> <T: ?Sized + Pointable>) with an unchanged body (self.defer_unchecked(move || ptr.into_owned())), so no new unsafe operation. The new build.rs is benign: it emits rustc-check-cfg plus a crossbeam_sanitize_thread cfg derived from CARGO_CFG_SANITIZE (ThreadSanitizer detection migrated out of lib-level cfg); it reads one env var and does no fs/net/process/exec. No new runtime dependencies (crossbeam-utils pre-existing; rand is dev-only). No new ambient-capability surface. Publisher taiki-e (crossbeam maintainer, same publisher as 0.9.18). The change is strictly a soundness fix plus a benign cfg migration, so trust extends from the audited 0.9.18 base."
+
+[[audits.crossbeam-queue]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.12 -> 0.3.13"
+notes = "Adds push_mut/pop_mut on ArrayQueue and SegQueue plus Block::destroy_mut (upstream #1191): non-atomic fast paths gated on &mut self, so exclusive access soundly replaces atomics; new unsafe blocks (get_unchecked, UnsafeCell read/write, assume_init, Box::from_raw) carry exclusive-access reasoning and indices are masked to buffer bounds before get_unchecked. SegQueue::pop_mut correctly preserves the DESTROY-flag cooperative destruction path for blocks shared with prior concurrent readers. No changes to existing concurrent paths, no build.rs, no fs/net/process/env surface, no new features or dependencies (Cargo.toml section reordering and a dev-only Cargo.lock)."
+
+[[audits.crossbeam-utils]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.21 -> 0.8.22"
+notes = "AtomicCell::{as_ptr,into_inner} made const; into_inner now uses a repr(C)-union by-value transmute helper with a size assertion and safety comments explaining layout equivalence — semantically equivalent to the prior ManuallyDrop+read. CachePadded gains repr(C) (documented address guarantee). WaitGroup rewritten from Mutex<usize> to AtomicUsize plus a Mutex/Condvar handshake; missed-wakeup avoidance (notifiers take the lock between counter update and notify) is documented, and the ManuallyDrop+ptr::read in wait() is a standard destructure-without-Drop with a safety comment. no_atomic.rs adds armv4t/armv5te/thumbv4t/thumbv5te targets; build.rs unchanged; only new dependency is dev-only rustversion. No fs/net/process surface."
 
 [[audits.crypto-common]]
 who = "Robert Nio <robert_nio@intuit.com>"
@@ -109,11 +169,29 @@ criteria = "safe-to-deploy"
 delta = "0.1.6 -> 0.2.2"
 notes = "Delta audit (cargo vet diff 0.1.6 -> 0.2.2). Files: Cargo.toml/Cargo.toml.orig (version + metadata: autolib/autobins/resolver=2, switch generic-array -> hybrid_array dep), CHANGELOG/README/LICENSE-MIT (text), src/lib.rs, src/hazmat.rs, new src/generate.rs. Net unsafe blocks added: 0 (grep confirms the only 'unsafe' token added is a Clippy lint declaration 'undocumented_unsafe_blocks = warn'). New generate.rs is pure-safe key/IV generation over rand_core CryptoRng/TryCryptoRng traits (hybrid_array Array<ArraySize>), no FFI / I/O / process / network / ambient capability. The 0.2 line is the known RustCrypto API restructuring (generic-array -> hybrid_array); behavior of the trait surface is otherwise preserved. Same publisher (github:RustCrypto/traits) the repo already trusts for 'digest'."
 
+[[audits.displaydoc]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.6 -> 0.2.7"
+notes = "Delta is the syn 2.0 -> 3.0 dependency major bump with mechanical API adaptations in src/expand.rs (new attrs fields on PredicateType/TypePath, TraitBoundModifier -> TraitBoundModifiers + maybe field) and a then->then_some cleanup in src/attr.rs; MSRV raised 1.56 -> 1.71. syn remains the sole non-toolchain dependency (checksum-pinned in the lockfile). No unsafe, no build.rs, no fs/net/process/env access, no feature changes. Generated Display impls are unchanged in substance; remaining diff is changelog/README/doc text."
+
 [[audits.either]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "1.15.0 -> 1.16.0"
 notes = "Delta audit (cargo vet diff 1.15.0 -> 1.16.0). Files: Cargo.toml(.orig) version bump, .github/workflows/ci.yml + README.rst (non-shipping), src/lib.rs, src/iterator.rs, src/serde_untagged.rs, src/serde_untagged_optional.rs. The only two 'unsafe' lines changed are NOT new: the existing Pin::new_unchecked projections in as_pin_ref/as_pin_mut, merely renamed from the internal map_either! macro to map_both!; the documented SAFETY invariant and runtime behavior are unchanged. Remainder is added safe iterator/serde trait impls. No new FFI / I/O / process / network / ambient capability. Publisher cuviper (rayon/itertools maintainer)."
+
+[[audits.event-listener]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "5.4.1 -> 5.4.2"
+notes = "Removes the slab.rs fallback implementation and with it the concurrent-queue runtime dependency (net reduction of the dependency tree); intrusive.rs becomes the sole backend. Adds a spinlock module used only when neither std nor critical-section is enabled: AtomicBool CAS with Acquire/Release orderings, unsafe UnsafeCell access guarded by lock-held safety comments, and prominent docs warning the spinlock path is a last resort. Soundness fix: previously unbounded `unsafe impl Send/Sync for StackSlot` now require T: Send (upstream #163), strictly tightening the API. No build.rs, no fs/net/process/env surface; the large Cargo.lock diff is dev/bench-only churn. Remaining changes are doc gating and formatting."
+
+[[audits.fastrand]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.4.1 -> 2.5.0"
+notes = 'Source changes under src/ are doc-comment wording only ("ranges" -> "range"); no logic, no unsafe, no build.rs (build = false). The version bump exists to move the optional wasm-only getrandom dependency and dev-dependencies from 0.3.4 to 0.4 (rand 0.9 -> 0.10 for benches); no new dependencies otherwise. Bench harness rewritten to adapt wyhash to the rand 0.10 TryRng trait, dev-only. Lockfile churn reflects the getrandom/rand major bumps. No fs/net/process/env surface exists or was added.'
 
 [[audits.futures]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -181,17 +259,35 @@ criteria = "safe-to-deploy"
 version = "0.5.2"
 notes = "Reviewed v0.5.2 source. Transitive dep of num_cpus. Two files: errno.rs is pure i32 constants (EPERM, ENOENT, ...); lib.rs is #![no_std] FFI declarations for the Hermit unikernel syscall interface (sys_mmap, sys_getpagesize, sys_errno, thread scheduling primitives, ...) plus two unsafe wrapper fns for get/set_priority. No network I/O, no filesystem I/O, no std dependency. On non-Hermit targets the extern C symbols are never linked and the functions are inert — num_cpus only touches hermit-abi when target_os=hermit, which none of our shipping targets hit. Apache-2.0 OR MIT; author Stefan Lankes, Hermit OS project lead."
 
+[[audits.humantime]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.3.0 -> 2.4.0"
+notes = 'Sole source change is a new public `const fn Duration::new(StdDuration)` constructor in src/wrapper.rs; no unsafe, no I/O, no new dependencies, no build.rs. Cargo.toml now declares rust-version = "1.60". Remaining diff is CI workflow reformatting/action version bumps and dev-only lockfile churn. Formatting/parsing logic untouched.'
+
 [[audits.indicatif]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.18.4 -> 0.18.6"
 notes = "Delta audit (cargo vet diff 0.18.4 -> 0.18.6, 1547-line diff; src changes limited to draw_target.rs, format.rs, iter.rs, multi.rs, style.rs - rest is examples/tests/CI). All rendering/formatting logic: (1) draw_target.rs switches hidden-detection to console::is_dumb() (pairs with the console 0.16.4 bump) and adds CJK-aware wrapped_metrics (line-height + last-line-width accounting via AnsiCodeIterator + UnicodeWidthChar); (2) format.rs fixes HumanFloatCount negative-sign grouping ('-,100' bug) and precision-0 rounding, uses stable div_duration_f64; (3) iter.rs converts map-and-return closures to Result::inspect - behavior identical; (4) multi.rs replaces is_hidden()/width() forwarders with direct pub(crate) draw_target field access + big doc addition, adds Multi arm to is_stderr(); (5) style.rs moves segment/measure/width helpers verbatim and converts Template::from_str to the FromStr trait. Zero unsafe, zero fs/net/process/env additions. Publisher djc, same as 0.18.4."
 
+[[audits.ipnet]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.12.0 -> 2.12.1"
+notes = 'Bug fix in `next_ipv4_subnet`/`next_ipv6_subnet` (issue #70): the prefix-length computation is rewritten with plain u32/u128 arithmetic so Ipv4Subnets/Ipv6Subnets(0, MAX-1, 0) no longer includes the MAX address; regression tests added. Remainder is doc/error-message typo fixes ("less then" -> "less than"), html_root_url bump, and dev-dependency lockfile churn. No unsafe, no build.rs, no new dependencies, no I/O surface.'
+
 [[audits.itoa]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "1.0.18"
 notes = "Full audit (488 LOC, no_std, zero deps). No fs/net/process/env capability; no build.rs. All 13 unsafe sites reviewed: digit-pair table reads are get_unchecked(pair*2+{0,1}) with pair<100 from divmod100 into a 200-byte ASCII table (in-bounds by construction); buffer writes are checked-index MaybeUninit writes covering exactly [offset, len); slice_buffer_to_str's from_utf8_unchecked is sound because only ASCII table bytes and b'0'+digit are ever written; Buffer::format's pointer cast goes from the largest buffer ([MaybeUninit<u8>; i128 MAX_STR_LEN]) to a smaller same-alignment array, and the unreachable_unchecked is an optimizer hint upheld because write() slices within the buffer. Publisher verified on crates.io: dtolnay."
+
+[[audits.jobserver]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.34 -> 0.1.35"
+notes = "Zero changes under src/ — the jobserver FFI/syscall implementation (pipe/fifo fds on Unix, named semaphore on Windows) is byte-identical between versions. The release only raises rust-version 1.63 -> 1.85, bumps dev-dependencies (nix 0.28 -> 0.31.3, Windows-only getrandom dep to 0.4), reworks CI to use distro GNU Make instead of a vendored compile-make action, and extends tests/client.rs to run each test under both --jobserver-style=fifo and =pipe (test-harness process spawning only). No new unsafe, no build.rs, no new runtime dependencies."
 
 [[audits.libmimalloc-sys]]
 who = "Robert Nio <robert_nio@intuit.com>"
@@ -210,6 +306,18 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.16 -> 0.1.17"
 notes = """Delta audit (cargo vet diff 0.1.16 -> 0.1.17). Cargo.toml(.orig): version bump + redox_syscall dep 0.7 -> 0.8. src/lib.rs: (a) cosmetic reorder of a libc MSG_* re-export list (no semantic change); (b) adds one Redox kernel FFI binding redox_relpathat_v0(dirfd, fd, dst_base, dst_len) -> RawResult plus the safe wrappers Fd::relpathat / call::relpathat, mirroring the existing redox_fpath_v1 binding exactly (Error::demux over an unsafe extern call using the caller-provided &mut [u8] buffer's ptr+len). The single new unsafe block is a like-for-like copy of the adjacent fpath binding. libredox is the Redox stable-ABI shim, reachable only via redox_users on target_os="redox"; the extern symbols are never linked on UFFS shipping targets (Windows/macOS). No network/FS-path/process/env additions. Publisher 4lDO2 (Redox maintainer)."""
+
+[[audits.libredox]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.17 -> 0.1.19"
+notes = """This is a Redox-OS syscall shim crate (unused on the Windows/macOS targets of this workspace). Delta adds two extern "C" declarations (`redox_sys_call_multiple_v0`, `redox_fcntl_v0`), a `Call` trait generalizing call_ro/call_wo/call_rw over a single fd or an fd slice (call_ro/call_wo now reject conflicting READ/WRITE flags with EINVAL), an `fcntl` wrapper plus `Fd::fcntl`, and `O_CLOEXEC`/`F_DUPFD_CLOEXEC` constants. New unsafe blocks are thin pass-throughs to the declared relibc ABI with pointers/lengths derived from the given slices; consistent with the crate's purpose. Optional redox_syscall dependency bumped 0.8 -> 0.9; no build.rs, no other dep changes."""
+
+[[audits.log]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.32 -> 0.4.33"
+notes = "Single functional change: `MaybeStaticStr`'s derived Eq/Ord/Hash (which compared the enum discriminant, making Static vs Borrowed keys with equal text unequal) replaced by manual impls that delegate to the underlying &str, fixing structured-logging Key comparison (upstream PR #732); matching unit tests added in src/kv/key.rs. No unsafe, no build.rs, no dependency or feature changes; rest is changelog, html_root_url bump, and dev lockfile churn (sval pinned back to 2.19)."
 
 [[audits.memchr]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -241,11 +349,23 @@ criteria = "safe-to-deploy"
 delta = "1.2.0 -> 1.2.1"
 notes = """Delta audit (cargo vet diff 1.2.0 -> 1.2.1). Portability + correctness patch: adds target_os="horizon" (Nintendo 3DS) cfg gating and a WASI p1/p2 waker path split across src/sys/* and src/poll.rs; src/sys/unix/selector/poll.rs introduces a per-platform PollFlagInt type alias (c_short vs c_int) with 0-valued fallbacks for POLLRDHUP/POLLPRI/POLLRDBAND/POLLWRBAND on platforms lacking them; and a poll-timeout rounding fix that rounds sub-millisecond Durations up via checked_add(Duration::from_nanos(999_999)) before as_millis(), clamped to libc::c_int::MAX. All changes are libc-constant/cfg plumbing over the existing epoll/poll/IOCP backends; no NEW unsafe logic, no new deps, no new process/network capability beyond mio's existing readiness-I/O purpose. Publisher Thomasdezeeuw (mio/tokio maintainer)."""
 
+[[audits.mio]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = 'Delta adds Solaris event-ports support (new `selector/event_ports.rs` and `waker/event_ports.rs`) and NuttX poll(2) support; existing platform code changes are confined to cfg-attribute reshuffling that moves solaris off the poll fallback and adds nuttx to existing target lists. New unsafe in the Solaris selector is limited to `OwnedFd::from_raw_fd(port_create())`, `set_len(nget)` after `port_getn` initialization, and `Send`/`Sync` impls for event types whose only raw-pointer field (`portev_user`) carries mio tokens; each carries an accurate safety comment and the syscall usage (port_create/port_getn/port_associate/port_send/poll/fcntl FD_CLOEXEC) is conventional. All new code is `target_os = "solaris"`/`"nuttx"` gated and unreachable on Windows/macOS/Linux builds. No new dependencies, features, build script, or fs/process/env surface.'
+
 [[audits.num-conv]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.1 -> 0.2.2"
 notes = "Delta audit (cargo vet diff 0.2.1 -> 0.2.2, 4 files +72/-8). Cargo.toml/Cargo.toml.orig: version bump only. README.md + src/lib.rs doc-comments: add note that num-conv is being uplifted into the standard library (rust-lang/rust#154330). src/lib.rs: introduces new 'Widen' trait + 'WidenTarget' + sealed 'WidenTargetSealed' as the going-forward names for the existing 'Extend'/'ExtendTarget'/'ExtendTargetSealed' trio. The old Extend trait is kept with #[deprecated(since='0.2.2', note='use Widen instead')] for backward compat; #[allow(deprecated)] internally so the existing impls still compile. The Widen implementation is bit-identical to Extend ('self as _' for size-preserving widening). impl_extend! macro renamed to impl_widen!, but it emits BOTH the new WidenTargetSealed/WidenTarget impls AND retains the deprecated ExtendTargetSealed/ExtendTarget impls so downstream code calling .extend() still works. No new unsafe (none exists in this crate), no new ambient capabilities, no I/O / FFI / process / network — pure trait rename-with-deprecation release prefacing the stdlib uplift. jhpratt is the time-rs maintainer; same publisher as the existing 0.2.1 we already trust transitively via time."
+
+[[audits.object]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.37.3 -> 0.39.1"
+notes = "Diff is ~8300 lines and matches the upstream changelog: relocation-handling refinements, new ELF/Mach-O constants, PE import-parsing hardening (errors on empty import names, handles names in other sections), and new Mach-O exports-trie/function-starts parsers. No new unsafe blocks; the removal of the `unaligned` feature redefines fixed-endian integer types as `[u8; N]` wrappers so the pre-existing `unsafe_impl_endian_pod!` impls are trivially sound, and `slice_from_all_bytes` now rejects zero-sized types instead of dividing by zero. build.rs is byte-identical (rustc version probe only); no new dependencies, only version bumps of hashbrown (0.15->0.17), indexmap (2.0->2.14), and wasmparser (0.236->0.247). No fs/net/process/env access added to library code; `std::fs` appears only in new integration tests reading checked-in test files. New parsing code uses bounds-checked `Bytes` reads throughout; one robustness observation: the new exports-trie iterator (`src/read/macho/exports_trie.rs`) follows uleb128 child offsets with no cycle detection, so a crafted trie can cause non-termination/unbounded allocation in that opt-in iterator (availability only, no memory unsafety). `read::SymbolMap` code was relocated from `read/mod.rs` to a new `symbol_map.rs` with the documented size-parameter API change. Nothing suspicious observed; consistent with safe-to-deploy."
 
 [[audits.pastey]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -409,17 +529,53 @@ criteria = "safe-to-deploy"
 delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
 notes = "Migration from git revision to crates.io SemVer."
 
+[[audits.portable-atomic]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.13.1 -> 1.14.0"
+notes = "Large but coherent delta matching the changelog: s390x 128-bit RMW register-pair fix (r0/r1 hi/lo swap applied consistently across load/swap/CDSG loops), AArch64 LSFE `ldfadd/ldfmaxnm/ldfminnm` operand-order fix, AArch64 CAS rewritten from branchy cmp/cset to ccmp/csel, redundant SeqCst fences dropped for LSE* per the Arm atomics ABI (LLVM commit references given), and pervasive mechanical changes (`ptr as usize` -> `.addr()`, per-instruction asm annotations). Seq-lock fallback is refactored into `seq_lock_common.rs` with SeqCst fencing hoisted into an RAII `ScFenceGuard` at the atomic-op layer, and `is_lock_free` consistency is now guaranteed via a CAS on the detection cache — reasoning is documented and sound. Runtime detection newly enabled by default on Apple (libc `sysctlbyname`, replacing the removed raw-syscall test path), illumos (getisax), and Windows (IsProcessorFeaturePresent PF_ARM_LSE2_AVAILABLE=62); all are documented OS APIs. build.rs changes are Arm/AVR target-feature parsing refinements plus a fix for custom target names; no new deps (a `portable-atomic-util` workspace member was actually removed, leaving only a pointer README), no new fs/net/process surface."
+
+[[audits.psm]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.31 -> 0.1.32"
+notes = 'No source, assembly, or build.rs changes at all. Delta is limited to the version bump, a new `rust-version = "1.88.0"` field, and dev-only Cargo.lock refreshes (cc, object, ar_archive_writer, shlex, memchr), which do not affect dependents resolving their own graphs. Nothing to review beyond metadata; safe-to-deploy trivially preserved.'
+
 [[audits.quick-xml]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.39.2 -> 0.39.4"
 notes = "Delta audit (cargo vet diff 0.39.2 -> 0.39.4, 3 files +35/-10). Cargo.toml/Cargo.toml.orig: version bump only. src/parser/dtd.rs is the only source change — three robustness fixes to the DTD internal-subset parser, all panic-prevention: (a) when 9+ bytes already accumulated in UndecidedMarkup state without matching one of <!--, <![CDATA[, <!ELEMENT, <!ATTLIST, <!ENTITY, <!NOTATION, fall through to 'skip until >' instead of staging more bytes than the 9-byte work buffer can hold (which would have panicked on the slice copy in UndecidedMarkup); (b) symmetric fix in the keyword-scan branch when the full 9-byte window has been consumed; (c) removes the 'markup.len() < 9 => None' bail-out and changes the no-> fallback from 'Some(markup.len())' to 'None' so the caller correctly waits for more input rather than treating partial markup as complete. Plus two comment-typo fixes. No new unsafe, no new I/O / FFI / process surfaces, no API additions, no feature-gate changes. Pure parser bounds-hardening."
 
+[[audits.quinn]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.11.9 -> 0.11.11"
+notes = "Full diff reviewed. Runtime changes are confined to async plumbing: EndpointRef/ConnectionRef reference counts move from mutex-guarded usize to AtomicUsize (Relaxed, plain inc/dec with last-owner check), drive_timer is reworked to check the clock before polling the tokio Sleep so elapsed deadlines are not masked by tokio's cooperative budget, and RecvStream::drop/stop now clean blocked_readers entries to avoid leaking wakers. The only new unsafe code is a raw-waker vtable in cfg(test)-gated src/tests.rs; production code adds no unsafe. build.rs is unchanged (trivial cfg_aliases only); no new runtime dependencies — rustls-pemfile dev-dep removed, a private __rustls-post-quantum-test feature and a feature-gated integration test are added, and the quinn-proto requirement is bumped to 0.11.15. Cargo.lock churn (asn1-rs, der-parser, etc.) affects only the workspace's dev/test resolution, not dependents. No new fs/net/process/env access; example server.rs switches PEM parsing from rustls-pemfile to rustls-pki-types helpers. MSRV raised to 1.85."
+
+[[audits.quinn-proto]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.11.14 -> 0.11.16"
+notes = "Full diff reviewed; crate remains sans-IO with no unsafe, no build script, and no fs/net/process/env access. The two substantive network-facing changes are defensive: Assembler::insert now returns TooManyChunks when more than 1024 buffered chunks survive defragmentation, closing the connection via TransportError on maliciously fragmented STREAM/CRYPTO frames (memory-exhaustion hardening, mirroring ngtcp2), and the server endpoint now silently drops Initial packets when CIDs are exhausted or max_incoming is reached, before deriving initial keys, instead of doing crypto work to send CONNECTION_REFUSED (CPU-exhaustion hardening; a regression test asserts the client times out). Loss detection and RTT math switch from panicking Instant subtraction to saturating_duration_since/abs_diff, and CUBIC fast convergence is corrected per RFC 9438 using the pre-reduction window. Dependency changes are the rand 0.9 -> 0.10 migration (RngExt/TryRng/SysRng API renames, getrandom 0.4 on wasm), rand_pcg promoted from dev to runtime dependency solely so BBR's pacing jitter uses Pcg32 (non-cryptographic use; CID/token/reset-token randomness still comes from StdRng seeded from the system RNG), plus fastbloom 0.14 -> 0.17 and rustls-platform-verifier 0.6 -> 0.7 version bumps. MSRV raised to 1.85."
+
 [[audits.rand]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.1 -> 0.10.2"
 notes = "Delta audit (cargo vet diff 0.10.1 -> 0.10.2, 596-line diff). Security-positive patch release: (1) distr/uniform_other.rs fixes rust-random/rand#1790 - UniformChar's serde Deserialize gains deser_sampler() range validation so a hostile serialized sampler can no longer drive char::from_u32_unchecked out of range; the sample path itself drops from_u32_unchecked for checked char::from_u32 + expect. (2) distr/slice.rs Choose::sample drops get_unchecked for checked get + expect (rust-random/rand#1791). Net unsafe count DECREASES by two blocks. (3) uniform_int.rs adds pub(crate) max() helper used by the new validation + tests. (4) seq/slice.rs partial_shuffle gains #[must_use] and a variable rename m->n; shuffle order semantics unchanged. Remainder is docs/typo churn. No new capability surface. Published by github:rust-random/rand trusted-publishing account."
+
+[[audits.ref-cast]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.25 -> 1.0.26"
+notes = "No functional source change. Delta is the version/MSRV bump (1.61 -> 1.71), a cosmetic let-else refactor in build.rs (same rustc minor-version probe, same cfg emission), doc `html_root_url` bump, CI workflow updates, and refreshed trybuild `.stderr` expectations for newer rustc diagnostics. Pinned `ref-cast-impl` bumped to =1.0.26 in lockstep. No new unsafe, deps, features, or I/O surface."
+
+[[audits.ref-cast-impl]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.25 -> 1.0.26"
+notes = "Zero changes to the proc-macro source itself; the delta is the version/MSRV bump (1.61 -> 1.71) and moving the `syn` dependency from `2.0.46` to `3` (source-compatible here since no code edits were needed). Cargo.lock updates are the corresponding syn 3.0.0/proc-macro2/quote refreshes. No build script, no unsafe, no I/O surface; build-time-only crate."
 
 [[audits.regex]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -463,6 +619,12 @@ criteria = "safe-to-deploy"
 delta = "2.1.0 -> 2.2.0"
 notes = "Reviewed full 2.1.0->2.2.0 diff. 'unsafe' count 0 -> 0; no runtime dependency or feature changes (only a version bump + a new [[test]] registration). Changes are the documented conformance/robustness work: reject auth servers lacking S256 PKCE + metadata-discovery host allowlisting/SSRF hardening in transport/auth.rs (client/http feature this project does not enable); don't respond to cancelled requests (service.rs); TTL seconds->milliseconds per MCP spec with a deprecated alias (task_manager.rs); fail orphaned streamable-HTTP responses on session reinit (streamable_http_client.rs); mime 'text'->'text/plain' (model). Only URLs in the diff are example.com in tests. No suspicious endpoints or exfiltration."
 
+[[audits.rmcp]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 3.1.0"
+notes = "Delta audit (cargo vet diff 2.2.0 -> 3.1.0), ~34k-line major-version diff; all changed src/ files were enumerated and reviewed (transport/auth.rs, service/client.rs and new service/client/cache.rs, transport/streamable_http_client.rs, task_manager.rs, streamable_http_server/tower.rs and session files, service.rs, service/server.rs, client_side_sse.rs, reqwest/unix-socket/child-process/async_rw transports, error.rs, lib.rs, handlers, and the new model/mrtr.rs, model/request_state.rs, transport/common/mcp_headers.rs read in full); model-type files (model.rs, meta.rs, serde_impl.rs, task.rs, capabilities.rs, etc.) were reviewed at item level and are serde/schema type changes only. No unsafe anywhere in the diff, no build.rs, no new URLs or domains outside example.com/localhost test fixtures and spec doc links, and no new filesystem/process/env access; child_process.rs only deletes a deprecated API. New optional deps hmac 0.13 and sha2 0.11 back the new request-state feature, an HMAC-SHA256 integrity codec for SEP-2322 requestState with constant-time verification and a redacted-key Debug impl; base64 bumps to 0.23 and jsonwebtoken to 11. Nature of release: MCP 2026-07-28 protocol work — server/discover lifecycle, SEP-2549 client response cache, SEP-2663 task manager, SEP-2322 MRTR, SEP-2243 standard headers, SEP-2260 request-association enforcement, subscription streams. Security posture improves: OAuth discovery gains RFC 8414 issuer validation, stricter RFC 8707 resource matching, refresh-rejection classification, issuer-change credential invalidation, and removal of the unauthenticated POST probe; DoS hardening adds a 16 MiB SSE event cap and a 4 MiB server request-body cap. Capability surface (HTTP client/server to caller-configured endpoints, stdio child-process transport, Unix sockets) is unchanged in kind and honestly consistent with an MCP protocol SDK; no malicious or obfuscated code observed."
+
 [[audits.rmcp-macros]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -486,6 +648,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "2.1.0 -> 2.2.0"
 notes = "Reviewed full 2.1.0->2.2.0 diff. Pure version bump: the only change is the version field in Cargo.toml (cargo-vet reports 1 file, 1 insertion, 1 deletion). No source, dependency, or capability changes."
+
+[[audits.rmcp-macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.2.0 -> 3.1.0"
+notes = "Delta audit (cargo vet diff 2.2.0 -> 3.1.0), full diff reviewed (~630 lines). Source changes are removal of the task_handler proc-macro (src/task_handler.rs deleted, references removed from lib.rs and tool_handler.rs), removal of the ToolExecution/task_support attribute machinery from tool.rs, renamed generated result types (GetPromptResult -> GetPromptResponse, CallToolResult -> CallToolResponse), new result_type/ttl_ms/cache_scope fields in generated ListTools/ListPrompts results, and mechanical let-chains refactors in common.rs, prompt.rs, and tool.rs (skimmed as purely mechanical). No unsafe code, no build.rs, no filesystem/network/process/env access; codegen emits only rmcp model-type constructors as before. Cargo.toml changes are the version bump and rust-version = 1.88; no new dependencies (Cargo.lock churn is routine version bumps of proc-macro2/quote/syn/serde). Generated-code diff is honestly consistent with the rmcp 3.x protocol-model changes; nothing obfuscated or suspicious."
 
 [[audits.rustc-hash]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -511,11 +679,23 @@ Delta audit (Apr 2026, v0.5.71):
   No runtime behavior change.
 - No unsafe additions, no API changes, no new ambient capabilities."""
 
+[[audits.rustls]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.40 -> 0.23.43"
+notes = "No new or changed unsafe code; no new dependencies or features in Cargo.toml (Cargo.lock gains dev-only entries such as defmt and jiff-core that do not affect dependents). Main feature is RFC 9149 ticket_request support: new public ClientConfig::send_ticket_request (default None) and ServerConfig::max_tls13_tickets (default 0), both off by default so behavior is unchanged unless opted in; wire handling is two u8 counts each way. Handshake-critical hardening: the client now rejects a ServerHello cipher suite unless it was actually offered in its own ClientHello (tracked via offered_cipher_suites) and is usable for the current protocol, and supports_version/find_cipher_suite now take a Protocol parameter so QUIC connections only accept TLS 1.3 on both client and server (server-side error-ordering for QUIC adjusted accordingly). Panic-avoidance fixes: aws-lc-rs ticketer decrypt uses checked_sub so truncated ciphertexts return None instead of underflowing, PSK binder length computations use saturating_sub, and session-ticket age uses a checked u32 conversion. Remaining changes are cfg(read_buf) nightly BorrowedCursor<'_, u8> signature updates, a const fn annotation, and cosmetic cleanups; certificate verification code is untouched. Nothing suspicious observed; capability surface (I/O, network, process, env) is unchanged."
+
 [[audits.rustls-native-certs]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.8.3 -> 0.8.4"
 notes = "Delta audit (cargo vet diff 0.8.3 -> 0.8.4). Most of the diff is CI/workflow/example/test files (.github/*, examples/*, tests/*, integration-tests/*). The only library change in src/lib.rs: a rustls_native_certs_docsrs doc_cfg feature attribute, and a refinement of the SSL_CERT_DIR-style directory handling to use env::split_paths(&dirs).filter(|p| !p.as_os_str().is_empty()) so multiple (OS-separator-delimited) cert directories are parsed and empty entries skipped. Reading SSL_CERT_FILE/SSL_CERT_DIR env + OS trust stores is rustls-native-certs's existing and sole purpose — no NEW capability class is introduced. No new unsafe, no new deps. Publisher (rustls project, ctz/djc)."
+
+[[audits.rustls-pki-types]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.14.1 -> 1.15.1"
+notes = "Small delta with no unsafe code and no new runtime dependencies; only criterion is added as a dev-dependency plus a dns_name bench target (the bench file is not even included in the published package). New public API is the const constructor FipsStatus::certified, a trivial enum builder. The TLS-relevant change is a rewrite of the const DNS-name validate function in src/server_name.rs from a per-character state machine to a per-label loop; the two implementations were compared case by case and they enforce the same rules (253-byte total max, 1-63 byte labels, alphanumeric/underscore with interior hyphens only, no empty labels, all-numeric final label rejected, trailing dot accepted), with empty input now rejected by an explicit up-front check rather than the old final-state check — no loosening observed. A matching unit test for FipsStatus Debug formatting is added. Nothing suspicious observed; capability surface is unchanged."
 
 [[audits.ryu]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -529,6 +709,18 @@ criteria = "safe-to-deploy"
 version = "1.0.6"
 notes = "Full audit (908 LOC). Capability is std::fs File opens by design (the crate's purpose: file-identity comparison via dev/ino on Unix, volume/index via handle info on Windows) — no net/process/env, no build.rs. Unsafe reviewed: File::from_raw_fd(0/1/2) for the std streams is paired with an is_std flag whose Drop impl leaks the descriptor via into_raw_fd, so std fds are never closed (no double-close, no fd hijack); Windows side mirrors this via winapi-util's non-owning HandleRef. Publisher verified on crates.io: BurntSushi."
 
+[[audits.schemars]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = 'Source delta is a single refactor in src/_private/mod.rs converting a nested if into a match guard when adding "null" to an instance type; behavior is equivalent. Cargo.toml changes pin schemars_derive to =1.2.2 and bump dev-dependencies (garde 0.23, validator 0.21). The large Cargo.lock churn is dev/CI-only and does not affect downstream builds. No unsafe, no build.rs, no fs/net/process/env/FFI surface.'
+
+[[audits.schemars_derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = """Mechanical migration from syn 2 to syn 3 and serde_derive_internals 0.30: Container::from_ast gains the new private-ident argument (passed as a dummy "__dummy" ident, unused for schemars' purposes), Name is replaced by MultiName, and syn AST adjustments (BareFn -> FnPtr, TraitBoundModifiers, new attrs fields) are applied. Purely compile-time proc-macro code; generated token output is unchanged apart from these adaptations. No unsafe, no build.rs, no I/O."""
+
 [[audits.scopeguard]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -541,11 +733,29 @@ criteria = "safe-to-deploy"
 version = "1.0.28"
 notes = "Full audit (2117 LOC, no_std-capable). No capability surface; no build.rs. The unsafe concentration is identifier.rs's tagged-pointer small-string: 2-byte-aligned heap allocations guarantee a free LSB, the ASCII-only content invariant guarantees a free MSB for the tag, length is a varint header on heap reprs and trailing-zero-count inline; every unsafe block carries a precise SAFETY comment and the invariants are documented exhaustively at the top of the module. Verified parse.rs validates the ASCII charset ([0-9A-Za-z-.]) before every new_unchecked call; Clone re-derives layout from its own allocation's varint header; empty-string niche (-1) analysis is coherent. Publisher verified on crates.io: dtolnay."
 
+[[audits.serde_derive_internals]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.29.1 -> 0.30.0"
+notes = "Upstream serde refactor mirrored into the standalone crate: syn 2 -> 3, edition 2015 -> 2021, MSRV 1.71. Name/MultiName moved to a new src/name.rs that carries spans alongside string values (all pure data-structure code); flatten tracking moved off Container attrs; a `private` Ident parameter threads the serde `__private` module name through borrow_cow_str/borrow_cow_bytes path construction; remaining changes are let-else/mem::take modernizations and syn 3 AST renames (BareFn -> FnPtr, PreciseCapture arm). No unsafe, no build.rs (still excluded), no fs/net/process/env surface."
+
 [[audits.serde_path_to_error]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.1.20"
 notes = "Full audit (2930 LOC). Zero unsafe. Zero capability surface (no fs/net/process/env, no build.rs). Pure serde adapter: Deserializer/Serializer wrappers that mechanically delegate every trait method while tracking a path breadcrumb; no logic that could affect data integrity beyond error decoration. Publisher verified on crates.io: dtolnay."
+
+[[audits.simd-adler32]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.9 -> 0.3.10"
+notes = 'NEON get_imp cfg is tightened to `all(target_feature = "neon", any(target_arch = "aarch64", feature = "nightly"))`, disabling the intrinsics path on 32-bit ARM stable where the intrinsics are nightly-only; a matching `stdarch_arm_neon_intrinsics` feature gate is added for nightly ARM. No unsafe bodies changed — the SIMD kernels themselves are untouched. Test-only reference implementation switches from unmaintained `adler` to `adler2` (dev-dependency); remaining delta is CI workflows and README benchmarks. No build.rs, no I/O surface.'
+
+[[audits.simd-json]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.17.0 -> 0.17.3"
+notes = "Unsafe/SIMD changes are performance and correctness work: NEON stage-1 rewritten to deinterleaved vld4q_u8 loads with an sri/shrn movemask (same memory footprint, well-commented); AVX2 paths now require and runtime-detect pclmulqdq to match compute_quote_mask's target_feature; the atomic-fn-pointer/transmute self-patching dispatch for parse_str is replaced with per-document resolution; SWAR digit/atom parsing gains u64::from_le for big-endian soundness; AlignedBuf::with_capacity(0) now uses NonNull::dangling and skips dealloc instead of allocating a zero-size layout; a chunk-boundary float corruption (issue #455) and negative-integer digit-count bug are fixed with regression tests. Optional once_cell dependency dropped in favor of std OnceLock; new lockfile entries (alloca, page_size) come from criterion 0.8 and are dev-only. One hygiene wart: a stray `dbg!();` was left on an error path in src/numberparse/approx.rs (non-default approx parsing), writing a line to stderr on that parse error — cosmetic, not a security concern. No build.rs, no fs/net/process/env surface changes."
 
 [[audits.siphasher]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -553,17 +763,53 @@ criteria = "safe-to-deploy"
 delta = "1.0.2 -> 1.0.3"
 notes = "Delta audit (cargo vet diff 1.0.2 -> 1.0.3, 5 files +105/-36). .gitignore: adds .swival editor tmpdir (no runtime effect). Cargo.toml/Cargo.toml.orig: version bump only. src/sip.rs + src/sip128.rs: single-shot fast-path optimization for the existing SipHasher{,13,24}::hash() and ::hash() (Hash128) public APIs. The old impls cloned the Hasher state, called .write(bytes), then .finish() — going through the buffered short_write codepath byte-by-byte even though the full message was available up-front. The new impls add private Hasher<S>::hash(msg) / hash128(msg) fast paths that, when ntail==0 (no buffered tail bytes from a prior write), XOR-fold msg's 8-byte chunks directly into the SipHash state in a tight loop, then finalize with the standard tail handling. When ntail!=0 the impl falls back to the original clone-write-finish path so correctness is preserved for partially-streamed hashers. The fast path's two unsafe blocks (load_int_le! and u8to64_le) were already present in the pre-existing .write() path and are reused unchanged: the 'while i < len - left' loop with 'left = len & 0x7' guarantees i + 8 <= len, so load_int_le! is in bounds; u8to64_le's 3rd arg 'left' is bounded to 0..8 by construction. Also adds Hasher::write_u16 (was missing — previously fell through to the default Hasher trait impl, which is byte-by-byte). write_u16 mirrors the existing write_u32/_u64/_usize pattern: short_write(i, i.to_le() as u64). finish()/finish128() are refactored to delegate to static finish{,128}_with_state(state,length,tail) helpers — pure structural extraction, output bytes unchanged for any given (state,length,tail). Net result: speed-up for single-shot byte-array hashing; no public-API additions beyond write_u16 (which is part of the std::hash::Hasher trait, not a new surface); no new unsafe operations beyond what already existed; no FFI / FS / network / process — pure crypto primitive, used here only via phf_shared for compile-time string hashing in transitive deps. Author jedisct1 (Frank Denis) is a well-known cryptography maintainer."
 
+[[audits.snap]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.1 -> 1.1.2"
+notes = "Only source change is in src/decompress.rs: the literal-length decode near end-of-input now requires only the 1-4 length bytes selected by the tag (previously demanded 4), with a safe byte-wise LE fallback preceded by an explicit bounds check, and the header varint is capped at 5 bytes. The decoded length still flows through the pre-existing src/dst bounds check before the unsafe copy_nonoverlapping, so no new unsafe and no weakening of existing safety checks. build.rs is byte-identical between versions (writes lookup tables to OUT_DIR only); the Cargo.toml delta is cargo's publish-time manifest normalization (explicit build key, autolib/autobins flags, explicit example targets). No dependency, feature, fs/net/process, or env changes; remainder is CI-workflow and lockfile churn."
+
 [[audits.socket2]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.6.3 -> 0.6.4"
 notes = """Delta audit (cargo vet diff 0.6.3 -> 0.6.4). The overwhelming majority of changes add target_os="horizon" (Nintendo 3DS) to existing cfg exclusion lists and refine QNX gating to all(target_os="nto", any(target_env="nto70","nto71")). Two genuinely new items: `unsafe impl Send for MsgHdr<'_,'_,'_>` and `unsafe impl Send for MsgHdrMut<'_,'_,'_>` — these wrapper types hold a platform msghdr plus PhantomData lifetime markers over caller-borrowed buffers; Send is sound because the struct is plain data referencing borrow-checked buffers (no interior !Send handles), matching the established pattern for the sibling SockAddr/iovec wrappers. Also type-correctness fixes: getsockopt::<Bool> (was c_int) for IPV6_V6ONLY, and `!= 0` instead of `!= false as Bool`. No new extern symbols, no new process/network capability beyond socket2's existing socket-syscall purpose. Publisher Thomasdezeeuw (socket2/tokio maintainer)."""
 
+[[audits.socket2]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.4 -> 0.6.5"
+notes = """Entirely cfg-attribute churn adding target_os = "nuttx" and "emscripten" support and enabling tclass_v6/set_tclass_v6 on illumos while dropping illumos from IP_TOS gates. The only non-cfg code additions are a `type IovLen = libc::c_ulong` alias for nuttx and re-gated libc constant imports; no unsafe blocks were added or modified, and no new syscalls beyond the existing socket-option surface reach previously supported targets. No build.rs, no dependency or feature changes; lockfile updates only touch the crate's own version entry."""
+
+[[audits.sse-stream]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.3 -> 0.2.5"
+notes = "Source delta is a typo-fix rename of `SseStream::from_byte_stream` to `from_bytes_stream` with a deprecated forwarding alias, plus a test updated to match. Remaining changes are metadata: SPDX license expression normalization, LICENSE-MIT/LICENSE-APACHE files added, docs.rs URL fix, and extensive Cargo.lock churn confined to dev-dependencies (axum/reqwest/tokio test stack). No unsafe anywhere in the delta, no build.rs, and no changes to the crate's published dependencies or features."
+
+[[audits.stacker]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.24 -> 0.1.25"
+notes = """build.rs drops a redundant trailing `else { return }`; it still only compiles src/arch/windows.c via cc on Windows, with identical inputs. src/lib.rs adds target_os = "motor" to the existing cfg pair so that target uses the alloc-based stack-restore guard instead of the mmap-based one — module-selection only, no new or modified unsafe code and no change to the psm stack-switching FFI on existing targets. A check-cfg lint declaration for the "motor" value is added to Cargo.toml. No dependency or feature changes in the manifest; Cargo.lock bumps (psm 0.1.32, cc, object) affect only the crate's own dev builds, and CI-workflow edits are inert."""
+
+[[audits.syn]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.117 -> 2.0.119"
+notes = "Full diff of packaged sources reviewed. Changes are an internal refactor replacing ParseBuffer forks with Cursor in verbatim::between and its call sites (data.rs, expr.rs, generics.rs, item.rs, pat.rs, path.rs, stmt.rs, ty.rs), two new entries in the scan_expr state tables (`try` blocks, `const move` closures), parsing of `builtin #` in type position as Type::Verbatim, a Lit::Bool match-guard simplification, attribute-preservation fix for verbatim statement expressions, and added renamed_and_removed_lints to existing allow attributes in token.rs. No unsafe code added or modified; the crate retains deny(unsafe_op_in_unsafe_fn) and is no_std. No filesystem, network, process, environment, or FFI access anywhere in the shipped library; there is no build.rs, and Cargo.toml dependencies and features are unchanged apart from the version bump. Remaining churn is the dev-only Cargo.lock (test-suite dependency bumps) and test files (tests/repo/mod.rs gains issue-reference comments and edge-case lists), which do not ship into dependents. Nothing suspicious observed."
+
 [[audits.syn]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "2.0.117 -> 3.0.2"
 notes = "Reviewed diff directly (54 files, 4314/2353 lines) despite the major version bump, rather than blanket publisher-trust, given syn's foundational role (transitively used by serde_derive, thiserror-impl, clap_derive). Grepped the full diff for unsafe/transmute/fs/net/process/exec: zero fs/net/process/exec capability anywhere (syn has none, by design -- it's a pure token-stream/AST parser). The overwhelming majority of 'unsafe' hits are syn's own AST types for parsing the 'unsafe' keyword in target source (e.g. Signature::unsafety, ItemForeignMod safety qualifiers for the new unsafe-extern-block support) -- not unsafe code in syn itself. The one genuine new unsafe block (buffer.rs Cursor::peek_punct calling self.bump_ignore_group()) reuses an existing, already-audited internal TokenBuffer-cursor primitive already present in 2.0.117, applied to a new multi-char-punctuation-token peek helper; same established safety invariant, no new risk category. Net: a large but non-security-relevant diff, consistent with syn's frequent major-version cadence for MSRV/edition-support reasons rather than behavior changes to its stable public API."
+
+[[audits.syn]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "3.0.2 -> 3.0.3"
+notes = 'Full diff of packaged sources reviewed; the delta is documentation-only. A new "Compatibility notes" section is added to the lib.rs crate docs (covering Modifiers structs, Verbatim variants, and non-exhaustive enums), and the Verbatim variants in expr.rs, generics.rs, item.rs, pat.rs, and ty.rs gain doc warnings linking to it while the old inline exhaustiveness-idiom comments are removed. No executable code changes at all: no unsafe, no filesystem/network/process/env/FFI surface, no build.rs, and Cargo.toml dependencies and features unchanged apart from the version bump. Remaining churn is the dev-only Cargo.lock (roughly 31 changed lines of test-suite dependency bumps) and tests/common/eq.rs, neither of which ships into dependents. Nothing suspicious observed.'
 
 [[audits.thiserror]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -589,11 +835,47 @@ criteria = "safe-to-deploy"
 delta = "1.0.69 -> 2.0.18"
 notes = "Delta audit (748 added lines). Derive-macro evolution for thiserror 2.x (no_std support, Display/Error emission reorganisation). Zero unsafe, zero fs/net/process/env in the added lines; remains a pure deterministic token transformation. Publisher continuity verified on crates.io: dtolnay."
 
+[[audits.time]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.47 -> 0.3.55"
+notes = "Large upstream refactor (~40k diff lines): every changed src/ file was enumerated and reviewed, with heavy mechanical rename churn (Duration->SignedDuration, PrimitiveDateTime->PlainDateTime, convert->unit, num-conv extend->widen) skimmed rather than read line-by-line. No build.rs exists in either version; manifest changes remove the itoa dependency (replaced by an internal num_fmt module), add optional rand 0.10 support, and bump pinned time-core/time-macros — no new capability-bearing dependencies. Substantial new unsafe was reviewed in detail: num_fmt.rs (stack-buffer ASCII digit formatting via lookup tables, from_utf8_unchecked/ptr::copy_nonoverlapping), ranged-integer new_unchecked calls throughout formatting/parsing, bounded Weekday transmutes, a lifetime-only transmute in format_description_v3.rs, and codepoint-boundary from_utf8_unchecked in the merged lexer_ast.rs; all carry accurate safety comments and the invariants check out locally. The OS/FFI surface (sys/local_offset_at windows and wasm_js, js_sys interop) saw only mechanical renames plus a trivial new js_sys Date<->Timestamp conversion; grep over all added lines found no new env, process, fs, network, extern, or macro-expansion constructs and no suspicious literals. Behavior changes are confined to date/time arithmetic, formatting, parsing, and serde plumbing consistent with the published changelog."
+
+[[audits.tinyvec]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.11.0 -> 1.12.0"
+notes = "Adds two new optional, default-off features: bin-proto (BitEncode/BitDecode impls for ArrayVec/TinyVec) and schemars (JsonSchema impls); neither dependency is pulled unless a consumer opts in. Also lands the 1.11.1 hardening: a new `cautious_capacity` helper caps eager preallocation from untrusted length prefixes at 4096 bytes in the borsh, bin-proto, and serde deserializers, preventing allocation-abort DoS from hostile input, with a regression test included. All new code is safe Rust with bounded decode loops (capacity-checked push / try_push); no unsafe, no build.rs, and remaining churn is doc-test type annotations and dev-dependency updates (criterion 0.8)."
+
 [[audits.tokio]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.52.2 -> 1.52.3"
 notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow]). Changes scoped to src/sync/mpsc/* and src/sync/rwlock.rs, implementing four documented upstream bug-fix PRs per tokio 1.52.3 release notes (May 2026): tokio#8062 fix mpsc len() underflow; tokio#8074 return TryRecvError::Empty from try_recv() when mpsc closed with outstanding permits; tokio#8075 notify receivers in mpsc OwnedPermit::release() by reusing non-owned Permit Drop impl; tokio#8076 reject RwLock::new max_readers==0 (prevents div-by-zero in semaphore fast path). Companion tests in tests/sync_mpsc.rs + tests/sync_rwlock.rs. No feature additions, no new unsafe, no public API signature changes."
+
+[[audits.tokio-macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.7.0 -> 2.7.2"
+notes = "Delta upgrades the syn dependency from 2.x to 3.0 with a single source adaptation in src/entry.rs: `args.inputs.iter().any(contains_impl_trait)` becomes `.any(|arg| contains_impl_trait(&arg.ty))` to match syn 3's typed parenthesized-argument API; behavior of the impl-Trait detection is unchanged. The only other changes are rustdoc text clarifying the `#[tokio::main]` expansion, CHANGELOG, and Cargo.lock/manifest version churn. No unsafe code, no build.rs, no fs/net/process/env access; proc-macro attack surface is unchanged."
+
+[[audits.tokio-stream]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.18 -> 0.1.19"
+notes = "Feature work only: `FusedStream` impls for many adapters, `FromStream` impls for std collections (collect.rs), a new `JoinSetStream` wrapper (src/wrappers/task.rs, thin safe wrapper over `JoinSet::poll_join_next`), `Peekable::size_hint`, and overflow-hardening of `StreamMap::size_hint` via saturating/checked adds plus a `next_many` limit fix. A new `rt` feature (enabled in `full`) turns on `tokio/rt` for cooperative budgeting in `iter`/`empty`/`once`; minimum tokio bumped to 1.38.0. Entire diff is safe Rust — no unsafe, no build.rs, no fs/net/process/env surface; remaining churn is tests and dev-dependency Cargo.lock updates."
+
+[[audits.tokio-util]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.7.18 -> 0.7.19"
+notes = "Three new/changed unsafe sites, all reviewed and sound: src/util/memchr.rs adds an optional unix-only `libc::memchr` FFI call for the `codec` feature (new optional `libc` dependency, correct safety comments, falls back to safe iterator search elsewhere); src/io/write_all_vectored.rs contains a lifetime-only `transmute` copied from std's `IoSlice::advance_slices` with an appropriate safety comment; `AbortOnDrop::detach` uses `ManuallyDrop` + `ptr::read`, a standard sound pattern. Behavioral fixes (Framed `is_readable` derived from buffer contents rather than capacity, DelayQueue waker on reset-to-past, JoinQueue `try_join_next` no longer clobbering the stored waker) match their tests and touch no I/O surface beyond existing tokio APIs. No build.rs; large Cargo.lock churn is dev-dependency updates only (tempfile/getrandom/wasi tooling)."
+
+[[audits.toml_parser]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
+notes = "Single source change in src/lexer/mod.rs `into_vec`: the pre-allocation capacity heuristic changes from `min(stream.len(), usize::MAX / size_of::<Token>())` to `stream.len().div_ceil(4)`, a pure allocation-sizing tweak with no correctness impact since the Vec grows as needed. Remaining diff is manifest include-path normalization, one added clippy allow, version bump, and dev-dependency Cargo.lock churn (snapbox/similar updates). No unsafe, no build.rs (`build = false`), no new runtime dependencies, no fs/net/process/env surface."
 
 [[audits.typenum]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -637,6 +919,12 @@ criteria = "safe-to-deploy"
 delta = "1.23.5 -> 1.24.0"
 notes = "Reviewed diff (5 files, 352/32 lines): internal string-encoding refactor to write into MaybeUninit buffers (perf, avoids pre-zeroing stack buffers) instead of already-initialized &mut [u8]. Every new unsafe block carries a safety comment and is sound: ptr::copy_nonoverlapping with matching src/dst lengths, ASCII-only writes before from_utf8_unchecked, and a layout-compatible MaybeUninit<u8>/u8 reinterpret cast. No capability changes."
 
+[[audits.value-trait]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.12.1 -> 0.12.2"
+notes = "Main change is in src/generator.rs: the SSE string writer is renamed sse4.2 -> sse2 (it only ever used SSE2 intrinsics; runtime detection now checks sse2), existing intrinsics bodies are wrapped in explicit `unsafe {}` blocks per edition-2024 style with no logic change, and a real bug is fixed where the scalar fallback `write_string_rust` failed to advance the input slice, which could double-write escaped content; a regression test covers it. Remaining changes are lifetime elaborations on iterator trait methods, `#[derive(Default)]` replacing manual impls, removed redundant `#[must_use]`, and CI workflow reshuffling. No new FFI, no build.rs, no fs/net/process/env surface, dev-only Cargo.lock churn."
+
 [[audits.which]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -661,6 +949,12 @@ criteria = "safe-to-deploy"
 version = "0.1.11"
 notes = "Full audit (1015 LOC, Windows-only FFI wrapper). Capability: Win32 console/file/sysinfo/registry-adjacent calls only — no net/process, one fs::OpenOptions for CONOUT$ console handles; no build.rs. All 24 unsafe sites reviewed: each is a documented Win32 call with correctly-sized out-params (mem::zeroed C structs passed by &mut), return codes mapped to io::Error::last_os_error, and the two-call GetComputerNameExW size-probe pattern implemented correctly (null probe for the length, exact Vec<u16>, post-call length re-check). HandleRef is a non-owning wrapper so std handles are never closed. Publisher verified on crates.io: BurntSushi."
 
+[[audits.xxhash-rust]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.15 -> 0.8.18"
+notes = """Adds a compile-time-gated AVX-512 path (`target_feature = "avx512f"`) for xxh3 accumulate/scramble using `_mm512_*` intrinsics in unsafe blocks; the code mirrors the upstream xxHash C reference (including `_mm512_ternarylogic_epi32` xor3), operates on a newly 64-byte-aligned `Acc`, and uses unaligned loads for input/secret, and the crate's existing C-parity test suite covers correctness. Also adds a `SecretInput` length-validation wrapper plus explicit `assert!(secret.len() >= SECRET_SIZE_MIN)` in `xxh3_64/128_with_secret` (hardening), moves `const_custom_default_secret` to xxh3_common with a re-export, and fixes `Xxh3Builder` so seed and secret are order-independent (`with_seed` now derives the secret when none is given — a behavior change for builder users who set only a seed, matching `Xxh3::with_seed`). No build.rs, no new dependencies (dev-only getrandom 0.2 -> 0.4), no fs/net/process/env surface."""
+
 [[audits.yoke]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -673,11 +967,23 @@ criteria = "safe-to-deploy"
 delta = "0.8.48 -> 0.8.50"
 notes = "Delta audit (cargo vet diff 0.8.48 -> 0.8.50). The bulk of the diff is committed codegen-snapshot fixtures under benches/*.x86-64 and *.mca (machine-code-analyzer output) reflecting a multiply-overflow-check optimization — test fixtures, not shipped code. Library changes (src/): (1) centralizes the scattered `isize::MAX as usize` allocation bound into a new pub(crate) const DstLayout::MAX_SIZE and a new is_valid_metadata/maximum_trailing_slice_len helper, used in layout.rs/util/mod.rs and Kani proof harnesses; (2) replaces a checked Layout::from_size_align + manual saturating max_alloc check with `unsafe { Layout::from_size_align_unchecked(size, align) }` guarded by an explicit `if !T::is_valid_metadata(meta) { return Err(AllocError) }` precondition — the new SAFETY comment correctly establishes align is a non-zero power of two (KnownLayout invariant) and size <= isize::MAX (the is_valid_metadata gate); (3) widens many pointer-internal items from pub(crate) to pub behind #[cfg_attr(not(zerocopy_unstable_ptr), doc(hidden))] / allow(unreachable_pub) — the affected `unsafe fn`s (with_meta, split_at_unchecked, slice_unchecked) and `unsafe trait TryWithError` already existed with identical bodies; this is visibility-only, no new unsafe LOGIC; (4) adds PointerMetadata: + Ord, a slice Ptr is_empty()/len(), iter() now takes self by value with strengthened disjoint-aliasing safety comments and a new test (test_iter_exclusive_yields_disjoint_ptrs). No new extern/process/network/fs capability. Publisher joshlf (Google, zerocopy maintainer; crate is Kani-proof-backed)."
 
+[[audits.zerocopy]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.50 -> 0.8.55"
+notes = 'Full diff reviewed. Most churn is a monorepo restructuring (path_in_vcs now "zerocopy", CI script and doc-link path updates, SPDX headers on every source file) plus test .stderr regeneration. build.rs changes are limited to two new `cargo:rustc-check-cfg` declarations (`zerocopy_unstable_linux`, `no_fp_fmt_parse`); no build-time execution changes. Library changes: Debug/Display impls on float byteorder wrappers gated behind the Linux-kernel `no_fp_fmt_parse` cfg (the off path deliberately panics with a documented message), the `Order` enum made documented public API, `#[inline]` attributes on a few const fns, a new safe blanket `Identity` marker trait in macro_util used by the derive for hygiene verification, and a `most_traits` re-export gated behind the off-by-default `zerocopy_unstable_linux` cfg. No new or modified `unsafe` blocks or impls (added "unsafe" lines in the diff are all inside test .stderr expectation files reflecting line-number shifts). No dependency changes beyond the lockstep `zerocopy-derive =0.8.55` pin; no fs/net/process/env access introduced.'
+
 [[audits.zerocopy-derive]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.8.48 -> 0.8.50"
 notes = "Delta audit (cargo vet diff 0.8.48 -> 0.8.50). The diff is limited to Cargo.toml and Cargo.toml.orig version-string bumps 0.8.48 -> 0.8.50 — ZERO source (src/) changes across both patch releases. No proc-macro logic change, no new deps, no new unsafe, no new ambient capability. Publisher joshlf (zerocopy maintainer, Google)."
+
+[[audits.zerocopy-derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.50 -> 0.8.55"
+notes = "Full diff reviewed; dependencies unchanged (proc-macro2/quote/syn only) and the crate still has no build.rs. The main substantive change is a new `homogeneous_field_bounds` path in the IntoBytes derive: repr(C) generic structs whose fields are all `T`/`[T; N]`/trailing `[T]` for a single type parameter now derive IntoBytes without requiring `Unaligned`; the generated impl emits explicit `IntoBytes` bounds per field plus `Identity<Type = T>` bounds so rustc, not the macro, verifies type identity, with detailed comments covering both the alignment/padding argument and the macro-hygiene hazard (identically-printed idents with different hygiene contexts) that motivates the Identity check. The unstable cfg `zerocopy_unstable_derive_on_error` was renamed to `zerocopy_unstable_linux`, and a new `most_traits` derive (doc(hidden) unless that cfg is set) bundles six existing derives with skip-on-error semantics for Linux kernel use; a test-only `__test_hygienically_mixed_into_bytes` proc macro is gated behind an internal nightly-test cfg and is unreachable in normal builds. Remaining changes are error-handling plumbing (`error_or_skip` in derive_split_at, `for<'zc>` bound wrapping in skip-on-error mode), a removed unused clone, and test churn. No fs/net/process/env access, no token-stream behavior that touches the host system, nothing suspicious."
 
 [[audits.zerofrom]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -704,9 +1010,27 @@ start = "2019-10-05"
 end = "2027-07-20"
 notes = "dtolnay-published, already-trusted publisher; patch bump 1.0.103->1.0.104."
 
+[[trusted.async-trait]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-07-23"
+end = "2027-08-04"
+
+[[trusted.bstr]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-02"
+end = "2027-08-04"
+
+[[trusted.bytes]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-11"
+end = "2027-08-04"
+
 [[trusted.cc]]
 criteria = "safe-to-deploy"
-user-id = 55123
+user-id = 55123 # rust-lang-owner
 start = "2022-10-29"
 end = "2027-05-20"
 
@@ -779,6 +1103,12 @@ trusted-publisher = "github:RustCrypto/universal-hashes"
 start = "2026-02-28"
 end = "2027-07-02"
 
+[[trusted.glob]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2023-01-06"
+end = "2027-08-04"
+
 [[trusted.globset]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
@@ -797,6 +1127,12 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-04-05"
 end = "2027-04-23"
+
+[[trusted.http-body]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-10-01"
+end = "2027-08-04"
 
 [[trusted.http-body-util]]
 criteria = "safe-to-deploy"
@@ -828,6 +1164,18 @@ user-id = 359 # Sean McArthur (seanmonstar)
 start = "2022-01-15"
 end = "2027-04-23"
 
+[[trusted.icu_normalizer_data]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2023-10-03"
+end = "2027-08-04"
+
+[[trusted.idna]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2024-07-01"
+end = "2027-08-04"
+
 [[trusted.js-sys]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
@@ -839,6 +1187,18 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 start = "2026-04-28"
 end = "2027-05-20"
+
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-08-15"
+end = "2027-08-04"
+
+[[trusted.litemap]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-02-23"
+end = "2027-08-04"
 
 [[trusted.memchr]]
 criteria = "safe-to-deploy"
@@ -864,6 +1224,18 @@ trusted-publisher = "github:RustCrypto/universal-hashes"
 start = "2026-02-10"
 end = "2027-07-02"
 
+[[trusted.potential_utf]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2024-11-23"
+end = "2027-08-04"
+
+[[trusted.proc-macro2]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-23"
+end = "2027-08-04"
+
 [[trusted.regex]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
@@ -883,6 +1255,12 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-04"
 end = "2027-04-23"
+
+[[trusted.rustversion]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-07-08"
+end = "2027-08-04"
 
 [[trusted.serde]]
 criteria = "safe-to-deploy"
@@ -910,6 +1288,12 @@ criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-02-28"
 end = "2027-05-29"
+
+[[trusted.serde_spanned]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-01-20"
+end = "2027-08-04"
 
 [[trusted.thiserror]]
 criteria = "safe-to-deploy"
@@ -939,6 +1323,12 @@ start = "2022-12-14"
 end = "2027-07-20"
 notes = "epage-published, already-trusted publisher; patch bump 1.1.2->1.1.3."
 
+[[trusted.toml_datetime]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-10-21"
+end = "2027-08-04"
+
 [[trusted.toml_writer]]
 criteria = "safe-to-deploy"
 user-id = 6743 # Ed Page (epage)
@@ -963,6 +1353,12 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/traits"
 start = "2026-02-27"
 end = "2027-07-02"
+
+[[trusted.url]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-02-18"
+end = "2027-08-04"
 
 [[trusted.wasm-bindgen]]
 criteria = "safe-to-deploy"
@@ -1042,8 +1438,32 @@ user-id = 6743 # Ed Page (epage)
 start = "2023-02-22"
 end = "2027-05-20"
 
+[[trusted.writeable]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-11-01"
+end = "2027-08-04"
+
 [[trusted.zerofrom]]
 criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2022-04-06"
 end = "2027-05-20"
+
+[[trusted.zerofrom-derive]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2022-04-06"
+end = "2027-08-04"
+
+[[trusted.zerovec-derive]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2021-12-11"
+end = "2027-08-04"
+
+[[trusted.zmij]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2025-12-18"
+end = "2027-08-04"

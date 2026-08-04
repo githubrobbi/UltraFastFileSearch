@@ -16,9 +16,10 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, Implementation,
-    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, Resource,
+    CallToolRequestParams, CallToolResponse, CallToolResult, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
     ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
@@ -400,11 +401,9 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         self.touch();
-        Ok(ListToolsResult {
-            tools: definitions::tool_definitions(),
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(
+            definitions::tool_definitions(),
+        ))
     }
 
     #[cfg_attr(
@@ -418,7 +417,7 @@ impl ServerHandler for UffsMcpServer {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         self.touch();
         let tool_name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
@@ -479,7 +478,9 @@ impl ServerHandler for UffsMcpServer {
             }
         }
 
-        final_result.map_err(McpError::from)
+        final_result
+            .map(CallToolResponse::from)
+            .map_err(McpError::from)
     }
 
     #[expect(
@@ -492,48 +493,44 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         self.touch();
-        Ok(ListResourcesResult {
-            resources: vec![
-                Resource::new("uffs://schema/fields", "Field Catalog")
-                    .with_description(
-                        "Complete catalog of fields available for searching, filtering, \
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new("uffs://schema/fields", "Field Catalog")
+                .with_description(
+                    "Complete catalog of fields available for searching, filtering, \
                          sorting, and aggregating — includes types and capabilities",
-                    )
-                    .with_mime_type("application/json"),
-                Resource::new("uffs://drives", "Indexed Drives")
-                    .with_description(
-                        "Live listing of currently indexed NTFS drives with record counts",
-                    )
-                    .with_mime_type("application/json"),
-                Resource::new("uffs://status", "Daemon Status")
-                    .with_description(
-                        "Daemon health, state, uptime, memory, PID, and drive-loading progress",
-                    )
-                    .with_mime_type("application/json"),
-                Resource::new("uffs://schema/search", "Search Request Schema")
-                    .with_description("JSON Schema for the uffs_search tool input parameters")
-                    .with_mime_type("application/json"),
-                Resource::new("uffs://schema/aggregate", "Aggregate Request Schema")
-                    .with_description("JSON Schema for the uffs_aggregate tool input parameters")
-                    .with_mime_type("application/json"),
-                Resource::new("uffs://presets/aggregate", "Aggregate Presets")
-                    .with_description(
-                        "Built-in aggregate presets (overview, by_type, by_extension, \
+                )
+                .with_mime_type("application/json"),
+            Resource::new("uffs://drives", "Indexed Drives")
+                .with_description(
+                    "Live listing of currently indexed NTFS drives with record counts",
+                )
+                .with_mime_type("application/json"),
+            Resource::new("uffs://status", "Daemon Status")
+                .with_description(
+                    "Daemon health, state, uptime, memory, PID, and drive-loading progress",
+                )
+                .with_mime_type("application/json"),
+            Resource::new("uffs://schema/search", "Search Request Schema")
+                .with_description("JSON Schema for the uffs_search tool input parameters")
+                .with_mime_type("application/json"),
+            Resource::new("uffs://schema/aggregate", "Aggregate Request Schema")
+                .with_description("JSON Schema for the uffs_aggregate tool input parameters")
+                .with_mime_type("application/json"),
+            Resource::new("uffs://presets/aggregate", "Aggregate Presets")
+                .with_description(
+                    "Built-in aggregate presets (overview, by_type, by_extension, \
                          storage, etc.) with descriptions",
-                    )
-                    .with_mime_type("application/json"),
-                // ── Agent cookbook (query examples) ──────────────────
-                Resource::new("uffs://cookbook", "Query Cookbook")
-                    .with_description(
-                        "Curated example MCP tool calls organized by workflow — \
+                )
+                .with_mime_type("application/json"),
+            // ── Agent cookbook (query examples) ──────────────────
+            Resource::new("uffs://cookbook", "Query Cookbook")
+                .with_description(
+                    "Curated example MCP tool calls organized by workflow — \
                          ready-to-use arguments objects, tips, and multi-step patterns. \
                          Read this first to learn how to compose effective UFFS queries.",
-                    )
-                    .with_mime_type("application/json"),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
+                )
+                .with_mime_type("application/json"),
+        ]))
     }
 
     #[expect(
@@ -546,26 +543,22 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         self.touch();
-        Ok(ListResourceTemplatesResult {
-            resource_templates: vec![
-                ResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
-                    .with_description(
-                        "Full metadata for a file or directory by path. \
+        Ok(ListResourceTemplatesResult::with_all_items(vec![
+            ResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
+                .with_description(
+                    "Full metadata for a file or directory by path. \
                      The {path} parameter is a percent-encoded Windows path \
                      with forward slashes (e.g. C:/Users/me/file.txt).",
-                    )
-                    .with_mime_type("application/json"),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
+                )
+                .with_mime_type("application/json"),
+        ]))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         self.touch();
         self.stats.record_resource_read();
         let uri_str = request.uri.as_str().to_owned();
@@ -634,10 +627,7 @@ impl ServerHandler for UffsMcpServer {
             }
         };
 
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(
-            json,
-            request.uri,
-        )]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(json, request.uri)]).into())
     }
 
     #[expect(
@@ -650,11 +640,9 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         self.touch();
-        Ok(ListPromptsResult {
-            prompts: definitions::prompt_definitions(),
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListPromptsResult::with_all_items(
+            definitions::prompt_definitions(),
+        ))
     }
 
     #[expect(
@@ -665,14 +653,15 @@ impl ServerHandler for UffsMcpServer {
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         self.stats.record_prompt_get();
         let prompt_args = request.arguments.unwrap_or_default();
 
         let messages = prompts::build_prompt_messages(request.name.as_ref(), &prompt_args)?;
 
         Ok(GetPromptResult::new(messages)
-            .with_description(format!("UFFS prompt: {}", request.name)))
+            .with_description(format!("UFFS prompt: {}", request.name))
+            .into())
     }
 }
 

@@ -114,8 +114,14 @@ where
 }
 
 /// Stream `reader` into `writer`, aborting if the total exceeds `cap`.
-/// Returns the number of bytes written.
-fn copy_capped<R: Read, W: Write>(reader: &mut R, writer: &mut W, cap: u64) -> Result<u64> {
+/// Invokes `on_chunk` with the running byte total after every written
+/// chunk. Returns the number of bytes written.
+fn copy_capped<R, W, P>(reader: &mut R, writer: &mut W, cap: u64, mut on_chunk: P) -> Result<u64>
+where
+    R: Read,
+    W: Write,
+    P: FnMut(u64),
+{
     let mut buf = vec![0_u8; CHUNK_BYTES];
     let mut total: u64 = 0;
     loop {
@@ -129,6 +135,7 @@ fn copy_capped<R: Read, W: Write>(reader: &mut R, writer: &mut W, cap: u64) -> R
         }
         let chunk = buf.get(..read).context("response chunk out of range")?;
         writer.write_all(chunk).context("writing to disk")?;
+        on_chunk(total);
     }
     Ok(total)
 }
@@ -169,14 +176,40 @@ pub fn fetch_release(user_agent: &str, repo: &str, tag: Option<&str>) -> Result<
 ///
 /// Propagates HTTP, status, cap-exceeded, and file-write failures.
 pub fn download_to(user_agent: &str, url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
+    download_to_with_progress(user_agent, url, dest, max_bytes, |_, _| {})
+}
+
+/// [`download_to`] with a progress hook: `on_chunk(bytes_so_far, total)`
+/// fires after every written chunk, where `total` is the response's
+/// `Content-Length` when the server sent one.
+///
+/// Multi-GiB downloads are otherwise indistinguishable from a hang — the
+/// hook gives callers a heartbeat to drive a progress bar or watchdog.
+///
+/// # Errors
+///
+/// Propagates HTTP, status, cap-exceeded, and file-write failures.
+pub fn download_to_with_progress<P>(
+    user_agent: &str,
+    url: &str,
+    dest: &Path,
+    max_bytes: u64,
+    mut on_chunk: P,
+) -> Result<()>
+where
+    P: FnMut(u64, Option<u64>),
+{
     let client = client(user_agent)?;
     let mut response = with_retry(&format!("downloading {url}"), || {
         client.get(url).send()?.error_for_status()
     })?;
+    let total = response.content_length();
     let mut file =
         std::fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
-    copy_capped(&mut response, &mut file, max_bytes)
-        .with_context(|| format!("writing {}", dest.display()))?;
+    copy_capped(&mut response, &mut file, max_bytes, |written| {
+        on_chunk(written, total);
+    })
+    .with_context(|| format!("writing {}", dest.display()))?;
     Ok(())
 }
 
@@ -184,12 +217,16 @@ pub fn download_to(user_agent: &str, url: &str, dest: &Path, max_bytes: u64) -> 
 mod tests {
     use super::copy_capped;
 
+    /// Progress callback that records nothing — for tests not about progress.
+    fn no_progress(_total: u64) {}
+
     #[test]
     fn copy_capped_writes_all_under_cap() {
         let src = vec![7_u8; 200];
         let mut reader = src.as_slice();
         let mut sink: Vec<u8> = Vec::new();
-        let written = copy_capped(&mut reader, &mut sink, 1024).expect("under cap copies");
+        let written =
+            copy_capped(&mut reader, &mut sink, 1024, no_progress).expect("under cap copies");
         assert_eq!(written, 200);
         assert_eq!(sink, src);
     }
@@ -199,7 +236,8 @@ mod tests {
         let src = vec![0_u8; 4096];
         let mut reader = src.as_slice();
         let mut sink: Vec<u8> = Vec::new();
-        let err = copy_capped(&mut reader, &mut sink, 100).expect_err("over cap must abort");
+        let err =
+            copy_capped(&mut reader, &mut sink, 100, no_progress).expect_err("over cap must abort");
         assert!(err.to_string().contains("cap"), "unexpected: {err}");
     }
 
@@ -207,8 +245,30 @@ mod tests {
     fn copy_capped_handles_empty_body() {
         let mut reader: &[u8] = &[];
         let mut sink: Vec<u8> = Vec::new();
-        let written = copy_capped(&mut reader, &mut sink, 100).expect("empty copies");
+        let written = copy_capped(&mut reader, &mut sink, 100, no_progress).expect("empty copies");
         assert_eq!(written, 0);
         assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn copy_capped_reports_monotonic_progress() {
+        // 3 chunks' worth of data → the hook must fire once per chunk with
+        // a strictly increasing running total ending at the full size.
+        let size = super::CHUNK_BYTES * 2 + 100;
+        let src = vec![1_u8; size];
+        let mut reader = src.as_slice();
+        let mut sink: Vec<u8> = Vec::new();
+        let mut seen: Vec<u64> = Vec::new();
+        let written = copy_capped(&mut reader, &mut sink, u64::MAX, |total| seen.push(total))
+            .expect("copies with progress");
+        assert_eq!(written, u64::try_from(size).expect("fits"));
+        assert!(seen.len() >= 3, "one callback per chunk: {seen:?}");
+        assert!(
+            seen.iter()
+                .zip(seen.iter().skip(1))
+                .all(|(prev, next)| prev < next),
+            "monotonic: {seen:?}"
+        );
+        assert_eq!(seen.last().copied(), Some(written));
     }
 }

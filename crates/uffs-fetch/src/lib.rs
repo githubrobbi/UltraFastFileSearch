@@ -10,7 +10,9 @@
 //!   specific tag).
 //! - [`github::download_to`] — streaming download of **any** URL (not just
 //!   GitHub) with retry, connect/inactivity timeouts, and a caller-chosen byte
-//!   cap.
+//!   cap. [`github::download_to_with_progress`] adds a per-chunk
+//!   `(bytes_so_far, content_length)` hook so multi-GiB downloads can drive a
+//!   progress bar instead of looking frozen.
 //! - [`github::with_retry`] — the bounded-exponential-back-off retry wrapper,
 //!   usable around any `reqwest` operation.
 //! - [`verify`] — `SHA256SUMS` parsing and file-hash verification.
@@ -22,5 +24,7 @@
 pub mod github;
 pub mod verify;
 
-pub use github::{Asset, Release, download_to, fetch_release, with_retry};
+pub use github::{
+    Asset, Release, download_to, download_to_with_progress, fetch_release, with_retry,
+};
 pub use verify::{expected_hash, parse_sha256sums, sha256_file, verify_sha256};

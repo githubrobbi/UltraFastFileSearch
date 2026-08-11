@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(spec.count, 2);
         assert_eq!(spec.sort_field, FieldId::Size);
         assert!(spec.sort_desc);
-        assert!(spec.projection.is_empty());
+        assert_eq!(spec.projection, Vec::<FieldId>::new());
     }
 
     #[test]

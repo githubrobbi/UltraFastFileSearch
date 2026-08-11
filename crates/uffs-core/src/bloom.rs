@@ -246,9 +246,10 @@ impl Bloom {
         bytes
     }
 
-    /// Number of hash functions per insert / query.
+    /// Number of hash functions per insert / query (the classic
+    /// bloom-filter `k` parameter).
     #[must_use]
-    pub const fn k(&self) -> u8 {
+    pub const fn hash_count(&self) -> u8 {
         self.k_hashes
     }
 
@@ -422,7 +423,7 @@ mod tests {
             bloom.nbits(),
         );
         // k for 1 % FPR rounds to 7.
-        assert_eq!(bloom.k(), 7);
+        assert_eq!(bloom.hash_count(), 7);
         // Size in bytes is ~1.2 MB.
         assert!(bloom.size_bytes() >= 1_180_000 && bloom.size_bytes() <= 1_220_000);
     }
@@ -484,9 +485,9 @@ mod tests {
     #[test]
     fn with_size_and_k_clamps_k_to_valid_range() {
         let too_small = Bloom::with_size_and_k(64, 0);
-        assert_eq!(too_small.k(), 1);
+        assert_eq!(too_small.hash_count(), 1);
         let too_big = Bloom::with_size_and_k(64, 200);
-        assert_eq!(too_big.k(), 32);
+        assert_eq!(too_big.hash_count(), 32);
     }
 
     /// `estimated_fpr` returns 0 for an empty filter and a value in

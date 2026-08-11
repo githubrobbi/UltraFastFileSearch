@@ -150,6 +150,6 @@ mod tests {
         std::fs::write(bad.join("CD.iocp"), b"").unwrap();
 
         let files = discover_mft_files(tmp.path());
-        assert!(files.is_empty());
+        assert_eq!(files, Vec::<PathBuf>::new());
     }
 }

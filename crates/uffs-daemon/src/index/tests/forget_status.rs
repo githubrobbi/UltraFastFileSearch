@@ -83,9 +83,12 @@ async fn forget_cold_drive_evicts_and_unlinks() {
         panic!("expected Ok outcome on Cold-drive forget; got {outcome:?}");
     };
     assert_eq!(out.forgotten, vec![uffs_mft::platform::DriveLetter::C]);
-    assert!(out.already_absent.is_empty());
+    assert_eq!(
+        out.already_absent,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
     assert_eq!(out.freed_bytes, 1_024);
-    assert!(out.errors.is_empty());
+    assert_eq!(out.errors, Vec::<String>::new());
 
     assert_eq!(
         cleaner.calls(),
@@ -159,8 +162,11 @@ async fn forget_warm_with_force_auto_hibernates_then_evicts() {
         uffs_mft::platform::DriveLetter::D
     ]);
     assert_eq!(out.freed_bytes, 4_096, "2 drives × 2_048 bytes each");
-    assert!(out.already_absent.is_empty());
-    assert!(out.errors.is_empty());
+    assert_eq!(
+        out.already_absent,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
+    assert_eq!(out.errors, Vec::<String>::new());
 
     assert_eq!(
         cleaner.calls(),
@@ -191,10 +197,10 @@ async fn forget_unknown_drive_is_idempotent_already_absent() {
     let ForgetOutcomeOrBusy::Ok(out) = outcome else {
         panic!("expected Ok for unknown drive; got {outcome:?}");
     };
-    assert!(out.forgotten.is_empty());
+    assert_eq!(out.forgotten, Vec::<uffs_mft::platform::DriveLetter>::new());
     assert_eq!(out.already_absent, vec![uffs_mft::platform::DriveLetter::Z]);
     assert_eq!(out.freed_bytes, 0);
-    assert!(out.errors.is_empty());
+    assert_eq!(out.errors, Vec::<String>::new());
 
     assert_eq!(
         cleaner.calls(),
@@ -257,7 +263,10 @@ async fn forget_pinned_hot_drive_with_force_clears_pin() {
     assert_eq!(out.freed_bytes, 512);
 
     let post_states = mgr.shard_states_for_test().await;
-    assert!(post_states.is_empty());
+    assert_eq!(
+        post_states,
+        Vec::<(uffs_mft::platform::DriveLetter, ShardState)>::new()
+    );
 }
 
 /// Phase 8-D — multi-drive forget where one drive is busy and
@@ -317,7 +326,10 @@ async fn status_drives_empty_registry_returns_empty_drives() {
 
     let response = mgr.status_drives().await;
 
-    assert!(response.drives.is_empty());
+    assert_eq!(
+        response.drives,
+        Vec::<uffs_client::protocol::response::DriveTierStatus>::new()
+    );
 }
 
 /// Phase 8-E — a single Warm shard surfaces `tier = "warm"`,

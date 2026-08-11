@@ -698,7 +698,7 @@ fn resolve_ext_ids_handles_full_table_miss_without_overflow() {
     // Absent extension: must scan the entire (full) table and return
     // no matches instead of panicking.
     let ids = drive.resolve_ext_ids(&["nonexistent".to_owned()]);
-    assert!(ids.is_empty());
+    assert_eq!(ids, Vec::<u16>::new());
 }
 
 /// Companion to the miss-case regression above: a real extension at

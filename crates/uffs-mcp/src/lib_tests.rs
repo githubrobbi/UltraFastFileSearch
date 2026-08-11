@@ -354,8 +354,8 @@ mod tool_args_tests {
         let args: AggregateArgs = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(args.pattern, "*");
         assert!(args.preset.is_none());
-        assert!(args.aggregations.is_empty());
-        assert!(args.drives.is_empty());
+        assert_eq!(args.aggregations, Vec::<String>::new());
+        assert_eq!(args.drives, Vec::<String>::new());
     }
 
     #[test]

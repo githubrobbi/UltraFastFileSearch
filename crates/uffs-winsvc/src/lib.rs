@@ -212,7 +212,7 @@ mod tests {
             ServiceState::Stopped,
             ServiceState::Running,
         ] {
-            assert!(!state.label().is_empty());
+            assert_ne!(state.label(), "", "label missing for {state:?}");
         }
     }
 

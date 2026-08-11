@@ -284,7 +284,7 @@ pub(crate) mod tests {
     #[test]
     fn recording_prefetch_captures_every_region_in_order() {
         let prefetch = RecordingPrefetch::new();
-        assert!(prefetch.calls().is_empty());
+        assert_eq!(prefetch.calls(), Vec::<Vec<(usize, usize)>>::new());
 
         let buf_a = [0_u8; 16];
         let buf_b = [0_u8; 32];

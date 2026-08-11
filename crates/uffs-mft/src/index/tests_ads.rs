@@ -104,7 +104,7 @@ fn ads_stream_accessible_via_get_stream_at() {
 
     // Index 0: default $DATA
     let s0 = index.get_stream_at(rec, 0).expect("stream 0 must exist");
-    assert!(index.stream_name(s0).is_empty());
+    assert_eq!(index.stream_name(s0), "", "default $DATA stream is unnamed");
 
     // Index 1: ADS
     let s1 = index.get_stream_at(rec, 1).expect("stream 1 must exist");

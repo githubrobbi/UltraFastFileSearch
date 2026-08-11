@@ -617,7 +617,7 @@ mod tests {
         let mut filters = SearchFilters::default();
         let (pat, _) = run_safety_nets(">.*\\.jpg", &mut filters);
         assert_eq!(pat, ">.*\\.jpg", "no $ anchor — pattern must stay");
-        assert!(filters.extensions.is_empty());
+        assert_eq!(filters.extensions, Vec::<String>::new());
     }
 
     #[test]
@@ -625,7 +625,7 @@ mod tests {
         let mut filters = SearchFilters::default();
         let (pat, _) = run_safety_nets(">.*\\.(jp.?|png)$", &mut filters);
         assert_eq!(pat, ">.*\\.(jp.?|png)$");
-        assert!(filters.extensions.is_empty());
+        assert_eq!(filters.extensions, Vec::<String>::new());
     }
 
     #[test]
@@ -706,6 +706,6 @@ mod tests {
         let mut filters = SearchFilters::default();
         let (pat, drives) = run_safety_nets("\\rnio\\*", &mut filters);
         assert_eq!(pat, "\\rnio\\*", "no drive prefix → untouched");
-        assert!(drives.is_empty());
+        assert_eq!(drives, Vec::<uffs_mft::platform::DriveLetter>::new());
     }
 }

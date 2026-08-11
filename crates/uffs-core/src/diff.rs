@@ -291,8 +291,8 @@ mod tests {
         let current = [rec(10, 1, 100, 5), rec(12, 1, 50, 9)];
         let report = diff_records(&baseline, &current);
         assert_eq!(report.added, vec![1], "the new row (idx 1) is an add");
-        assert!(report.deleted.is_empty());
-        assert!(report.modified.is_empty());
+        assert_eq!(report.deleted, Vec::<u32>::new());
+        assert_eq!(report.modified, Vec::<u32>::new());
     }
 
     #[test]
@@ -301,8 +301,8 @@ mod tests {
         let current = [rec(10, 1, 100, 5)];
         let report = diff_records(&baseline, &current);
         assert_eq!(report.deleted, vec![1], "baseline idx 1 vanished");
-        assert!(report.added.is_empty());
-        assert!(report.modified.is_empty());
+        assert_eq!(report.added, Vec::<u32>::new());
+        assert_eq!(report.modified, Vec::<u32>::new());
     }
 
     #[test]
@@ -311,8 +311,8 @@ mod tests {
         let current = [rec(10, 1, 999, 5)];
         let report = diff_records(&baseline, &current);
         assert_eq!(report.modified, vec![0], "same ref, changed size → modify");
-        assert!(report.added.is_empty());
-        assert!(report.deleted.is_empty());
+        assert_eq!(report.added, Vec::<u32>::new());
+        assert_eq!(report.deleted, Vec::<u32>::new());
     }
 
     #[test]

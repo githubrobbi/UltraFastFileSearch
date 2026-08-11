@@ -210,7 +210,7 @@ mod tests {
         let (freed, errors) = delete_drive_cache_files(&paths);
 
         assert_eq!(freed, 0);
-        assert!(errors.is_empty());
+        assert_eq!(errors, Vec::<String>::new());
     }
 
     /// `delete_drive_cache_files` sums file sizes correctly across
@@ -249,7 +249,7 @@ mod tests {
         let (freed, errors) = delete_drive_cache_files(core::slice::from_ref(&path_dir));
 
         assert_eq!(freed, 0);
-        assert!(errors.is_empty());
+        assert_eq!(errors, Vec::<String>::new());
         assert!(path_dir.exists(), "non-file entry must be left in place");
     }
 

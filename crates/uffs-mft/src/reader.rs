@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn multi_drive_reader_empty() {
         let reader = MultiDriveMftReader::new(vec![]);
-        assert!(reader.drives().is_empty());
+        assert_eq!(reader.drives(), Vec::<crate::platform::DriveLetter>::new());
     }
 
     #[tokio::test]

@@ -69,6 +69,45 @@ avoid-breaking-exported-api = false
 # ── Identifier length ────────────────────────────────────────────────────────
 # Default (1) kept — threshold 2 was tested and only flagged idiomatic Rust
 # names (ch, cp, io, fs) with zero real wins.  Removed as pure noise.
+#
+# Single UPPERCASE letters are explicitly allowed (`".."` keeps Clippy's
+# default lowercase list): they are legitimate domain identifiers here —
+# the `DriveLetter` A–Z constants in `uffs-mft::platform::drive_letter`
+# ARE the domain model.  Posture decision from nightly-canary issue #584:
+# the 2026-08-09 floating-nightly clippy briefly extended
+# `min_ident_chars` to macro-generated single-letter constants and broke
+# the canary on exactly those A–Z constants (upstream reverted the next
+# day).  Declaring the intent in config keeps the canary green across
+# such churn without weakening the lint for ordinary identifiers.
+allowed-idents-below-min-chars = [
+  "..",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+  "Q",
+  "R",
+  "S",
+  "T",
+  "U",
+  "V",
+  "W",
+  "X",
+  "Y",
+  "Z",
+]
 
 # ── Thresholds ──────────────────────────────────────────────────────────────
 # All thresholds at Clippy defaults.  Violations are handled with targeted

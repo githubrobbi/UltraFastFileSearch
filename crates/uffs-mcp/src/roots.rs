@@ -377,7 +377,7 @@ mod tests {
         let (drives, prefixes, warnings) = roots_scope(&state).unwrap();
         assert_eq!(drives, vec!["C", "D"]);
         assert_eq!(prefixes.len(), 2);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -393,8 +393,8 @@ mod tests {
         update_roots_state(&mut state, &roots);
 
         let (drives, prefixes, warnings) = roots_scope(&state).unwrap();
-        assert!(drives.is_empty());
-        assert!(prefixes.is_empty());
+        assert_eq!(drives, Vec::<String>::new());
+        assert_eq!(prefixes, Vec::<String>::new());
         assert_eq!(warnings.len(), 1);
     }
 
@@ -430,7 +430,7 @@ mod tests {
 
         assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::D]);
         // "D:" is only 2 chars — should NOT inject a path predicate.
-        assert!(params.predicates.is_empty());
+        assert_eq!(params.predicates, Vec::<SearchPredicate>::new());
     }
 
     #[test]
@@ -499,8 +499,8 @@ mod tests {
         let mut params = SearchParams::default();
         apply_roots_scope(&state, &mut params);
 
-        assert!(params.drives.is_empty());
-        assert!(params.predicates.is_empty());
+        assert_eq!(params.drives, Vec::<uffs_mft::platform::DriveLetter>::new());
+        assert_eq!(params.predicates, Vec::<SearchPredicate>::new());
     }
 
     // ── longest_common_prefix tests ─────────────────────────────────

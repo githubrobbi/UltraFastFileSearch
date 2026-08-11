@@ -353,7 +353,7 @@ mod tests {
         let mut heap = SampleHeap::from_spec(&spec);
         assert!(heap.is_empty());
         let entries = heap.drain_sorted();
-        assert!(entries.is_empty());
+        assert_eq!(entries, Vec::<SampleEntry>::new());
     }
 
     #[test]

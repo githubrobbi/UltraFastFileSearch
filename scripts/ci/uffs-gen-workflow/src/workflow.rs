@@ -384,7 +384,7 @@ jobs:
       - run: echo
 ";
         let workflow = parse(yaml).unwrap();
-        assert!(workflow.jobs["alone"].needs.is_empty());
+        assert_eq!(workflow.jobs["alone"].needs, Vec::<String>::new());
     }
 
     #[test]

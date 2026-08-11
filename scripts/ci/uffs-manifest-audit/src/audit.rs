@@ -734,12 +734,30 @@ workspace = true
         let m = parse_member(MEMBER_CLEAN).unwrap();
         let d = disc("crates/uffs-core/Cargo.toml", &m);
         let exc = KnownExceptions::new();
-        assert!(audit_metadata_fields(&d, "uffs-core", &exc).is_empty());
-        assert!(audit_deps_inherit_workspace(&d, "uffs-core", &exc).is_empty());
-        assert!(audit_lints_inherit_workspace(&d, "uffs-core").is_empty());
-        assert!(audit_no_workspace_policy_blocks(&d, "uffs-core").is_empty());
-        assert!(audit_publish_partition(&d, "uffs-core", &exc).is_empty());
-        assert!(audit_docs_rs_metadata_present(&d, "uffs-core").is_empty());
+        assert_eq!(
+            audit_metadata_fields(&d, "uffs-core", &exc),
+            Vec::<Finding>::new()
+        );
+        assert_eq!(
+            audit_deps_inherit_workspace(&d, "uffs-core", &exc),
+            Vec::<Finding>::new()
+        );
+        assert_eq!(
+            audit_lints_inherit_workspace(&d, "uffs-core"),
+            Vec::<Finding>::new()
+        );
+        assert_eq!(
+            audit_no_workspace_policy_blocks(&d, "uffs-core"),
+            Vec::<Finding>::new()
+        );
+        assert_eq!(
+            audit_publish_partition(&d, "uffs-core", &exc),
+            Vec::<Finding>::new()
+        );
+        assert_eq!(
+            audit_docs_rs_metadata_present(&d, "uffs-core"),
+            Vec::<Finding>::new()
+        );
     }
 
     #[test]
@@ -827,7 +845,7 @@ workspace = true
         // Same shape under uffs-diag — should be suppressed.
         let d_diag = disc("crates/uffs-diag/Cargo.toml", &m);
         let suppressed = audit_lib_bin_name_convention(&d_diag, "uffs-diag", &exc);
-        assert!(suppressed.is_empty());
+        assert_eq!(suppressed, Vec::<Finding>::new());
     }
 
     #[test]

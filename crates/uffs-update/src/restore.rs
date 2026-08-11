@@ -164,7 +164,7 @@ mod tests {
     fn parses_program_only() {
         let (program, args) = parse_command_line("uffsmcp").expect("parse");
         assert_eq!(program, "uffsmcp");
-        assert!(args.is_empty());
+        assert_eq!(args, Vec::<String>::new(), "program-only line has no args");
     }
 
     #[test]

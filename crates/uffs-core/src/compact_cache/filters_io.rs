@@ -78,7 +78,7 @@ const BLOOM_HEADER_BYTES: usize = 16;
 /// Returns the underlying `io::Error` if any write fails.
 pub(super) fn write_bloom_section<W: io::Write>(writer: &mut W, bloom: &Bloom) -> io::Result<()> {
     writer.write_all(&bloom.nbits().to_le_bytes())?;
-    writer.write_all(&u32::from(bloom.k()).to_le_bytes())?;
+    writer.write_all(&u32::from(bloom.hash_count()).to_le_bytes())?;
     let words = bloom.bits();
     write_u32(writer, words.len())?;
     writer.write_all(bytemuck::cast_slice(words))?;
@@ -90,7 +90,7 @@ pub(super) fn write_bloom_section<W: io::Write>(writer: &mut W, bloom: &Bloom) -
 /// `serialize_compact` path.
 pub(super) fn push_bloom_section(buf: &mut Vec<u8>, bloom: &Bloom) {
     buf.extend_from_slice(&bloom.nbits().to_le_bytes());
-    buf.extend_from_slice(&u32::from(bloom.k()).to_le_bytes());
+    buf.extend_from_slice(&u32::from(bloom.hash_count()).to_le_bytes());
     let words = bloom.bits();
     let words_count: u32 = u32::try_from(words.len()).unwrap_or(u32::MAX);
     buf.extend_from_slice(&words_count.to_le_bytes());
@@ -317,7 +317,7 @@ mod tests {
         let (decoded, end) = read_bloom_section(&buf, 0).expect("bloom round-trip should succeed");
         assert_eq!(end, buf.len(), "decoder should consume the full section");
         assert_eq!(decoded.nbits(), bloom.nbits());
-        assert_eq!(decoded.k(), bloom.k());
+        assert_eq!(decoded.hash_count(), bloom.hash_count());
         assert_eq!(decoded.bits(), bloom.bits());
 
         for input in ["alpha", "beta", "gamma", "delta", "epsilon"] {
@@ -440,7 +440,7 @@ mod tests {
         let (decoded, _) =
             read_bloom_section(&buf, 0).expect("empty-bloom round-trip should succeed");
         assert_eq!(decoded.nbits(), bloom.nbits());
-        assert_eq!(decoded.k(), bloom.k());
+        assert_eq!(decoded.hash_count(), bloom.hash_count());
         assert!(decoded.bits().iter().all(|&w| w == 0));
     }
 
@@ -459,8 +459,8 @@ mod tests {
         assert_eq!(end, buf.len());
         assert!(decoded.is_empty());
         assert!(decoded.nodes().is_empty());
-        assert!(decoded.names().is_empty());
+        assert_eq!(decoded.names(), Vec::<u8>::new());
         assert_eq!(decoded.child_offsets(), &[0_u32]);
-        assert!(decoded.child_indices().is_empty());
+        assert_eq!(decoded.child_indices(), Vec::<u32>::new());
     }
 }

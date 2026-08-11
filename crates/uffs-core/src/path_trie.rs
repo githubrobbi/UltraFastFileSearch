@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(trie.roots(), vec![0_u32]);
         assert_eq!(trie.name_of(0), Some(b"C" as &[u8]));
         assert_eq!(trie.parent_of(0), None);
-        assert!(trie.children_of(0).is_empty());
+        assert_eq!(trie.children_of(0), Vec::<u32>::new());
     }
 
     /// Two-level hierarchy: `C` (root) with two children `Users` and

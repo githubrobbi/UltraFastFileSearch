@@ -37,6 +37,6 @@ mod tests {
 
     #[test]
     fn empty_input_is_clean() {
-        assert!(still_present(&[]).is_empty());
+        assert_eq!(still_present(&[]), Vec::<PathBuf>::new());
     }
 }

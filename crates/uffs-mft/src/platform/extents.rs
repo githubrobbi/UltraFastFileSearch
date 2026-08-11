@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn data_runs_empty_yields_no_extents() {
-        assert!(data_runs_to_extents(&[]).is_empty());
+        assert_eq!(data_runs_to_extents(&[]), Vec::<MftExtent>::new());
     }
 
     #[test]

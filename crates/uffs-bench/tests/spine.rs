@@ -120,7 +120,11 @@ mod tests {
             confirm(&host, &mut mode, &mut seen, &make_card()),
             Decision::ProceedNoop
         );
-        assert!(!host.output().is_empty());
+        assert_ne!(
+            host.output(),
+            Vec::<String>::new(),
+            "confirm must explain the noop"
+        );
     }
 
     #[test]
@@ -301,7 +305,11 @@ mod tests {
         };
         let before = capture(&host, &spec);
         let after = capture(&host, &spec);
-        assert!(diff(&before, &after).is_empty());
+        assert_eq!(
+            diff(&before, &after),
+            Vec::<String>::new(),
+            "identical captures must not drift"
+        );
     }
 
     #[test]

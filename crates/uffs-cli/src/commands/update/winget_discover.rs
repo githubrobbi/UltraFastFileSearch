@@ -152,6 +152,6 @@ mod tests {
     #[test]
     fn missing_base_yields_nothing() {
         let roots = roots_under_packages_base(std::path::Path::new("/nonexistent/winget/packages"));
-        assert!(roots.is_empty());
+        assert_eq!(roots, Vec::<std::path::PathBuf>::new());
     }
 }

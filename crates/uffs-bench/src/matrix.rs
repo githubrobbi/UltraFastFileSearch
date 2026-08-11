@@ -414,7 +414,11 @@ mod tests {
 
         let matrix = compute_matrix(&spec, &preflight);
 
-        assert!(matrix.cross_cells.is_empty());
+        assert_eq!(
+            matrix.cross_cells,
+            Vec::<super::CrossCell>::new(),
+            "no cross cells expected"
+        );
         assert_eq!(matrix.uffs_only.len(), 1);
         let reason = &matrix.uffs_only.first().expect("one solo cell").reason;
         assert!(reason.contains("es infeasible"));
@@ -476,7 +480,11 @@ mod tests {
 
         assert_eq!(matrix.capable_drives, vec!['C', 'E']);
         assert_eq!(matrix.cross_cells.len(), 2);
-        assert!(matrix.uffs_only.is_empty());
+        assert_eq!(
+            matrix.uffs_only,
+            Vec::<super::SoloCell>::new(),
+            "no solo cells expected"
+        );
     }
 
     #[test]

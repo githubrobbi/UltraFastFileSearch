@@ -115,7 +115,7 @@ mod tier1_decoder_corpus {
     #[test]
     fn empty_name_is_empty() {
         let (decoded, lossy) = decode_name_u16(&[]);
-        assert!(decoded.is_empty());
+        assert_eq!(decoded, "");
         assert_eq!(lossy, 0);
     }
 }

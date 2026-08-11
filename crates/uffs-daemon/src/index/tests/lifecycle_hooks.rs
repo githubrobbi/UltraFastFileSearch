@@ -271,7 +271,10 @@ async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_region
     );
 
     // Pre-promote: no prefetch calls.
-    assert!(recording_prefetch.calls().is_empty());
+    assert_eq!(
+        recording_prefetch.calls(),
+        Vec::<Vec<(usize, usize)>>::new()
+    );
 
     mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
         .await;

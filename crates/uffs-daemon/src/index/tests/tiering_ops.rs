@@ -63,9 +63,18 @@ async fn hibernate_demotes_all_loaded_drives_to_cold() {
         ],
         "both freshly-loaded Warm drives must be reported as warm-demoted"
     );
-    assert!(outcome.hot_demoted.is_empty());
-    assert!(outcome.parked_demoted.is_empty());
-    assert!(outcome.already_cold.is_empty());
+    assert_eq!(
+        outcome.hot_demoted,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
+    assert_eq!(
+        outcome.parked_demoted,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
+    assert_eq!(
+        outcome.already_cold,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -136,8 +145,14 @@ async fn hibernate_reports_already_cold_drives_separately() {
     assert_eq!(outcome.warm_demoted, vec![
         uffs_mft::platform::DriveLetter::D
     ]);
-    assert!(outcome.hot_demoted.is_empty());
-    assert!(outcome.parked_demoted.is_empty());
+    assert_eq!(
+        outcome.hot_demoted,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
+    assert_eq!(
+        outcome.parked_demoted,
+        Vec::<uffs_mft::platform::DriveLetter>::new()
+    );
 }
 
 /// Phase 8-C contract — `preload C:` against a `Cold` shard goes

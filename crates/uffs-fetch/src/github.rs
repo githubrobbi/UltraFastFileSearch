@@ -249,7 +249,7 @@ mod tests {
         let mut sink: Vec<u8> = Vec::new();
         let written = copy_capped(&mut reader, &mut sink, 100, no_progress).expect("empty copies");
         assert_eq!(written, 0);
-        assert!(sink.is_empty());
+        assert_eq!(sink, Vec::<u8>::new(), "sink must stay untouched");
     }
 
     #[test]

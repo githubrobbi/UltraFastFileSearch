@@ -398,7 +398,7 @@ fn parsed_record_default() {
     assert_eq!(record.frs, Frs::ZERO);
     assert_eq!(record.sequence_number, 0);
     assert_eq!(record.parent_frs, ParentFrs::ZERO);
-    assert!(record.name.is_empty());
+    assert_eq!(record.name, "");
     assert!(!record.in_use);
     assert!(!record.is_directory);
 }

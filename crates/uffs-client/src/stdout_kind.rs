@@ -487,7 +487,7 @@ mod shared_tests {
     #[test]
     fn utf8_to_utf16_empty_input_returns_empty() {
         let out = utf8_to_utf16(b"").expect("empty UTF-8 is valid");
-        assert!(out.is_empty());
+        assert_eq!(out, Vec::<u16>::new());
     }
 
     /// Pure ASCII round-trips as zero-extended 16-bit code units —

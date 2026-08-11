@@ -946,8 +946,8 @@ fn aggregate_spec_wire_minimal_json() {
     assert_eq!(parsed.kind, "count");
     assert!(parsed.label.is_none());
     assert!(parsed.field.is_none());
-    assert!(parsed.boundaries.is_empty());
-    assert!(parsed.metrics.is_empty());
+    assert_eq!(parsed.boundaries, Vec::<u64>::new());
+    assert_eq!(parsed.metrics, Vec::<String>::new());
     assert!(parsed.preset.is_none());
 }
 
@@ -1079,8 +1079,8 @@ fn bucket_wire_backward_compat_no_sample_fields() {
     let parsed: BucketWire = serde_json::from_str(json_str).expect("deserialize");
     assert_eq!(parsed.key, "rs");
     assert_eq!(parsed.count, 50);
-    assert!(parsed.sample_rows.is_empty());
-    assert!(parsed.drilldown.is_empty());
+    assert_eq!(parsed.sample_rows, Vec::<SampleRowWire>::new());
+    assert_eq!(parsed.drilldown, Vec::<DrilldownWire>::new());
 }
 
 #[test]
@@ -2214,5 +2214,5 @@ fn from_cli_args_no_drive_path_pattern_unscoped() {
     let args: Vec<String> = vec!["\\rnio\\*".into()];
     let params = SearchParams::from_cli_args(&args).expect("parse");
     assert_eq!(params.pattern, "\\rnio\\*");
-    assert!(params.drives.is_empty());
+    assert_eq!(params.drives, Vec::<uffs_mft::platform::DriveLetter>::new());
 }

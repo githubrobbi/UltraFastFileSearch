@@ -24,16 +24,23 @@ ignore = [
   # untrusted XML). Transitive-only: polars-io -> object_store 0.13 -> quick-xml ^0.39.
   # NOT reachable in UFFS: the vulnerable path is object_store's cloud-store XML LIST
   # parsing; UFFS only reads the local NTFS MFT and local index files, never a cloud
-  # object path. No upstream fix exists to bump to as of 2026-07-02 — the newest
-  # object_store (0.14.0) still requires quick-xml ^0.40.1 (< the fixed 0.41), and we
-  # are already on the latest polars (0.54.4). Remove this ignore when object_store
-  # ships a quick-xml >=0.41 release AND polars adopts it.
+  # object path.
+  #
+  # Upstream status re-verified 2026-08-11 (half the removal condition is now met):
+  #   * object_store 0.14.1 DOES require quick-xml ^0.41.0 — the fixed line. (The
+  #     0.14.0-requires-^0.40.1 note below this line was true on 2026-07-02 and is
+  #     now superseded.)
+  #   * polars-io still pins object_store ^0.13.1 — and so does the newest polars
+  #     (0.55.2, checked against the crates.io API), so bumping polars off 0.54.4
+  #     would NOT clear these advisories. The remaining blocker is entirely
+  #     upstream: polars-io must adopt object_store 0.14.
+  # Remove this ignore once polars-io ships with object_store >= 0.14.
   # See: https://rustsec.org/advisories/RUSTSEC-2026-0195
   "RUSTSEC-2026-0195",
   # Same crate, same path, same reasoning as RUSTSEC-2026-0195 above: quick-xml <0.41
   # quadratic run time checking a start tag for duplicate attribute names (DoS on
-  # untrusted XML). Unreachable in UFFS (no cloud object paths); no upstream fix
-  # reachable yet. Remove together with the ignore above.
+  # untrusted XML). Unreachable in UFFS (no cloud object paths); still gated on
+  # polars-io adopting object_store 0.14. Remove together with the ignore above.
   # See: https://rustsec.org/advisories/RUSTSEC-2026-0194
   "RUSTSEC-2026-0194",
 ]

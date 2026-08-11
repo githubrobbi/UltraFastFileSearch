@@ -122,6 +122,33 @@ uffs --daemon start --data-dir ~/uffs_data --idle-timeout 0
 uffs --daemon start --data-dir ~/uffs_data --idle-timeout 1800
 ```
 
+### Permanent residency (start at login, never retire)
+
+If UFFS is part of your every-day workflow, make the daemon
+**resident** instead of tuning timeouts:
+
+```bash
+# Windows — auto-discovers NTFS drives, zero UAC (uses the Access Broker):
+uffs --daemon resident on
+
+# macOS / Linux — provide MFT data:
+uffs --daemon resident on --data-dir ~/uffs_data
+
+# Inspect / undo:
+uffs --daemon resident status
+uffs --daemon resident off
+```
+
+`resident on` registers a per-user login item (Windows: `HKCU` Run
+key; macOS: launchd LaunchAgent; Linux: systemd user unit) that
+starts `uffsd --no-retire` at login, and starts the daemon
+immediately when none is running.  The daemon then never removes
+itself from the process list — searches are always instant — while
+the memory-tiering ladder still parks unused drives down to a few MB,
+so residency costs almost nothing.  On macOS and Linux a crashed
+resident daemon is relaunched automatically (a clean
+`uffs --daemon stop` is honored and does not relaunch).
+
 ---
 
 ## 5  Management Commands

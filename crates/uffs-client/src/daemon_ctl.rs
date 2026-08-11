@@ -288,6 +288,21 @@ pub fn pid_file_path() -> PathBuf {
     base.join("uffs").join("daemon.pid")
 }
 
+/// Path of the resident-marker file (`resident.args`), sibling of the
+/// PID file.
+///
+/// Written by `uffs --daemon resident on` with the daemon argv the
+/// login item uses (one argument per line); removed by `resident off`.
+/// Every implicit daemon auto-spawn merges these arguments in — caller
+/// flags win, see `daemon_resident::merge_resident_args` — so a crashed
+/// or stopped resident daemon comes back **resident** on the next
+/// search instead of falling back to the default idle-retire lifetime.
+#[must_use]
+pub fn resident_args_path() -> PathBuf {
+    let base = dirs_next::data_local_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("uffs").join("resident.args")
+}
+
 /// Parse a daemon PID file. Returns `(pid, timestamp, exe_hash, nonce)`.
 #[must_use]
 pub fn parse_pid_file(path: &std::path::Path) -> Option<(u32, u64, u64, String)> {

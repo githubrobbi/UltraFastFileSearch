@@ -120,7 +120,8 @@ pub(crate) fn spawn_daemon(
     // `policy` is Windows-only; the Unix spawn never prompts for
     // elevation.  The parameter stays in the public signature so
     // callers can pass the same value on every platform.
-    spawn_daemon_unix(exe, args)
+    let merged_args = crate::daemon_resident::apply_resident_marker(args);
+    spawn_daemon_unix(exe, &merged_args)
 }
 
 /// Windows implementation of [`spawn_daemon`].
@@ -143,7 +144,8 @@ pub(crate) fn spawn_daemon(
     args: &[std::ffi::OsString],
     policy: ElevationPolicy,
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
-    spawn_daemon_windows(exe, args, policy)
+    let merged_args = crate::daemon_resident::apply_resident_marker(args);
+    spawn_daemon_windows(exe, &merged_args, policy)
 }
 
 // ── Platform-specific spawn impls ─────────────────────────────────────────

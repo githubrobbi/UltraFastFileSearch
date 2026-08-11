@@ -28,6 +28,14 @@
 //! daemon is already running, `on` leaves it untouched (its idle
 //! timeout keeps ruling until it retires or is stopped) and the
 //! resident configuration takes over from the next start.
+//!
+//! `on` also writes the **auto-spawn marker** (`resident.args`, next
+//! to the daemon PID file). Every implicit daemon auto-spawn merges
+//! the marker's argv (caller flags win — see
+//! `uffs_client::daemon_resident::merge_resident_args`), so the next
+//! search after a crash or a manual stop revives the daemon
+//! *resident* — this is what closes the Windows gap where the Run key
+//! alone cannot restart a crashed daemon mid-session.
 
 use std::path::{Path, PathBuf};
 
@@ -80,12 +88,29 @@ fn resident_on(
     let exe = resolve_daemon_exe()?;
     let argv = daemon_argv(mft_files, data_dir, drives);
     platform::turn_on(&exe, &argv)?;
+    write_marker(&argv)?;
     println!(
         "\nUFFS is now resident: uffsd starts at login with --no-retire\n\
-         (never exits on idle; memory tiering still parks unused drives).\n\
+         (never exits on idle; memory tiering still parks unused drives),\n\
+         and every auto-started daemon inherits the resident lifetime.\n\
          Undo with: uffs --daemon resident off"
     );
     Ok(())
+}
+
+/// Write the resident marker (`resident.args`) so implicit auto-spawns
+/// — the next search after a crash or a manual stop — revive the
+/// daemon with the same resident argv the login item uses (merged in
+/// `uffs_client::daemon_resident`; caller flags win).
+fn write_marker(argv: &[String]) -> Result<()> {
+    let path = uffs_client::daemon_ctl::resident_args_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut content = argv.join("\n");
+    content.push('\n');
+    std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))
 }
 
 /// Resolve the daemon binary to an absolute, existing path — a login
@@ -164,10 +189,12 @@ fn daemon_running() -> bool {
 
 // ── off ─────────────────────────────────────────────────────────────
 
-/// Remove the login item.
+/// Remove the login item and the auto-spawn marker.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn resident_off() -> Result<()> {
     platform::turn_off()?;
+    // Auto-spawns fall back to the default idle-retire lifetime.
+    let _absent = std::fs::remove_file(uffs_client::daemon_ctl::resident_args_path());
     if daemon_running() {
         println!(
             "A daemon is still running; it is unaffected.\n\
@@ -185,6 +212,11 @@ fn resident_status() {
     match platform::installed_at() {
         Some(artifact) => println!("Login item:  installed ({artifact})"),
         None => println!("Login item:  not installed"),
+    }
+    if uffs_client::daemon_ctl::resident_args_path().exists() {
+        println!("Auto-spawn:  resident (revived daemons keep --no-retire)");
+    } else {
+        println!("Auto-spawn:  default (idle retire)");
     }
     if daemon_running() {
         println!("Daemon:      running (details: uffs --daemon status)");

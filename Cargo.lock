@@ -4445,6 +4445,7 @@ dependencies = [
  "uffs-client",
  "uffs-format",
  "uffs-mft",
+ "uffs-security",
  "uffs-statusfmt",
  "uffs-time",
  "uffs-version",

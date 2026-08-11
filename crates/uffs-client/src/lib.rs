@@ -172,6 +172,9 @@ pub mod daemon_ctl;
 /// Exposes `spawn_daemon`, `ElevationPolicy`, the MSVCRT-compatible
 /// arg quoter, and the Windows UAC helpers.  Canonical home — no
 /// cascade through `daemon_ctl`.
+/// Resident-marker merge for the auto-spawn path (split off
+/// `daemon_spawn` to stay under the 800-LOC policy ceiling).
+pub(crate) mod daemon_resident;
 pub(crate) mod daemon_spawn;
 pub mod error;
 pub mod format;

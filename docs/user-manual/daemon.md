@@ -149,6 +149,14 @@ so residency costs almost nothing.  On macOS and Linux a crashed
 resident daemon is relaunched automatically (a clean
 `uffs --daemon stop` is honored and does not relaunch).
 
+Residency also survives crashes and stops on **every** platform
+through the auto-spawn marker: `resident on` records the resident
+configuration next to the daemon's PID file, and any daemon started
+implicitly (the next search, an MCP tool call) inherits it — most
+importantly `--no-retire`.  Flags you pass explicitly always win over
+the marker.  `resident off` removes the marker along with the login
+item.
+
 ---
 
 ## 5  Management Commands

@@ -29,6 +29,7 @@ use tracing_appender as _;
 use uffs_mft as _;
 
 mod process;
+mod supervisor;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
@@ -42,6 +43,11 @@ struct Cli {
     /// runs in stdio mode (for AI host integration).
     #[command(subcommand)]
     action: Option<Action>,
+
+    /// Run as the supervised stdio worker (spawned by the supervisor —
+    /// see `supervisor.rs`; not part of the public CLI surface).
+    #[arg(long, hide = true, global = true)]
+    worker: bool,
 }
 
 /// MCP server lifecycle actions.
@@ -114,11 +120,40 @@ enum Action {
     Reload,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     uffs_version::handle_version!("uffsmcp");
     let cli = Cli::parse();
 
+    // Stdio mode (no subcommand, or `run`) is served through the
+    // self-upgrading supervisor: it owns the client's pipes and pumps
+    // JSON-RPC through a `--worker` child it can hot-swap when the
+    // binary on disk is replaced (see `supervisor.rs`).  The worker
+    // child — and every non-stdio action — takes the async path.
+    let stdio_mode = matches!(cli.action, None | Some(Action::Run { .. }));
+    if stdio_mode && !cli.worker {
+        let _ignore = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            .with_max_level(tracing::Level::INFO)
+            .try_init();
+        // Re-issue our own argv verbatim (plus `--worker`) so the child
+        // serves exactly what the client asked the supervisor for.
+        let mut worker_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        worker_args.push(std::ffi::OsString::from("--worker"));
+        return supervisor::run(&worker_args);
+    }
+
+    // The supervisor path above is pure std (blocking pipes + threads);
+    // only the server/action paths need the async runtime.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("building the tokio runtime")?
+        .block_on(async_main(cli))
+}
+
+/// The async half of `main`: the stdio worker and every lifecycle action.
+async fn async_main(cli: Cli) -> Result<()> {
     match cli.action {
         // No subcommand → stdio mode (for AI hosts like Claude Desktop).
         None => {

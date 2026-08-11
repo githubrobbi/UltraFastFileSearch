@@ -57,15 +57,15 @@ when = "2026-05-19"
 trusted-publisher = "github:RustCrypto/traits"
 
 [[publisher.clap]]
-version = "4.6.5"
-when = "2026-07-31"
+version = "4.6.6"
+when = "2026-08-06"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.clap_builder]]
-version = "4.6.5"
-when = "2026-07-31"
+version = "4.6.6"
+when = "2026-08-06"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -114,8 +114,8 @@ user-id = 55123
 user-login = "rust-lang-owner"
 
 [[publisher.globset]]
-version = "0.4.19"
-when = "2026-07-15"
+version = "0.4.20"
+when = "2026-08-04"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -254,8 +254,8 @@ user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.regex-automata]]
-version = "0.4.16"
-when = "2026-07-15"
+version = "0.4.18"
+when = "2026-08-04"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"

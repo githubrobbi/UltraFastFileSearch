@@ -169,6 +169,30 @@ criteria = "safe-to-deploy"
 delta = "0.1.6 -> 0.2.2"
 notes = "Delta audit (cargo vet diff 0.1.6 -> 0.2.2). Files: Cargo.toml/Cargo.toml.orig (version + metadata: autolib/autobins/resolver=2, switch generic-array -> hybrid_array dep), CHANGELOG/README/LICENSE-MIT (text), src/lib.rs, src/hazmat.rs, new src/generate.rs. Net unsafe blocks added: 0 (grep confirms the only 'unsafe' token added is a Clippy lint declaration 'undocumented_unsafe_blocks = warn'). New generate.rs is pure-safe key/IV generation over rand_core CryptoRng/TryCryptoRng traits (hybrid_array Array<ArraySize>), no FFI / I/O / process / network / ambient capability. The 0.2 line is the known RustCrypto API restructuring (generic-array -> hybrid_array); behavior of the trait surface is otherwise preserved. Same publisher (github:RustCrypto/traits) the repo already trusts for 'digest'."
 
+[[audits.darling]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.0 -> 0.24.0"
+notes = "Reviewed the full diff; the facade crate changes are version bumps, the syn 2->3 dev-dependency migration, documentation updates, new examples and tests for the new transparent/crate/ident_with features, plus two new hidden re-exports from darling_core (TryFrom, Clone, PhantomData in export; autoref_specialization). No build.rs, no unsafe, no I/O or network access anywhere in the source tree."
+
+[[audits.darling_core]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.0 -> 0.24.0"
+notes = "Reviewed the full diff including all six new source files. The release migrates to syn 3 (mechanical renames: TypeBareFn->TypeFnPtr, BareFnArg->NamedArg, TraitBoundModifiers), adds #[darling(transparent)] and #[darling(crate = ...)] support, TryFrom<&syn::Data> for the data magic field via a standard autoref-specialization helper, and a new NestedMeta::NameValueInvalidExpr variant capturing unparseable RHS tokens. The codegen refactor wraps emitted impls in const _: () = { use ::darling as _darling; ... } (the same pattern serde uses) and all emitted paths reference only _darling/std items — no arbitrary token injection, no build.rs, no unsafe, no filesystem/network/process access, no new dependencies beyond the syn major bump."
+
+[[audits.darling_macro]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.0 -> 0.24.0"
+notes = "Reviewed the full diff; src/lib.rs is byte-identical to 0.23.0. The only changes are the version bump, the pinned darling_core 0.23.0->0.24.0, and the syn 2->3 dependency bump reflected in the manifest and lockfile. No build.rs and no code changes of any kind."
+
+[[audits.devicons]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.12 -> 0.6.13"
+notes = "Reviewed the full diff; the only functional change moves the points_to_directory() check ahead of the extension lookup in dark_icon_for_file/light_icon_for_file (src/icons.rs), so directories whose names contain dots get the default directory icon, with three new unit tests covering that fix. Remaining hunks are version bumps and the vcs-info sha. No dependency, feature, build-script, or unsafe changes."
+
 [[audits.displaydoc]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -199,11 +223,23 @@ criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
 
+[[audits.futures]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; the facade crate bumps all sub-crate dependency versions to 0.3.34, updates a README CI badge, adds a Miri skip to a compat test, and adds a new regression test asserting a cloned FuturesUnordered child waker satisfies will_wake (matching the #[inline(always)] waker changes in futures-task/futures-util). No src/ changes, no dependency additions."
+
 [[audits.futures-channel]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff (4 files, 11/12 lines): cfg simplification (cfg_attr(target_os=none,...) -> plain cfg, no semantic change on our targets) + a miri test-speed tweak. No capability changes."
+
+[[audits.futures-channel]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; only the crate version bump and the futures-core/futures-sink dependency requirements moving to 0.3.34, mirrored in the lockfile. No source changes."
 
 [[audits.futures-core]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -211,13 +247,37 @@ criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
 
+[[audits.futures-core]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; it contains only the version bump in Cargo.toml/Cargo.toml.orig/Cargo.lock and the updated git sha in .cargo_vcs_info.json. Zero source changes, no dependency or feature changes, no build script."
+
 [[audits.futures-executor]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff (5 files, 15/18 lines): doc-link cleanup only (removing redundant explicit link targets now inferred by rustdoc). No logic changes."
 
+[[audits.futures-executor]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; only version bumps for the crate and its futures-core/futures-task/futures-util dependencies plus corresponding lockfile churn. No source changes."
+
 [[audits.futures-io]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+
+[[audits.futures-io]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; version-bump-only release (manifest, lockfile, vcs-info sha). No source, dependency, or feature changes."
+
+[[audits.futures-macro]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
@@ -226,8 +286,8 @@ notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the 
 [[audits.futures-macro]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
-delta = "0.3.32 -> 0.3.33"
-notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; no proc-macro source changes at all. The only substantive change widens the syn dependency from 2.0.52 to 3.0 (resolving to the already-vetted syn 3.x in our tree). Standard proc-macro2/quote/unicode-ident tree, nothing suspicious."
 
 [[audits.futures-sink]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -235,17 +295,35 @@ criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff: version-bump-only or test/doc-only changes (part of the same futures-rs 0.3.33 release reviewed in detail for futures-util/futures-task/futures-channel/futures-executor in this same batch). No production source changes in this specific crate."
 
+[[audits.futures-sink]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; version-bump-only release (manifest, lockfile, vcs-info sha). No source, dependency, or feature changes."
+
 [[audits.futures-task]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff (4 files, 14/10 lines): cfg simplification (same as futures-channel) + a new re-export (alloc::task::Wake). No new unsafe or capability surface."
 
+[[audits.futures-task]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; besides the version bump, the only code change adds #[inline(always)] to the existing noop_clone waker-vtable function in src/noop_waker.rs — an attribute on an already-existing unsafe fn, no new unsafe code, no behavioral or dependency changes."
+
 [[audits.futures-util]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.32 -> 0.3.33"
 notes = "Reviewed diff (28 files, 266/148 lines) including its unsafe-block changes specifically: (1) NotifyWaker (futures 0.1 compat shim) now wraps its Waker in UnsafeCell and gets a *mut via .get() instead of casting a &self reference to *mut -- fixes real UB flagged by Miri (strict-provenance violation), each call site updated correspondingly with Send/Sync impls added for the new UnsafeCell field; (2) FuturesUnordered: fixed an actual unsound Send impl on IterPinRef (previously bounded on Fut: Send when it must be Fut: Sync, since it yields shared Pin<&Fut> that both sides can read concurrently) plus a related task-release-back-to-pool fix in the iterator's Drop path. Both are genuine upstream soundness fixes, not new risk. No fs/net/process/exec capability anywhere in the diff."
+
+[[audits.futures-util]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.33 -> 0.3.34"
+notes = "Reviewed the full diff; manifest changes are strictly sibling-dependency version bumps (including the pinned futures-macro =0.3.34). Code changes: #[inline(always)] added to two existing waker-vtable clone functions (compat03as01.rs, futures_unordered/task.rs) and three doctest guards skipping the futures-0.1 compat examples under Miri. No new unsafe blocks, no dependency additions, no behavioral concerns."
 
 [[audits.hashbrown]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -625,6 +703,12 @@ criteria = "safe-to-deploy"
 delta = "2.2.0 -> 3.1.0"
 notes = "Delta audit (cargo vet diff 2.2.0 -> 3.1.0), ~34k-line major-version diff; all changed src/ files were enumerated and reviewed (transport/auth.rs, service/client.rs and new service/client/cache.rs, transport/streamable_http_client.rs, task_manager.rs, streamable_http_server/tower.rs and session files, service.rs, service/server.rs, client_side_sse.rs, reqwest/unix-socket/child-process/async_rw transports, error.rs, lib.rs, handlers, and the new model/mrtr.rs, model/request_state.rs, transport/common/mcp_headers.rs read in full); model-type files (model.rs, meta.rs, serde_impl.rs, task.rs, capabilities.rs, etc.) were reviewed at item level and are serde/schema type changes only. No unsafe anywhere in the diff, no build.rs, no new URLs or domains outside example.com/localhost test fixtures and spec doc links, and no new filesystem/process/env access; child_process.rs only deletes a deprecated API. New optional deps hmac 0.13 and sha2 0.11 back the new request-state feature, an HMAC-SHA256 integrity codec for SEP-2322 requestState with constant-time verification and a redacted-key Debug impl; base64 bumps to 0.23 and jsonwebtoken to 11. Nature of release: MCP 2026-07-28 protocol work — server/discover lifecycle, SEP-2549 client response cache, SEP-2663 task manager, SEP-2322 MRTR, SEP-2243 standard headers, SEP-2260 request-association enforcement, subscription streams. Security posture improves: OAuth discovery gains RFC 8414 issuer validation, stricter RFC 8707 resource matching, refresh-rejection classification, issuer-change credential invalidation, and removal of the unauthenticated POST probe; DoS hardening adds a 16 MiB SSE event cap and a 4 MiB server request-body cap. Capability surface (HTTP client/server to caller-configured endpoints, stdio child-process transport, Unix sockets) is unchanged in kind and honestly consistent with an MCP protocol SDK; no malicious or obfuscated code observed."
 
+[[audits.rmcp]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "3.1.0 -> 3.1.2"
+notes = "Reviewed the full diff; changes match the 3.1.1/3.1.2 changelog exactly: (1) client_side_sse.rs rewrites the poll_next recursion into a loop so skipping non-message/undecodable SSE frames cannot overflow the stack, with a regression test; (2) streamable_http_client.rs maps 401/403 responses with a WWW-Authenticate header on the SSE GET stream to the existing AuthRequired/InsufficientScope error variants so the auth-refresh path triggers — no new endpoints or request behavior; (3) auth.rs threads an optional expected-issuer string into RFC 8414 issuer validation so a legitimate trailing slash no longer causes a false mismatch — validation is not weakened, only the comparison source is corrected; (4) tool.rs adds RequestState/InputResponses extractors for already-parsed MRTR fields, and model.rs tightens CallToolResult deserialization to reject any non-complete resultType. async-trait became optional behind the features that use it; no new dependencies, no new unsafe, build.rs unchanged, and the two added files are localhost-only integration tests."
+
 [[audits.rmcp-macros]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -654,6 +738,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "2.2.0 -> 3.1.0"
 notes = "Delta audit (cargo vet diff 2.2.0 -> 3.1.0), full diff reviewed (~630 lines). Source changes are removal of the task_handler proc-macro (src/task_handler.rs deleted, references removed from lib.rs and tool_handler.rs), removal of the ToolExecution/task_support attribute machinery from tool.rs, renamed generated result types (GetPromptResult -> GetPromptResponse, CallToolResult -> CallToolResponse), new result_type/ttl_ms/cache_scope fields in generated ListTools/ListPrompts results, and mechanical let-chains refactors in common.rs, prompt.rs, and tool.rs (skimmed as purely mechanical). No unsafe code, no build.rs, no filesystem/network/process/env access; codegen emits only rmcp model-type constructors as before. Cargo.toml changes are the version bump and rust-version = 1.88; no new dependencies (Cargo.lock churn is routine version bumps of proc-macro2/quote/syn/serde). Generated-code diff is honestly consistent with the rmcp 3.x protocol-model changes; nothing obfuscated or suspicious."
+
+[[audits.rmcp-macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "3.1.0 -> 3.1.2"
+notes = "Reviewed the full diff; the crate migrated from syn 2 / darling 0.23 to syn 3 / darling 0.24, requiring a mechanical receiver-lifetime pattern update in src/prompt.rs and src/tool.rs (receiver.reference -> syn::ReceiverKind::Reference) with new tests asserting the receiver lifetime is preserved. The only codegen behavior change is in the generated list_tools/list_prompts: for protocol versions >= 2026-07-28 they emit ttl_ms=0 and CacheScope::Public cache hints instead of None — a benign protocol-conformance change with no I/O, no build script, and no new dependencies beyond the darling/syn major bumps."
 
 [[audits.rustc-hash]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"

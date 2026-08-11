@@ -75,7 +75,7 @@ const SEED_B: u64 = 0x5A5A_3C3C_0F0F_A5A5;
 /// target.
 ///
 /// Per tiering-plan §6.2 this is fixed at 7.  Exposed via
-/// [`Bloom::k`] so callers can introspect.
+/// [`Bloom::hash_count`] so callers can introspect.
 pub const DEFAULT_K: u8 = 7;
 
 /// Bit-packed bloom filter with double-hashing.

@@ -12,14 +12,23 @@
 //! makes the swap observable: the same session sees two different
 //! worker PIDs across the "install".
 
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "integration tests are inherently outside cfg(test)"
+// The expectations only apply on unix — the test module is cfg-gated
+// (the fake worker is a sh script), so on Windows they would be
+// unfulfilled and the lint lane rejects unfulfilled expectations.
+#![cfg_attr(
+    unix,
+    expect(
+        clippy::tests_outside_test_module,
+        reason = "integration tests are inherently outside cfg(test)"
+    )
 )]
-#![expect(
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    reason = "integration test — relaxed linting for test clarity"
+#![cfg_attr(
+    unix,
+    expect(
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        reason = "integration test — relaxed linting for test clarity"
+    )
 )]
 
 // Acknowledge crates used by the lib/bin but not this test target.
@@ -30,6 +39,10 @@ use clap as _;
 use rmcp as _;
 use schemars as _;
 use serde as _;
+// Used by the unix-only test module; without it the Windows lint pass
+// sees an unused crate dependency.
+#[cfg(not(unix))]
+use serde_json as _;
 use thiserror as _;
 use tokio as _;
 #[cfg(feature = "streamable-http")]

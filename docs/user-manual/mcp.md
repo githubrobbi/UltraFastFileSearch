@@ -77,6 +77,28 @@ uffs --mcp stop
 uffs --mcp run --data-dir ~/uffs_data
 ```
 
+### Zero-downtime upgrades (stdio supervisor)
+
+Every stdio session is fronted by a tiny **self-upgrading supervisor**:
+the process the AI host spawns owns the stdio pipes for the whole
+session and serves through a hidden worker child it can replace.  When
+the `uffsmcp` binary on disk is replaced (an installer or `just
+use-local` rename-swap), the supervisor notices, waits for a quiet
+moment (no request in flight), spawns a fresh worker from the new
+binary, replays the MCP handshake into it, and reroutes traffic — then
+notifies the client with `notifications/tools/list_changed` so a
+changed toolset is re-listed.  The host's MCP connection never drops:
+**a new binary is picked up without restarting any AI-host session**.
+The same path transparently restarts a crashed worker (rate-limited).
+
+No configuration is needed.  Tuning knobs (rarely needed):
+
+| Variable | Effect | Default |
+|---|---|---|
+| `UFFS_MCP_WORKER_EXE` | Program spawned as the worker | the supervisor's own executable |
+| `UFFS_MCP_WATCH_PATH` | File whose identity change triggers a swap | the worker executable |
+| `UFFS_MCP_POLL_MS` | How often the binary is checked (ms) | `5000` |
+
 ---
 
 ## 3  Host configuration

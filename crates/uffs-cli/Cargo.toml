@@ -90,6 +90,13 @@ uffs-mft.workspace = true
 # one visual language in exactly one place.
 uffs-statusfmt.workspace = true
 
+# Shared per-platform native log-directory resolution — the resident
+# login item (`--daemon resident on`) must bake an ABSOLUTE --log-file
+# into the launchd plist / Run key / systemd unit (a login-started
+# daemon has no useful cwd).  Direct dep so the CLI resolves the same
+# path uffsd and uffsmcp use, instead of reinventing the logic.
+uffs-security.workspace = true
+
 # Error handling
 anyhow.workspace = true
 

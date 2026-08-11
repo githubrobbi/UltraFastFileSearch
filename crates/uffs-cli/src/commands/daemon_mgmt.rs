@@ -84,10 +84,15 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
     // Elevation gate — checked here, once, before any action is dispatched,
     // so no individual subcommand handler can accidentally bypass it.
     {
+        // `Resident` is exempt: it manages a *per-user* login item
+        // (HKCU Run key / LaunchAgent / systemd user unit) and never
+        // touches a running daemon, so it must work without elevation —
+        // that is the whole zero-UAC residency story.
         let is_read_only_or_uac_start = matches!(
             action,
             DaemonAction::Status { .. }
                 | DaemonAction::StatusDrives
+                | DaemonAction::Resident { .. }
                 | DaemonAction::Start { elevate: true, .. }
         );
         if !is_read_only_or_uac_start
@@ -161,6 +166,12 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
             pin_minutes,
         } => daemon_tiering::daemon_preload(drives, *pin_minutes),
         DaemonAction::Forget { drives, force } => daemon_tiering::daemon_forget(drives, *force),
+        DaemonAction::Resident {
+            mode,
+            mft_file,
+            data_dir,
+            drives,
+        } => super::resident::resident(*mode, mft_file, data_dir.as_deref(), drives),
         DaemonAction::StatusDrives => daemon_tiering::daemon_status_drives(),
     }
 }

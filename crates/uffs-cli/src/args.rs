@@ -198,6 +198,19 @@ pub(crate) enum DaemonAction {
         /// Force-forget non-`Cold` drives by auto-hibernating first.
         force: bool,
     },
+    /// Make the daemon permanently resident: manage the per-user login
+    /// item that starts `uffsd --no-retire` at login (never retires on
+    /// idle; the memory-tiering ladder still parks unused drives).
+    Resident {
+        /// What to do with the login item.
+        mode: ResidentMode,
+        /// Raw MFT file(s) baked into the login item (non-Windows).
+        mft_file: Vec<PathBuf>,
+        /// Data directory baked into the login item (non-Windows).
+        data_dir: Option<PathBuf>,
+        /// Drive letter(s) baked into the login item (Windows).
+        drives: Vec<DriveLetter>,
+    },
     /// Per-drive tier + telemetry table (Phase 8-E).
     ///
     /// Operator-facing companion to `daemon status`: surfaces tier,
@@ -206,6 +219,17 @@ pub(crate) enum DaemonAction {
     /// shards included so `forget` candidates are visible without
     /// cross-referencing tracing logs.
     StatusDrives,
+}
+
+/// Sub-action of `uffs --daemon resident`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResidentMode {
+    /// Install the login item (and start the daemon when none runs).
+    On,
+    /// Remove the login item.
+    Off,
+    /// Report login-item + daemon state.
+    Status,
 }
 
 /// Parse `uffs --daemon <action> [flags...]` from raw args.
@@ -230,10 +254,11 @@ pub(crate) fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyho
         "hibernate" => Ok(parse_daemon_hibernate(rest)),
         "preload" => parse_daemon_preload(rest),
         "forget" => parse_daemon_forget(rest),
+        "resident" => parse_daemon_resident(rest),
         "status_drives" | "status-drives" => Ok(DaemonAction::StatusDrives),
         other => anyhow::bail!(
             "Unknown daemon action: '{other}'. Use: start, status, stop, kill, \
-             restart, load, hibernate, preload, forget, status_drives"
+             restart, load, hibernate, preload, forget, resident, status_drives"
         ),
     }
 }
@@ -352,6 +377,58 @@ fn parse_daemon_load(rest: &[String]) -> DaemonAction {
         drives,
         no_cache,
     }
+}
+
+/// Parse `uffs --daemon resident [on|off|status] [data-source flags]`.
+///
+/// The mode defaults to `status`; data-source flags (same shapes as
+/// `start` / `load`) are only meaningful with `on`, where they are
+/// baked into the login item.
+fn parse_daemon_resident(rest: &[String]) -> Result<DaemonAction, anyhow::Error> {
+    let (mode, flags) = match rest.first().map(String::as_str) {
+        None => (ResidentMode::Status, rest),
+        Some("on") => (ResidentMode::On, rest.get(1..).unwrap_or_default()),
+        Some("off") => (ResidentMode::Off, rest.get(1..).unwrap_or_default()),
+        Some("status") => (ResidentMode::Status, rest.get(1..).unwrap_or_default()),
+        Some(other) => {
+            anyhow::bail!("Unknown resident mode: '{other}'. Use: on, off, status")
+        }
+    };
+    let mut mft_file = Vec::new();
+    let mut data_dir = None;
+    let mut drives = Vec::new();
+    let mut iter = flags.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--mft-file" => {
+                if let Some(val) = iter.next() {
+                    for part in val.split(',') {
+                        mft_file.push(PathBuf::from(part.trim()));
+                    }
+                }
+            }
+            "--data-dir" => {
+                if let Some(val) = iter.next() {
+                    data_dir = Some(val.into());
+                }
+            }
+            "--drive" | "-d" | "--drives" => {
+                if let Some(val) = iter.next() {
+                    extend_drives_from_csv(&mut drives, val);
+                }
+            }
+            other => anyhow::bail!(
+                "Unknown resident flag: '{other}'. \
+                 Use: --data-dir <DIR>, --mft-file <PATH>, --drive <LETTER>"
+            ),
+        }
+    }
+    Ok(DaemonAction::Resident {
+        mode,
+        mft_file,
+        data_dir,
+        drives,
+    })
 }
 
 /// Parse `uffs --daemon hibernate [DRIVE...]` / `[--drive D]` /

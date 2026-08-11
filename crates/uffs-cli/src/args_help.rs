@@ -122,6 +122,13 @@ ACTIONS:
     [DRIVE...]         Drive letter(s); at least one required
     --drives A,B       Drive letter(s) as comma-separated list
     --force            Auto-hibernate non-Cold drives first (default: refuse)
+  resident           Keep UFFS permanently resident (login autostart, no idle retire)
+    on                 Install the per-user login item (uffsd --no-retire) + start now
+      --data-dir PATH    Data directory baked into the login item (non-Windows)
+      --mft-file PATH    Raw MFT file(s) baked into the login item (non-Windows)
+      --drive LETTER     Drive letter(s) baked into the login item (Windows)
+    off                Remove the login item
+    status             Show login-item + daemon state (default)
   status_drives      Per-drive tier + telemetry table (Hot/Warm/Parked/Cold)
 ";
 

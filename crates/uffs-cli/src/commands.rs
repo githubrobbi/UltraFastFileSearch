@@ -30,6 +30,11 @@ pub(crate) mod deleted;
 /// admin-only work up front and decide once (elevate / continue-without /
 /// abort) instead of failing mid-flow. Keeps both flows' elevation UX aligned.
 pub(crate) mod elevation;
+/// `uffs --daemon resident` — permanent residency: per-user login item
+/// that starts `uffsd --no-retire` at login (Run key / LaunchAgent /
+/// systemd user unit), so the daemon is warm before the first search
+/// and never removes itself from the process list on idle.
+pub(crate) mod resident;
 /// `uffs --snapshot --drive C --out FILE` — capture the live MFT to a baseline.
 pub(crate) mod snapshot;
 // Index and info subcommands were merged into other modules.

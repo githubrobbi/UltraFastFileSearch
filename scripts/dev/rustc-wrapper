@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# Optional-sccache rustc wrapper (POSIX side; see `rustc-wrapper.cmd` for
+# the Windows twin).
+#
+# Cargo invokes a `build.rustc-wrapper` as `<wrapper> <rustc> <args...>`.
+# This shim forwards to sccache when it is installed and execs rustc
+# directly when it is not, so a missing sccache degrades to an uncached
+# build instead of failing every cargo invocation with:
+#
+#     error: could not execute process `sccache .../rustc -vV` (never executed)
+#     Caused by: No such file or directory (os error 2)
+#
+# That hard failure is why Dependabot's cargo updater could never open a
+# PR against this repo (issue #587) — its container has no sccache — and
+# it is the same wall a fresh clone hits before `cargo install sccache`.
+#
+# `exec` keeps this a single process (no extra shell in the build's hot
+# path); `command -v` is a shell builtin, so the probe costs no fork.
+
+if command -v sccache >/dev/null 2>&1; then
+    exec sccache "$@"
+fi
+
+exec "$@"

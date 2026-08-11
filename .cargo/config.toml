@@ -31,7 +31,24 @@ target-dir = "target"
 # docs/architecture/dev-flow.md § 5.2).  See
 # docs/architecture/dev-flow-implementation-plan.md § 2.1 / 6.4 and
 # https://doc.rust-lang.org/cargo/reference/config.html#build
-rustc-wrapper = "sccache"
+#
+# The wrapper is a SHIM, not `sccache` itself (issue #587): it forwards to
+# sccache when installed and execs rustc directly when it is not.  Naming
+# `sccache` here made the whole repo unbuildable anywhere sccache is
+# absent — every cargo invocation died with
+#   error: could not execute process `sccache .../rustc -vV` (never executed)
+# which is exactly why Dependabot's cargo updater could never open a PR
+# (its container has no sccache), and the same wall a fresh clone hits
+# before `cargo install sccache`.  The Bug B pairing above is unaffected:
+# both keys still live here, in one place; only the wrapper's value moved
+# behind a shim.
+#
+# The path is resolved relative to the WORKSPACE ROOT (the parent of this
+# `.cargo/` directory) — verified empirically; a `../`-prefixed form does
+# NOT resolve.  Windows uses the `.cmd` twin next to it; set
+# `RUSTC_WRAPPER=scripts\dev\rustc-wrapper.cmd` there if you invoke cargo
+# directly rather than through `just`.
+rustc-wrapper = "scripts/dev/rustc-wrapper"
 incremental = false
 
 [net]

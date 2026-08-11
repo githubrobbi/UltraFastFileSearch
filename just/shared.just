@@ -32,10 +32,16 @@ export TERM := "xterm-256color"
 export COLORTERM := "truecolor"
 export CARGO_TERM_COLOR := "always"
 # CARGO_INCREMENTAL is deliberately NOT exported here.  `.cargo/config.toml`
-# owns the cache policy: `build.rustc-wrapper = "sccache"` + `build.incremental
-# = false`.  Env var overrides config, so exporting `CARGO_INCREMENTAL=1`
+# owns the cache policy: `build.rustc-wrapper` (the optional-sccache shim at
+# `scripts/dev/rustc-wrapper`, see issue #587) + `build.incremental = false`.
+# Env var overrides config, so exporting `CARGO_INCREMENTAL=1`
 # from just would defeat sccache (incremental artifacts are non-cacheable)
 # and recreate v0.5.71's Bug B.  See docs/architecture/dev-flow-implementation-plan.md § 2.1.
+#
+# NOTE: `RUSTC_WRAPPER := ""` below then disables the wrapper outright for
+# every just-driven build, so sccache is in practice only active for raw
+# `cargo` invocations.  That predates the shim and is left as-is here; it is
+# also why the shim's blast radius is small.
 export CARGO_NET_RETRY := "3"
 export CARGO_HTTP_TIMEOUT := "30"
 export CARGO_HTTP_MULTIPLEXING := "true"

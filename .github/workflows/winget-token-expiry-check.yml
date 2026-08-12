@@ -137,12 +137,69 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::notice::WINGET_TOKEN status=$status, expiry=$expiry, days_left=$days_left"
 
+      # ── Publish-readiness probe ────────────────────────────────────────
+      #
+      # The expiry probe above answers "is the token ALIVE?".  It cannot
+      # answer "would a release publish RIGHT NOW?", and on 2026-08-12 that
+      # gap cost us a silent outage: v0.6.31's submission failed while this
+      # workflow reported healthy every week.  The token was fine; the fork
+      # had drifted three weeks behind microsoft/winget-pkgs and komac could
+      # not cut its manifest branch from a stale base.  Liveness was green
+      # throughout.
+      #
+      # So probe the operation that actually fails: fast-forward the fork,
+      # then genuinely create — and delete — a ref off upstream's HEAD,
+      # exactly as komac does.  That exercises the token's real write
+      # capability AND the fork state in one shot.
+      #
+      # Note on why this is not simply a drift check: the fork is EXPECTED
+      # to fall behind between releases (winget-pkgs moves constantly and
+      # nothing else pushes to the fork), so alarming on drift alone would
+      # fire every week and teach everyone to ignore it.  Publishing now
+      # self-heals drift (see the sync step in `winget-publish.yml`), so the
+      # only thing worth alarming on is "the sync-then-branch path is
+      # broken" — which is precisely what this probe measures.
+      - name: Probe publish readiness (fork sync + ref creation)
+        id: readiness
+        if: steps.probe.outputs.status != 'missing'
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          FORK_USER: githubrobbi
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail() { echo "readiness=failed" >> "$GITHUB_OUTPUT"; echo "readiness_detail=$1" >> "$GITHUB_OUTPUT"; echo "::warning::WinGet publish readiness FAILED: $1"; exit 0; }
+
+          upstream="$(gh api repos/microsoft/winget-pkgs/commits/master --jq .sha 2>/dev/null)" \
+            || fail "cannot read microsoft/winget-pkgs master"
+          [[ -n "${upstream:-}" ]] || fail "upstream master SHA came back empty"
+
+          # Fast-forward the fork, mirroring what the publish workflow does.
+          gh api -X POST "repos/${FORK_USER}/winget-pkgs/merge-upstream" \
+            -f branch=master >/dev/null 2>&1 || true
+
+          # The real test: create the kind of ref komac creates, then remove
+          # it.  A unique name keeps concurrent runs from colliding.
+          probe_ref="winget-readiness-probe-${GITHUB_RUN_ID}"
+          if gh api -X POST "repos/${FORK_USER}/winget-pkgs/git/refs" \
+               -f ref="refs/heads/${probe_ref}" -f sha="${upstream}" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${FORK_USER}/winget-pkgs/git/refs/heads/${probe_ref}" >/dev/null 2>&1 \
+              || echo "::warning::Probe branch ${probe_ref} could not be deleted — remove it manually."
+            echo "readiness=ok" >> "$GITHUB_OUTPUT"
+            echo "readiness_detail=" >> "$GITHUB_OUTPUT"
+            echo "::notice::WinGet publish readiness OK (fork synced; ref creation verified)."
+          else
+            fail "cannot create a branch in ${FORK_USER}/winget-pkgs off upstream ${upstream} — the exact operation komac performs"
+          fi
+
       - name: Open / update / close the expiry tracking issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           STATUS: ${{ steps.probe.outputs.status }}
           EXPIRY: ${{ steps.probe.outputs.expiry }}
           DAYS_LEFT: ${{ steps.probe.outputs.days_left }}
+          READINESS: ${{ steps.readiness.outputs.readiness }}
+          READINESS_DETAIL: ${{ steps.readiness.outputs.readiness_detail }}
           ISSUE_LABEL: ${{ env.ISSUE_LABEL }}
           WARN_DAYS: ${{ env.WARN_DAYS }}
         with:
@@ -154,9 +211,19 @@ jobs:
             const warnDays = process.env.WARN_DAYS;
             const { owner, repo } = context.repo;
 
+            const readiness = process.env.READINESS || 'skipped';
+            const readinessDetail = process.env.READINESS_DETAIL || '';
+
             // Healthy / non-expiring → close any open reminder (a
             // rotation auto-resolves it) and stop.
-            const needsAttention = ['warn', 'expired', 'missing', 'parse-error'].includes(status);
+            //
+            // A failed readiness probe counts as needing attention even
+            // when the token itself is perfectly healthy: that is exactly
+            // the 2026-08-12 case, where liveness was green while the
+            // publish path was broken.
+            const needsAttention =
+              ['warn', 'expired', 'missing', 'parse-error'].includes(status)
+              || readiness === 'failed';
 
             const existing = await github.rest.issues.listForRepo({
               owner, repo, state: 'open', labels: label, per_page: 1,
@@ -183,7 +250,10 @@ jobs:
               expired:     `🔴 \`WINGET_TOKEN\` has EXPIRED or been revoked`,
               missing:     `🔴 \`WINGET_TOKEN\` secret is NOT SET`,
               'parse-error': `⚠️ \`WINGET_TOKEN\` expiry could not be parsed (\`${expiry}\`)`,
-            }[status];
+            }[status]
+              // Token fine, publish path broken — the failure mode this
+              // probe exists to catch.
+              || `🔴 WinGet publish path is BROKEN (token itself looks \`${status}\`)`;
 
             const body = [
               `## ${headline}`,
@@ -196,7 +266,20 @@ jobs:
               `| Expiry | \`${expiry}\` |`,
               `| Days left | \`${daysLeft}\` |`,
               `| Warn threshold | ${warnDays} days |`,
+              `| Publish readiness | \`${readiness}\` |`,
+              ...(readinessDetail ? [`| Readiness detail | ${readinessDetail} |`] : []),
               ``,
+              ...(readiness === 'failed' ? [
+                `### ⚠️ Publish readiness failed`,
+                ``,
+                `The token may be perfectly healthy — this probe reproduces the operation komac actually performs (fast-forward the fork, then create a branch off upstream \`master\`) and it did not succeed.`,
+                ``,
+                `Check, in this order, before assuming the token is at fault:`,
+                `1. Does the fork \`githubrobbi/winget-pkgs\` still exist and is it writable?`,
+                `2. Is it far behind \`microsoft/winget-pkgs\`? (Publishing self-heals this, but a failing sync will not.)`,
+                `3. Only then suspect the token — and note the action requires a **classic** PAT; fine-grained PATs are unsupported and cannot open the cross-fork PR.`,
+                ``,
+              ] : []),
               `### How to rotate`,
               `1. Create a new **classic** PAT at https://github.com/settings/tokens — scope \`public_repo\` only, ~1-year expiry.`,
               `2. \`gh secret set WINGET_TOKEN --repo ${owner}/${repo}\` and paste it.`,

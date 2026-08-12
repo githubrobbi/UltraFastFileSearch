@@ -106,6 +106,48 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Fast-forward the fork to upstream BEFORE komac branches off it.
+      #
+      # Field failure 2026-08-12 (v0.6.31): the fork sat three weeks behind
+      # microsoft/winget-pkgs (7fb04c98 vs 50db148f) and komac aborted with
+      #     githubrobbi does not have the correct permissions to execute `CreateRef`
+      #     failed to create branch SkyLLC.UFFS-0.6.31-<hash>
+      # The message points at credentials, but the token was correct all
+      # along (classic PAT, `public_repo`, valid to 2027) — the branch
+      # simply could not be cut from a stale base.  Syncing the fork fixed
+      # it on the next attempt with no credential change whatsoever.
+      #
+      # This recurs by construction: every release that lands more than a
+      # few weeks after the previous one re-opens the same gap, because
+      # winget-pkgs moves constantly and nothing else ever pushes to the
+      # fork.  Syncing here makes the submission self-healing.
+      #
+      # `continue-on-error`: a sync hiccup must not block the submission —
+      # if the fork happens to be current, komac proceeds fine regardless.
+      # The `||` fallback keeps the step green while still surfacing the
+      # reason in the log.
+      - name: Sync winget-pkgs fork with upstream
+        if: steps.token.outputs.present == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          FORK_USER: githubrobbi
+        shell: bash
+        run: |
+          set -uo pipefail
+          before="$(gh api "repos/${FORK_USER}/winget-pkgs/commits/master" --jq .sha 2>/dev/null || echo unknown)"
+          upstream="$(gh api repos/microsoft/winget-pkgs/commits/master --jq .sha 2>/dev/null || echo unknown)"
+          if [[ "$before" == "$upstream" && "$before" != unknown ]]; then
+            echo "Fork already in sync at ${before}."
+            exit 0
+          fi
+          echo "Fork ${before} behind upstream ${upstream} — fast-forwarding."
+          gh api -X POST "repos/${FORK_USER}/winget-pkgs/merge-upstream" \
+            -f branch=master --jq '.message' \
+            || echo "::warning title=Fork sync failed::Could not fast-forward ${FORK_USER}/winget-pkgs; komac may fail to create its manifest branch."
+          after="$(gh api "repos/${FORK_USER}/winget-pkgs/commits/master" --jq .sha 2>/dev/null || echo unknown)"
+          echo "Fork now at ${after} (upstream ${upstream})."
+
       - name: Submit manifest to winget-pkgs
         if: steps.token.outputs.present == 'true'
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2

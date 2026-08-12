@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.31] - 2026-08-11
+
+### Added
+
+- fetch: extract public uffs-fetch transport lib; dep refresh + rmcp 3 (#583)
+- self-upgrading MCP supervisor, permanent daemon residency, and a repo health pass (#588)
+
 ## [0.6.30] - 2026-07-23
 
 ### Added
@@ -2733,7 +2740,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.30...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.31...HEAD
+[0.6.31]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.27...v0.6.28

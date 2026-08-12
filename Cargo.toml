@@ -250,7 +250,7 @@ toml = "1.1.4"
 bitflags = "2.13.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 smallvec = "1.15.2"
-zerocopy = { version = "0.8", features = ["derive"] }
+zerocopy = { version = "0.8.56", features = ["derive"] }
 
 # ───── Error Handling ─────
 thiserror = "2.0.20"
@@ -322,10 +322,17 @@ hex = "0.4.3"
 # ───── Network (self-update acquire helper only) ─────
 # Blocking HTTP with rustls + the system trust store. `rustls-tls-native-roots`
 # matches the existing transitive reqwest config, so no new crate enters the lock.
-# Version 0.13.4 cannot be used at this time ... missing "rustls-tls-native-roots"
-# (re-verified 2026-08-03 against crates.io: the 0.13.x feature set has only
-# `rustls` / `rustls-no-provider` / `default-tls` / `native-tls*` — no
-# native-roots variant; 0.12.28 remains the newest 0.12.x release)
+#
+# DELIBERATELY HELD AT 0.12 (re-evaluated 2026-08-12, everything else in this
+# workspace is at latest).  0.13 drops `rustls-tls-native-roots` and routes
+# system trust through `rustls-platform-verifier`, which pulls the Android JNI
+# stack — `jni`, `jni-macros`, `jni-sys`, `combine`, `simd_cesu8`, roughly 63k
+# lines.  None of it appears in the host or `x86_64-pc-windows-msvc` dependency
+# trees (verified with `cargo tree -i jni`): it is Android-only, a target UFFS
+# does not ship.  cargo-vet audits every target regardless, so 0.13 would cost
+# ~63k lines of supply-chain review for code that never enters a binary we
+# build, in exchange for no functional gain.  Revisit if reqwest ever offers
+# system trust without the Android dependency, or if we ever target Android.
 reqwest = { version = "0.12.28", default-features = false, features = [
   "blocking",
   "rustls-tls-native-roots",
@@ -341,7 +348,7 @@ mimalloc = "0.1.52"
 memmap2 = "0.9.11"
 
 # ───── System ─────
-libc = "0.2"
+libc = "0.2.189"
 hostname = "0.4.2"
 # CPU-core count detection.  `std::thread::available_parallelism` is the
 # modern alternative, but `num_cpus` handles cgroup / container quotas more

@@ -68,7 +68,7 @@ test = false
 # polars-arrow 0.53.0's `chrono <=0.4.41`), which broke `cargo package`.
 # polars 0.54.x ships those patches and accepts modern chrono, so the
 # git source — and the whole track-upstream-main machinery — is retired.
-polars = { version = "0.54.4", default-features = false, features = [
+polars = { version = "0.55.2", default-features = false, features = [
   # ===== Core =====
   "lazy",       # Lazy evaluation (query optimization)
   "streaming",  # Streaming engine for large queries (was `new_streaming` in 0.53)

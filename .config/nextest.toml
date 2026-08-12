@@ -118,3 +118,23 @@ threads-required = 'num-cpus'
 [[profile.ci.overrides]]
 filter = 'package(uffs-client) & test(shmem::)'
 threads-required = 'num-cpus'
+
+# The `tests_perf` suite asserts WALL-CLOCK budgets (e.g. tree metrics
+# under 100 ms for 100 K files).  Run under the normal fan-out — 2 400+
+# tests saturating every core — those numbers measure scheduler
+# contention, not the code: the same test that takes ~88 ms alone was
+# observed at 118 ms and 436 ms while the rest of the suite ran, i.e. a
+# false failure on an unchanged code path (verified by measuring the
+# identical test before and after the polars 0.54→0.55 bump: 86-93 ms vs
+# 88 ms).
+#
+# Give them the whole machine so the measurement means something.  The
+# budgets themselves are deliberately UNCHANGED — the fix is to measure
+# honestly, never to widen the threshold until it stops failing.
+[[profile.default.overrides]]
+filter = 'package(uffs-mft) & test(tests_perf::)'
+threads-required = 'num-cpus'
+
+[[profile.ci.overrides]]
+filter = 'package(uffs-mft) & test(tests_perf::)'
+threads-required = 'num-cpus'

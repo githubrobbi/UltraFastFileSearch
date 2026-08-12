@@ -19,15 +19,15 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.async-trait]]
-version = "0.1.91"
-when = "2026-07-18"
+version = "0.1.92"
+when = "2026-08-08"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.bstr]]
-version = "1.13.0"
-when = "2026-07-14"
+version = "1.13.1"
+when = "2026-08-10"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -47,8 +47,8 @@ user-login = "Darksonn"
 user-name = "Alice Ryhl"
 
 [[publisher.cc]]
-version = "1.4.0"
-when = "2026-07-24"
+version = "1.4.2"
+when = "2026-08-08"
 trusted-publisher = "github:rust-lang/cc-rs"
 
 [[publisher.cipher]]
@@ -101,6 +101,16 @@ trusted-publisher = "github:RustCrypto/utils"
 version = "0.11.3"
 when = "2026-05-03"
 trusted-publisher = "github:RustCrypto/traits"
+
+[[publisher.digest-io]]
+version = "0.1.0"
+when = "2026-04-02"
+trusted-publisher = "github:RustCrypto/utils"
+
+[[publisher.find-msvc-tools]]
+version = "0.1.10"
+when = "2026-08-07"
+trusted-publisher = "github:rust-lang/cc-rs"
 
 [[publisher.ghash]]
 version = "0.6.0"
@@ -189,9 +199,16 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.js-sys]]
-version = "0.3.103"
-when = "2026-06-24"
+version = "0.3.104"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.jsonpath_lib_polars_vendor]]
+version = "0.0.1"
+when = "2024-02-29"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
 
 [[publisher.libc]]
 version = "0.2.189"
@@ -226,6 +243,188 @@ when = "2025-05-30"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
+
+[[publisher.polars]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-arrow]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-arrow-format]]
+version = "0.2.1"
+when = "2025-08-28"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-async]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-buffer]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-compute]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-config]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-core]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-dtype]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-error]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-expr]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-io]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-json]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-lazy]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-mem-engine]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-ooc]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-ops]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-parquet]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-parquet-format]]
+version = "0.1.0"
+when = "2024-10-27"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-plan]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-row]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-schema]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-sql]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-stream]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-time]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
+
+[[publisher.polars-utils]]
+version = "0.55.2"
+when = "2026-08-06"
+user-id = 76923
+user-login = "ritchie46"
+user-name = "Ritchie Vink"
 
 [[publisher.polyval]]
 version = "0.7.3"
@@ -263,6 +462,13 @@ user-name = "Andrew Gallant"
 [[publisher.reqwest]]
 version = "0.12.28"
 when = "2025-12-22"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.reqwest]]
+version = "0.13.4"
+when = "2026-05-25"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -413,33 +619,33 @@ user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
 [[publisher.wasm-bindgen]]
-version = "0.2.126"
-when = "2026-06-24"
+version = "0.2.127"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.wasm-bindgen-futures]]
-version = "0.4.76"
-when = "2026-06-24"
+version = "0.4.77"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.wasm-bindgen-macro]]
-version = "0.2.126"
-when = "2026-06-24"
+version = "0.2.127"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.wasm-bindgen-macro-support]]
-version = "0.2.126"
-when = "2026-06-24"
+version = "0.2.127"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.wasm-bindgen-shared]]
-version = "0.2.126"
-when = "2026-06-24"
+version = "0.2.127"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.web-sys]]
-version = "0.3.103"
-when = "2026-06-24"
+version = "0.3.104"
+when = "2026-08-08"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.winnow]]
@@ -1226,6 +1432,11 @@ who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 delta = "0.4.3 -> 0.5.1"
 
+[[audits.isrg.audits.rand_distr]]
+who = "David Cook <dcook@divviup.org>"
+criteria = "safe-to-deploy"
+delta = "0.5.1 -> 0.6.0"
+
 [[audits.isrg.audits.rayon-core]]
 who = "Ameer Ghani <inahga@divviup.org>"
 criteria = "safe-to-deploy"
@@ -1688,6 +1899,16 @@ criteria = "safe-to-deploy"
 delta = "1.3.0 -> 1.3.1"
 aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.rustc_version]]
+who = "Nika Layzell <nika@thelayzells.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = """
+Use of powerful capabilities is limited to invoking `rustc -vV` to get version
+information for parsing version information.
+"""
+aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.sha2]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -1942,6 +2163,13 @@ aggregated-from = "https://raw.githubusercontent.com/zcash/wallet/main/supply-ch
 who = "Sean Bowe <ewillbefull@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
+
+[[audits.zcash.audits.rustc_version]]
+who = "Jack Grigg <jack@electriccoin.co>"
+criteria = "safe-to-deploy"
+delta = "0.4.0 -> 0.4.1"
+notes = "Changes to `Command` usage are to add support for `RUSTC_WRAPPER`."
 aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
 
 [[audits.zcash.audits.strum_macros]]

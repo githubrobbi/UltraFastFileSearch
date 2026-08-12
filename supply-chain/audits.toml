@@ -19,6 +19,14 @@ criteria = "safe-to-deploy"
 delta = "0.2.2 -> 0.2.4"
 notes = """Delta audit (cargo vet diff 0.2.2 -> 0.2.4). Adds `#![cfg_attr(not(feature="unsafe"), forbid(unsafe_code))]` to lib.rs, gates the example binary's `extern` calloc/free declarations and calloc-backed pool behind the "unsafe" feature, and removes an unsafe-feature test. Cargo.toml widens the alloc-no-stdlib range to ">=2.0.4, <3.0.0" and makes the "unsafe" feature forward to alloc-no-stdlib/unsafe. Net reduction in default unsafe surface; no build.rs, no new capabilities."""
 
+[[audits.android_system_properties]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.5 -> 0.1.6"
+notes = """
+Reviewed the full diff; the only source change is in src/lib.rs and it fixes two FFI defects. The property callback handed to __system_property_read_callback is now declared `unsafe extern "C" fn` rather than a plain `unsafe fn` (correcting a Rust/C ABI mismatch), and the callback return type is corrected from *const c_void to () to match the C prototype. The payload moved from *mut String to *mut Option<String>, replacing a to_str().unwrap() that could panic across an FFI boundary on non-UTF-8 property values. Remaining changes are the version bump, an SPDX-correct license field, and cargo-generated manifest stanzas. No new dependencies, no build script, no new unsafe surface.
+"""
+
 [[audits.anyhow]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -43,11 +51,27 @@ criteria = "safe-to-deploy"
 version = "0.1.89"
 notes = "Full audit (1196 LOC proc-macro). Zero real unsafe (all three 'unsafe' mentions are documentation and parsing of the unsafe *keyword token* in trait definitions). Zero capability at expansion time: pure deterministic token transformation desugaring async trait methods to Pin<Box<dyn Future>> returns; the crate's own docs state (and the expansion code confirms) no unsafe is emitted into user code. Publisher verified on crates.io: dtolnay."
 
+[[audits.atoi_simd]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.17.0 -> 0.18.1"
+notes = """
+Reviewed the full diff. The change threads two const-generic flags, SKIP_ZEROES and SKIP_PLUS, through every parse entry point, replacing the deprecated parse_skipped; caller-side zero-skipping is replaced by in-kernel leading-zero counting in the SSE/AVX2, NEON and scalar paths. I checked every out-of-bounds argument on the new get_safe_unchecked advances: each is reached only after a full-width match (len == 8/16/32), which the padded load helpers can only produce when the slice actually holds that many bytes, and skip counts are bounded by trailing_ones()/N at exactly that width; the AVX 32-byte case additionally clamps the carry-over, keeping it within the slice. The one new unsafe helper, assert_unchecked, is invoked only with trivially-true invariants. No build script, no filesystem, network or process access; the only new dependency is rustversion, used solely to cfg core::hint::assert_unchecked.
+"""
+
 [[audits.autocfg]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.5.0 -> 1.5.1"
 notes = "Delta audit (cargo vet diff 1.5.0 -> 1.5.1). TEST-ONLY change: ZERO src/ library changes. README adds the 1.5.1 changelog line ('Refactor the test_wrappers test without any shell script'). Cargo.toml(.orig) declares explicit [[test]] targets and sets harness=false for the wrappers test. The bash helper tests/wrap_ignored is deleted and replaced by a Rust main() in tests/wrappers.rs that acts as the rustc-wrapper stand-in. No change to autocfg's build-probe library logic, no new unsafe, no new runtime deps; the changed code runs only under `cargo test`. autocfg is a build-dependency (via num-traits). Publisher cuviper (Josh Stone), already trusted by isrg/mozilla/bytecode-alliance."
+
+[[audits.base64]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.22.1 -> 0.23.1"
+notes = """
+Reviewed the full diff. It is dominated by a new src/engine/simd.rs adding AVX2 and NEON kernels behind a new default-on simd-unsafe feature, which is the crate's only unsafe and is confined to that module (forbid(unsafe_code) still applies with the feature off). I checked each kernel's bounds arithmetic — the loop guards require a full vector of readable input and reserve exactly the bytes stored, and complete_quads_len validates output capacity before any SIMD write — and verified the encode/decode lookup tables accept and reject precisely the bytes the scalar decoder does for both the standard and URL-safe alphabets; a differential harness of 624,480 cases on aarch64, covering round-trips plus corrupted and truncated inputs, found the SIMD engines byte- and error-identical to GeneralPurpose. The remainder is a mechanical refactor threading a simd_prefix closure through the scalar paths, the DecodeError::InvalidLastSymbol struct-variant change, and additive presets. No build script and no network or filesystem access; the preset engines remain scalar.
+"""
 
 [[audits.bitflags]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -60,6 +84,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "2.13.0 -> 2.13.1"
 notes = "Reviewed diff (6 files, 30/18 lines): pure perf change in the generated all() macro body (computes the ALL flags mask in a const block instead of a runtime loop, per upstream changelog 'Lower the LLVM IR output'). No new unsafe, no capability changes."
+
+[[audits.blake3]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.8.5 -> 1.8.6"
+notes = """
+Reviewed the full diff; the hashing core is untouched — no changes to guts.rs, the portable or SSE2/SSE4.1/AVX2/AVX-512/NEON/wasm32 SIMD modules, or any C or assembly source. The substantive change is in src/io.rs, where maybe_mmap_file determines file length by seeking from end-of-file rather than trusting metadata().len(), so block devices reporting zero length map correctly, falling back to buffered reads (rewinding the cursor) when mapping fails. The single unsafe mmap call is unchanged in kind and is now length-bounded by an explicit offset_len <= isize::MAX - seek_offset check before the usize cast, which is sound. The rest is build-script directive modernisation, doc typo fixes, and new mmap unit tests.
+"""
 
 [[audits.block-buffer]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -108,6 +140,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.10.2 -> 1.11.0"
 notes = 'Proc-macro crate; delta relaxes derive(NoUninit) generic-parameter checks to match derive(Pod): repr(transparent)/repr(packed(1)) generic structs are now accepted, with the compile-time no-padding assertion correctly retained for non-packed/non-transparent types (src/traits.rs). Also accepts repr(packed) structs for NoUninit where padding assertions still apply. Remaining changes are doc typo fixes ("the the"), endianness/pointer-width fixes in tests, and a new compile-check test file. No unsafe, no build.rs, no fs/net/process/env access, no new dependencies; Cargo.lock only bumps proc-macro toolchain crates. Emitted code changes only affect which const assertions are generated, not runtime behavior of consumers.'
+
+[[audits.bytemuck_derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.10.2 -> 1.12.0"
+notes = """
+Reviewed the full diff; the only functional changes are two hunks in src/traits.rs that bring derive(NoUninit) in line with the constraints derive(Pod) already enforced — check_attributes now accepts repr(packed) structs that are not repr(C), and asserts permits generic parameters when the type is repr(transparent) or repr(packed(1)), skipping the no-padding size assertion only in those two provably padding-free cases. The Pod hunk is a variable rename and a clearer diagnostic with an unchanged condition. Compiling against the macro confirmed padded packed(2)/packed(4)/repr(C) structs, generic non-packed types, and unions are all still rejected, and that generated impls carry T: NoUninit bounds. Everything else is doc fixes, cfg-gating of existing tests, and a syn 2 -> 3 build-time dependency bump.
+"""
 
 [[audits.chrono]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -216,6 +256,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "2.4.1 -> 2.5.0"
 notes = 'Source changes under src/ are doc-comment wording only ("ranges" -> "range"); no logic, no unsafe, no build.rs (build = false). The version bump exists to move the optional wasm-only getrandom dependency and dev-dependencies from 0.3.4 to 0.4 (rand 0.9 -> 0.10 for benches); no new dependencies otherwise. Bench harness rewritten to adapt wyhash to the rand 0.10 TryRng trait, dev-only. Lockfile churn reflects the getrandom/rand major bumps. No fs/net/process/env surface exists or was added.'
+
+[[audits.fs4]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.13.1 -> 1.1.0"
+notes = """
+Reviewed the full diff across the 0.13.1 -> 1.0.0 -> 1.0.1 -> 1.1.0 range. The bulk of the churn is a rustfmt re-indent plus the API rename to match stabilised std (lock_exclusive/try_lock_exclusive -> lock/try_lock, Result<bool> -> Result<(), TryLockError>, per-backend FileExt traits consolidated into sealed crate-root traits). The syscall layer is materially unchanged: the same five unsafe blocks over rustix flock/fallocate and LockFileEx/UnlockFile/SetFileInformationByHandle remain, with no new unsafe, no new I/O surface, no build script, and no proc macros. Behavioural fixes are the Unix allocate short-circuit moving from logical EOF to blocks()*512 (no longer no-oping on sparse files), Windows statvfs routing GetDiskFreeSpaceExW outputs to distinct fields, and saturating_mul on the Unix statvfs products. Dependency deltas are windows-sys 0.59 -> 0.61 and removal of a libc dev-dependency.
+"""
 
 [[audits.futures]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -613,6 +661,14 @@ criteria = "safe-to-deploy"
 delta = "1.13.1 -> 1.14.0"
 notes = "Large but coherent delta matching the changelog: s390x 128-bit RMW register-pair fix (r0/r1 hi/lo swap applied consistently across load/swap/CDSG loops), AArch64 LSFE `ldfadd/ldfmaxnm/ldfminnm` operand-order fix, AArch64 CAS rewritten from branchy cmp/cset to ccmp/csel, redundant SeqCst fences dropped for LSE* per the Arm atomics ABI (LLVM commit references given), and pervasive mechanical changes (`ptr as usize` -> `.addr()`, per-instruction asm annotations). Seq-lock fallback is refactored into `seq_lock_common.rs` with SeqCst fencing hoisted into an RAII `ScFenceGuard` at the atomic-op layer, and `is_lock_free` consistency is now guaranteed via a CAS on the detection cache — reasoning is documented and sound. Runtime detection newly enabled by default on Apple (libc `sysctlbyname`, replacing the removed raw-syscall test path), illumos (getisax), and Windows (IsProcessorFeaturePresent PF_ARM_LSE2_AVAILABLE=62); all are documented OS APIs. build.rs changes are Arm/AVR target-feature parsing refinements plus a fix for custom target names; no new deps (a `portable-atomic-util` workspace member was actually removed, leaving only a pointer README), no new fs/net/process surface."
 
+[[audits.portable-atomic]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.13.1 -> 1.15.0"
+notes = """
+Reviewed the full diff (~9.1k lines). build.rs remains pure rustc-version/target-cfg probing with no network, filesystem writes or subprocess use beyond the existing rustc query. The headline change is a workaround for a core::sync::atomic miscompilation on pre-v6 ARM Linux/Android: a new module routes non-relaxed load/store/CAS through the kernel-provided __kuser_memory_barrier at the architecturally fixed address 0xFFFF0FA0, matching compiler-builtins, excluded under Miri and ThreadSanitizer. The fallback spin-lock refactor moves SeqCst fences from the lock's ordering parameter into an RAII guard that fences on entry and exit, no weaker than before, and the CPU-feature cache is now published with a CAS where the result affects lock-freeness so is_lock_free cannot change answers mid-run. Remaining asm edits (s390x register-pair ordering, aarch64 LSFE operand order, RISC-V interrupt restore, AVR RMW) correspond to documented bug fixes. No new dependencies and no proc macros.
+"""
+
 [[audits.psm]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -787,6 +843,14 @@ criteria = "safe-to-deploy"
 delta = "1.14.1 -> 1.15.1"
 notes = "Small delta with no unsafe code and no new runtime dependencies; only criterion is added as a dev-dependency plus a dns_name bench target (the bench file is not even included in the published package). New public API is the const constructor FipsStatus::certified, a trivial enum builder. The TLS-relevant change is a rewrite of the const DNS-name validate function in src/server_name.rs from a per-character state machine to a per-label loop; the two implementations were compared case by case and they enforce the same rules (253-byte total max, 1-63 byte labels, alphanumeric/underscore with interior hyphens only, no empty labels, all-numeric final label rejected, trailing dot accepted), with empty input now rejected by an explicit up-front check rather than the old final-state check — no loosening observed. A matching unit test for FipsStatus Debug formatting is added. Nothing suspicious observed; capability surface is unchanged."
 
+[[audits.rustls-webpki]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.103.13 -> 0.103.14"
+notes = """
+Reviewed the full diff; a small maintenance release. The aws-lc-rs floor moves 1.14 -> 1.18, where ML-DSA verification graduated from the unstable signature module to the stable one, so ML_DSA_44/65/87 now reference the stable algorithms and compile under the plain aws-lc-rs feature; aws-lc-rs-unstable is retained as a no-op alias for compatibility. Those algorithms still carry in_fips_submission: false, so they remain rejected in FIPS mode. The only other code change refactors CertRevocationList::find_serial to use `?` instead of a match, which is behaviour-preserving. No unsafe code and no new runtime dependencies.
+"""
+
 [[audits.ryu]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -871,6 +935,22 @@ criteria = "safe-to-deploy"
 delta = "0.6.4 -> 0.6.5"
 notes = """Entirely cfg-attribute churn adding target_os = "nuttx" and "emscripten" support and enabling tclass_v6/set_tclass_v6 on illumos while dropping illumos from IP_TOS gates. The only non-cfg code additions are a `type IovLen = libc::c_ulong` alias for nuttx and re-gated libc constant imports; no unsafe blocks were added or modified, and no new syscalls beyond the existing socket-option surface reach previously supported targets. No build.rs, no dependency or feature changes; lockfile updates only touch the crate's own version entry."""
 
+[[audits.sqlparser]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.60.0 -> 0.62.0"
+notes = """
+Reviewed the full diff (~12k added lines across 45 files). It is entirely SQL grammar and AST surface: two new dialects (SparkSql, Teradata), a comment-capture module, MERGE parsing split into its own module, Oracle Q'..' quote-delimited literals, and roughly twenty new Dialect trait predicates that all default to false, so existing dialects keep current behaviour. There is no build.rs, no unsafe anywhere in the tree, and no filesystem, network, process or environment access in the library. The new keyword_lookup binary search is total and byte-safe (and fixes a latent bug where Unicode case folding could turn an identifier into a keyword), and tokenize_quote_delimited_string always advances and errors on EOF rather than looping. Panic surface improves: forbid(clippy::unreachable) removes all 21 unreachable! sites and the MySQL/SQLite parse_infix hooks propagate errors instead of unwrapping. The only dependency change is an opt-in derive-dialect feature.
+"""
+
+[[audits.sqlparser_derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.0 -> 0.5.0"
+notes = """
+Reviewed the complete diff. The existing Visit/VisitMut derive logic moved verbatim from lib.rs into visit.rs with only module-extraction edits; the generated token streams are unchanged. The substance is a new dialect.rs implementing a derive_dialect! macro that generates a wrapper struct delegating every Dialect trait method to a base dialect. Worth recording explicitly: this macro reads a file at expansion time — $CARGO_MANIFEST_DIR/src/dialect/mod.rs — to enumerate the trait's method signatures. The path is fixed and confined to the invoking crate's own manifest directory, the read is read_to_string only with no writes, no network and no process spawning, and nothing derived from it is emitted verbatim beyond those signatures. It runs only when a downstream crate invokes derive_dialect!, which our feature path does not. No unsafe, no build.rs, no new dependencies.
+"""
+
 [[audits.sse-stream]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -882,6 +962,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.24 -> 0.1.25"
 notes = """build.rs drops a redundant trailing `else { return }`; it still only compiles src/arch/windows.c via cc on Windows, with identical inputs. src/lib.rs adds target_os = "motor" to the existing cfg pair so that target uses the alloc-based stack-restore guard instead of the mmap-based one — module-selection only, no new or modified unsafe code and no change to the psm stack-switching FFI on existing targets. A check-cfg lint declaration for the "motor" value is added to Cargo.toml. No dependency or feature changes in the manifest; Cargo.lock bumps (psm 0.1.32, cc, object) affect only the crate's own dev builds, and CI-workflow edits are inert."""
+
+[[audits.strum_macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.27.2 -> 0.28.0"
+notes = """
+Reviewed the full diff; a proc-macro-only crate with no build script and an unchanged dependency set (heck, proc-macro2, quote, syn), and nothing in the diff performs I/O, network access, or environment inspection. The semver-breaking change is in from_string.rs: TryFrom<&str> becomes the primary generated impl with FromStr delegating to it, and an enum carrying #[strum(default)] without a custom parse_err_ty now generates an infallible From<&str>. EnumDiscriminants propagates a variant's #[default] attribute plus a Default derive onto the generated discriminant enum, and passthrough attributes parse as a full syn::Meta. The remainder is hygiene work — fully-qualified ::core:: paths in generated impls and added #[automatically_derived] markers — plus doc edits and an MSRV bump.
+"""
 
 [[audits.syn]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -900,6 +988,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "3.0.2 -> 3.0.3"
 notes = 'Full diff of packaged sources reviewed; the delta is documentation-only. A new "Compatibility notes" section is added to the lib.rs crate docs (covering Modifiers structs, Verbatim variants, and non-exhaustive enums), and the Verbatim variants in expr.rs, generics.rs, item.rs, pat.rs, and ty.rs gain doc warnings linking to it while the old inline exhaustiveness-idiom comments are removed. No executable code changes at all: no unsafe, no filesystem/network/process/env/FFI surface, no build.rs, and Cargo.toml dependencies and features unchanged apart from the version bump. Remaining churn is the dev-only Cargo.lock (roughly 31 changed lines of test-suite dependency bumps) and tests/common/eq.rs, neither of which ships into dependents. Nothing suspicious observed.'
+
+[[audits.sysinfo]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.37.2 -> 0.39.6"
+notes = """
+Reviewed the full diff (~5.3k lines, plus a ~2.4k-line NetBSD port read for syscall surface rather than line by line). No build script. Substantive changes are a NetBSD backend built on the same sysctl/kvm pattern as the existing FreeBSD one, a new linux/cgroup.rs reading only /sys/fs/cgroup/* and /proc/meminfo, replacement of the thread-unsafe setpwent/getpwent user enumeration with direct /etc/passwd parsing on Linux and the OpenDirectory API on macOS (new optional macOS-only dep objc2-open-directory), and a cfg_if! to cfg_select! migration. Windows changes are net safety improvements: the SMBIOS table parser gained bounds checks before read_unaligned, and ANSI PDH/CreateEventA calls moved to wide variants. Recorded but not blocking: the rewritten getifaddrs iterator yields items via mem::transmute from a &mut self-derived borrow, which would alias if more than one item were held live (the type is pub(crate) with a single call site dropping each item per iteration), and apple/disk.rs gains a cfg(test)-only Default constructing from a dangling pointer, compiled out of production builds.
+"""
 
 [[audits.thiserror]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -1063,6 +1159,14 @@ criteria = "safe-to-deploy"
 delta = "0.8.50 -> 0.8.55"
 notes = 'Full diff reviewed. Most churn is a monorepo restructuring (path_in_vcs now "zerocopy", CI script and doc-link path updates, SPDX headers on every source file) plus test .stderr regeneration. build.rs changes are limited to two new `cargo:rustc-check-cfg` declarations (`zerocopy_unstable_linux`, `no_fp_fmt_parse`); no build-time execution changes. Library changes: Debug/Display impls on float byteorder wrappers gated behind the Linux-kernel `no_fp_fmt_parse` cfg (the off path deliberately panics with a documented message), the `Order` enum made documented public API, `#[inline]` attributes on a few const fns, a new safe blanket `Identity` marker trait in macro_util used by the derive for hygiene verification, and a `most_traits` re-export gated behind the off-by-default `zerocopy_unstable_linux` cfg. No new or modified `unsafe` blocks or impls (added "unsafe" lines in the diff are all inside test .stderr expectation files reflecting line-number shifts). No dependency changes beyond the lockstep `zerocopy-derive =0.8.55` pin; no fs/net/process/env access introduced.'
 
+[[audits.zerocopy]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.50 -> 0.8.56"
+notes = """
+Reviewed the full diff. No unsafe code was added, removed, or modified; the count of unsafe occurrences is identical across both versions and every pointer/transmute module differs only by an added SPDX license header. Substantive changes are limited to documenting the previously doc(hidden) ByteOrder::Order enum, gating the byteorder Debug/Display impls behind no_fp_fmt_parse, adding inline attributes to three const fn layout helpers, and adding a doc(hidden) Identity trait whose blanket impl<T: ?Sized> makes it unimplementable downstream — used by the derive as a compiler-checked type-equality gadget. build.rs only adds two rustc-check-cfg declarations and no dependencies were added.
+"""
+
 [[audits.zerocopy-derive]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -1074,6 +1178,14 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.8.50 -> 0.8.55"
 notes = "Full diff reviewed; dependencies unchanged (proc-macro2/quote/syn only) and the crate still has no build.rs. The main substantive change is a new `homogeneous_field_bounds` path in the IntoBytes derive: repr(C) generic structs whose fields are all `T`/`[T; N]`/trailing `[T]` for a single type parameter now derive IntoBytes without requiring `Unaligned`; the generated impl emits explicit `IntoBytes` bounds per field plus `Identity<Type = T>` bounds so rustc, not the macro, verifies type identity, with detailed comments covering both the alignment/padding argument and the macro-hygiene hazard (identically-printed idents with different hygiene contexts) that motivates the Identity check. The unstable cfg `zerocopy_unstable_derive_on_error` was renamed to `zerocopy_unstable_linux`, and a new `most_traits` derive (doc(hidden) unless that cfg is set) bundles six existing derives with skip-on-error semantics for Linux kernel use; a test-only `__test_hygienically_mixed_into_bytes` proc macro is gated behind an internal nightly-test cfg and is unreachable in normal builds. Remaining changes are error-handling plumbing (`error_or_skip` in derive_split_at, `for<'zc>` bound wrapping in skip-on-error mode), a removed unused clone, and test churn. No fs/net/process/env access, no token-stream behavior that touches the host system, nothing suspicious."
+
+[[audits.zerocopy-derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.50 -> 0.8.56"
+notes = """
+Reviewed the full diff. The principal change adds an IntoBytes derive path for repr(C) structs without an align(N>1) modifier whose fields are all T, [T; N], or a trailing [T] for one type parameter T; since every field size is a multiple of the common field alignment, such a layout has neither inter-field nor trailing padding, so omitting the padding check is justified. The syntactic identifier match is not trusted on its own — the derive emits one Identity<Type = T> bound per field element, quoted from the original field AST so hygiene is retained, forcing rustc to prove each element really is the same type and preventing an unsound impl when two T tokens from different hygiene contexts resolve differently. Remaining changes are the crate = "..." attribute accepting a validated module path, and unstable-cfg-gated derives that emit no impl on failure. The proc macro performs no filesystem, network, process, or environment access.
+"""
 
 [[audits.zerofrom]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -1187,6 +1299,18 @@ trusted-publisher = "github:RustCrypto/traits"
 start = "2026-02-12"
 end = "2027-05-20"
 
+[[trusted.digest-io]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-02"
+end = "2027-08-12"
+
+[[trusted.find-msvc-tools]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:rust-lang/cc-rs"
+start = "2025-09-05"
+end = "2027-08-12"
+
 [[trusted.ghash]]
 criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/universal-hashes"
@@ -1278,6 +1402,12 @@ trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 start = "2026-04-28"
 end = "2027-05-20"
 
+[[trusted.jsonpath_lib_polars_vendor]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-02-29"
+end = "2027-08-12"
+
 [[trusted.libc]]
 criteria = "safe-to-deploy"
 user-id = 55123 # rust-lang-owner
@@ -1307,6 +1437,162 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-06-10"
 end = "2027-04-23"
+
+[[trusted.polars]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2020-06-18"
+end = "2027-08-12"
+
+[[trusted.polars-arrow]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2021-01-27"
+end = "2027-08-12"
+
+[[trusted.polars-arrow-format]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-01-03"
+end = "2027-08-12"
+
+[[trusted.polars-async]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2026-06-03"
+end = "2027-08-12"
+
+[[trusted.polars-buffer]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2026-02-08"
+end = "2027-08-12"
+
+[[trusted.polars-compute]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-01-02"
+end = "2027-08-12"
+
+[[trusted.polars-config]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2026-06-03"
+end = "2027-08-12"
+
+[[trusted.polars-core]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2021-01-15"
+end = "2027-08-12"
+
+[[trusted.polars-dtype]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2026-02-08"
+end = "2027-08-12"
+
+[[trusted.polars-error]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2023-03-29"
+end = "2027-08-12"
+
+[[trusted.polars-expr]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-05-21"
+end = "2027-08-12"
+
+[[trusted.polars-io]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2021-01-15"
+end = "2027-08-12"
+
+[[trusted.polars-json]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2023-05-28"
+end = "2027-08-12"
+
+[[trusted.polars-lazy]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2021-01-15"
+end = "2027-08-12"
+
+[[trusted.polars-mem-engine]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-06-22"
+end = "2027-08-12"
+
+[[trusted.polars-ooc]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2026-06-03"
+end = "2027-08-12"
+
+[[trusted.polars-ops]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2022-04-28"
+end = "2027-08-12"
+
+[[trusted.polars-parquet]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2023-11-17"
+end = "2027-08-12"
+
+[[trusted.polars-parquet-format]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-10-27"
+end = "2027-08-12"
+
+[[trusted.polars-plan]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2022-10-28"
+end = "2027-08-12"
+
+[[trusted.polars-row]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2023-03-29"
+end = "2027-08-12"
+
+[[trusted.polars-schema]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-09-11"
+end = "2027-08-12"
+
+[[trusted.polars-sql]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2022-10-28"
+end = "2027-08-12"
+
+[[trusted.polars-stream]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2024-06-22"
+end = "2027-08-12"
+
+[[trusted.polars-time]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2022-01-19"
+end = "2027-08-12"
+
+[[trusted.polars-utils]]
+criteria = "safe-to-deploy"
+user-id = 76923 # Ritchie Vink (ritchie46)
+start = "2022-01-19"
+end = "2027-08-12"
 
 [[trusted.polyval]]
 criteria = "safe-to-deploy"

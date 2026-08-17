@@ -206,10 +206,6 @@ criteria = "safe-to-deploy"
 version = "0.5.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.base64]]
-version = "0.23.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.bincode]]
 version = "2.0.1"
 criteria = "safe-to-deploy"
@@ -346,10 +342,6 @@ criteria = "safe-to-deploy"
 version = "0.9.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.crypto-common]]
-version = "0.1.7"
-criteria = "safe-to-deploy"
-
 [[exemptions.cty]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -372,10 +364,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.devicons]]
 version = "0.6.12"
-criteria = "safe-to-deploy"
-
-[[exemptions.digest]]
-version = "0.10.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.dirs-sys-next]]
@@ -464,10 +452,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.futures-util]]
 version = "0.3.32"
-criteria = "safe-to-deploy"
-
-[[exemptions.generic-array]]
-version = "0.14.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
@@ -740,7 +724,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rand]]
 version = "0.9.5"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.rand_chacha]]
 version = "0.10.0"
@@ -1107,15 +1091,7 @@ version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows]]
-version = "0.61.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows]]
 version = "0.62.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-collections]]
-version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-collections]]
@@ -1123,15 +1099,7 @@ version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-core]]
-version = "0.61.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-core]]
 version = "0.62.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-future]]
-version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-future]]
@@ -1147,23 +1115,11 @@ version = "0.59.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-numerics]]
-version = "0.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-numerics]]
 version = "0.3.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-result]]
-version = "0.3.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-result]]
 version = "0.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-strings]]
-version = "0.4.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-strings]]
@@ -1175,19 +1131,11 @@ version = "0.52.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]
-version = "0.59.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-sys]]
 version = "0.61.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-targets]]
 version = "0.52.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.windows-threading]]
-version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-threading]]

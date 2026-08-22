@@ -892,9 +892,16 @@ impl MftReader {
         Ok(index)
     }
 
-    /// Cascading fallback for write-protected volumes.
+    /// Cascading fallback for failed IOCP reads (write-protected volumes,
+    /// exhausted broker-handle IOCP associations).
     ///
     /// Tries, in order:
+    /// 0. `OVERLAPPED`-offset reads on the volume handle **already held** — no
+    ///    new opens, so it is the only rung that works non-elevated on an
+    ///    adopted Access-Broker handle (whose file object accepts exactly one
+    ///    IOCP association for its lifetime; every later IOCP read fails
+    ///    `ERROR_INVALID_PARAMETER` at associate time — the 2026-08 "drive C
+    ///    stuck Cold" incident).
     /// 1. Open `X:\$MFT` directly as a file and read it sequentially.
     /// 2. Re-open the volume with `FILE_FLAG_NO_BUFFERING` (bypasses cache
     ///    manager) and use the synchronous parallel reader.
@@ -908,38 +915,70 @@ impl MftReader {
     ) -> Result<Vec<crate::io::ParsedRecord>> {
         let vh = self.require_handle()?;
 
+        // ── Strategy 0: offset reads on the existing handle ────────────
+        match Self::read_offset_fallback(vh, record_size, total_records) {
+            Ok(records) => return Ok(records),
+            Err(err) => self.log_fallback_hop(
+                &err,
+                "⚠️  Fallback 0 (offset reads on existing handle) failed — trying $MFT file",
+            ),
+        }
+
         // ── Strategy 1: read $MFT as a file ────────────────────────────
         match vh.open_mft_read_handle() {
             Ok(mft_handle) => {
-                info!(volume = %self.volume, "📂 Fallback 1: reading $MFT as file");
-                let result = crate::io::readers::mft_file::read_mft_from_file_handle(
-                    mft_handle,
-                    record_size,
-                    total_records,
-                );
-                #[expect(unsafe_code, reason = "FFI: CloseHandle on $MFT file handle")]
-                {
-                    // SAFETY: `mft_handle` from `open_mft_read_handle`, closed
-                    // exactly once after the read completes.
-                    _ = unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) };
-                };
-                return result;
+                self.log_fallback_step("📂 Fallback 1: reading $MFT as file");
+                return Self::read_mft_file_handle_owned(mft_handle, record_size, total_records);
             }
-            Err(err) => {
-                // INFO for the same reason as the IOCP-failure line: an
-                // intermediate rung of the handled fallback chain, not an
-                // operator-actionable warning.
-                info!(
-                    volume = %self.volume,
-                    error = %err,
-                    "⚠️  Fallback 1 ($MFT file) failed — trying unbuffered volume I/O"
-                );
-            }
+            Err(err) => self.log_fallback_hop(
+                &err,
+                "⚠️  Fallback 1 ($MFT file) failed — trying unbuffered volume I/O",
+            ),
         }
 
         // ── Strategy 2: unbuffered volume handle (FILE_FLAG_NO_BUFFERING) ──
+        self.log_fallback_step("📂 Fallback 2: unbuffered volume I/O (NO_BUFFERING)");
+        Self::read_unbuffered_fallback(vh, record_size)
+    }
+
+    /// INFO-level "this rung failed, cascading to the next" log line for
+    /// [`Self::read_write_protect_fallback`].
+    ///
+    /// INFO, not WARN: the cascade is designed, automatically-handled
+    /// resilience — a normal run stays quiet and `-v` reveals the chain.
+    /// Split out (with [`Self::log_fallback_step`]) because the tracing
+    /// macro expansions dominate the cascade function's
+    /// cognitive-complexity score.
+    #[cfg(windows)]
+    fn log_fallback_hop(&self, err: &dyn core::fmt::Display, message: &'static str) {
+        info!(volume = %self.volume, error = %err, "{message}");
+    }
+
+    /// INFO-level "entering this rung" log line for
+    /// [`Self::read_write_protect_fallback`] — see
+    /// [`Self::log_fallback_hop`] for why it is split out.
+    #[cfg(windows)]
+    fn log_fallback_step(&self, message: &'static str) {
+        info!(volume = %self.volume, "{message}");
+    }
+
+    /// Strategy 2 body of [`Self::read_write_protect_fallback`]: re-open
+    /// the volume with `FILE_FLAG_NO_BUFFERING`, run the synchronous
+    /// parallel reader, and close the handle exactly once, whatever the
+    /// read returned.  Split out to keep the cascade function under the
+    /// cognitive-complexity ceiling.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the unbuffered open, extent-map bootstrap, and read
+    /// failures — this is the last rung, so they reach the caller of the
+    /// cascade.
+    #[cfg(windows)]
+    fn read_unbuffered_fallback(
+        vh: &VolumeHandle,
+        record_size: u32,
+    ) -> Result<Vec<crate::io::ParsedRecord>> {
         let unbuf_handle = vh.open_unbuffered_handle()?;
-        info!(volume = %self.volume, "📂 Fallback 2: unbuffered volume I/O (NO_BUFFERING)");
         let vd = vh.volume_data();
         let extents = vh.get_mft_extents()?;
         let extent_map = crate::io::MftExtentMap::new(extents, vd.bytes_per_cluster, record_size);
@@ -957,5 +996,55 @@ impl MftReader {
             _ = unsafe { windows::Win32::Foundation::CloseHandle(unbuf_handle) };
         };
         result
+    }
+
+    /// Strategy 1 body of [`Self::read_write_protect_fallback`]: run the
+    /// sequential `$MFT`-file read and close the handle exactly once,
+    /// whatever the read returned.  Split out to keep the cascade
+    /// function under the cognitive-complexity ceiling.
+    #[cfg(windows)]
+    fn read_mft_file_handle_owned(
+        mft_handle: windows::Win32::Foundation::HANDLE,
+        record_size: u32,
+        total_records: u64,
+    ) -> Result<Vec<crate::io::ParsedRecord>> {
+        let result = crate::io::readers::mft_file::read_mft_from_file_handle(
+            mft_handle,
+            record_size,
+            total_records,
+        );
+        #[expect(unsafe_code, reason = "FFI: CloseHandle on $MFT file handle")]
+        {
+            // SAFETY: `mft_handle` from `open_mft_read_handle`, closed
+            // exactly once after the read completes.
+            _ = unsafe { windows::Win32::Foundation::CloseHandle(mft_handle) };
+        };
+        result
+    }
+
+    /// Strategy 0 of [`Self::read_write_protect_fallback`]: bootstrap the
+    /// extent map through `vh` (broker-aware — non-elevated it derives the
+    /// real extents from FRS 0's `$DATA` runlist) and read every record
+    /// with `OVERLAPPED`-offset reads on `vh`'s own handle.
+    ///
+    /// # Errors
+    ///
+    /// Propagates extent-map bootstrap and chunk-read failures; the
+    /// caller logs them and cascades to the next rung.
+    #[cfg(windows)]
+    fn read_offset_fallback(
+        vh: &VolumeHandle,
+        record_size: u32,
+        total_records: u64,
+    ) -> Result<Vec<crate::io::ParsedRecord>> {
+        let vd = vh.volume_data();
+        let extents = vh.get_mft_extents()?;
+        let extent_map = crate::io::MftExtentMap::new(extents, vd.bytes_per_cluster, record_size);
+        crate::io::readers::offset_fallback::read_mft_via_offset_reads(
+            vh.raw_handle(),
+            &extent_map,
+            record_size,
+            total_records,
+        )
     }
 }

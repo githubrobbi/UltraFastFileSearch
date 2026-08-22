@@ -35,7 +35,7 @@ pub mod readers;
 
 pub use aligned_buffer::AlignedBuffer;
 pub use chunking::{ReadChunk, generate_precise_read_chunks, generate_read_chunks};
-pub use extent_map::MftExtentMap;
+pub use extent_map::{MftExtentMap, PlannedRead};
 pub use fixup::apply_fixup;
 pub use merger::MftRecordMerger;
 #[expect(

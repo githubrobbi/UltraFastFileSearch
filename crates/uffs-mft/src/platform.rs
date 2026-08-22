@@ -96,6 +96,8 @@ pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
     volume_root_path,
 };
+#[cfg(windows)]
+pub(crate) use volume::read_handle_at;
 // Cross-platform broker-adoption count so `--status` can report the mode on
 // any target: the real registry count on Windows, `0` (no broker) elsewhere.
 #[cfg(windows)]

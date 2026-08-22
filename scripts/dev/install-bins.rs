@@ -51,30 +51,27 @@ fn main() {
     eprintln!();
     eprintln!("🔨 cargo {}", build_args.join(" "));
 
+    // ONE build, both outputs: cargo always prints its human status
+    // ("Compiling…", "Finished") and rendered diagnostics on stderr,
+    // while `--message-format=json-render-diagnostics` puts one JSON
+    // message per artifact on stdout — so the operator keeps the live
+    // progress AND we capture the authoritative binary list from the
+    // same run. (The previous two-pass design re-ran the build with
+    // `--message-format=json` to "walk the cache for free"; on Windows,
+    // AV/sync tools touching fresh artifacts between the passes
+    // invalidated fingerprints and turned the 'free' pass into a full
+    // second compile — observed on winbox 2026-08-23.)
     let started = Instant::now();
-    let status = Command::new("cargo").args(build_args).status();
-    match status {
-        Ok(code) if code.success() => {
+    let executables = match build_workspace_capturing_executables(build_args) {
+        Ok(paths) => {
             eprintln!("  → Built in {}s", started.elapsed().as_secs());
+            paths
         }
-        Ok(code) => {
-            eprintln!("❌ build failed with {code:?}");
+        Err(message) => {
+            eprintln!("❌ {message}");
             std::process::exit(1);
         }
-        Err(err) => {
-            eprintln!("❌ failed to launch cargo: {err}");
-            std::process::exit(1);
-        }
-    }
-
-    // EVERY binary the workspace just built — discovered from cargo, not
-    // a hardcoded list, so a new bin target is picked up automatically and
-    // nothing is ever silently missed. `--message-format=json` re-emits
-    // one `compiler-artifact` message per crate straight from the build
-    // cache (instant, since the real build above already ran), and each
-    // binary target carries a non-null `"executable"` path. Libraries
-    // carry `"executable":null` and are skipped.
-    let executables = workspace_executables(build_args);
+    };
     if executables.is_empty() {
         eprintln!("❌ cargo reported no workspace binaries to install");
         std::process::exit(1);
@@ -609,26 +606,44 @@ fn stop_running_services() {
     }
 }
 
-/// Every binary the workspace build produced, as absolute paths.
-///
-/// Re-runs the same build with `--message-format=json` — instant, since
-/// the real build already populated the cache — and collects each
-/// `compiler-artifact` message's non-null `executable` path. This is the
-/// authoritative "what did we build" list: no name guessing, no `.exe`
-/// handling, no missed target when a new `[[bin]]` is added.
-fn workspace_executables(build_args: &[&str]) -> Vec<PathBuf> {
+/// Run the workspace build ONCE, streaming cargo's human status/
+/// diagnostics to the operator (stderr, untouched) while collecting
+/// every built binary's absolute path from the JSON artifact messages
+/// on stdout (`compiler-artifact` records with a non-null
+/// `"executable"`; libraries carry `"executable":null` and are
+/// skipped). This is the authoritative "what did we build" list: no
+/// name guessing, no `.exe` handling, no missed target when a new
+/// `[[bin]]` is added — and no second cargo invocation for external
+/// file-touchers (AV, sync clients) to invalidate.
+fn build_workspace_capturing_executables(build_args: &[&str]) -> Result<Vec<PathBuf>, String> {
     let mut args: Vec<&str> = build_args.to_vec();
-    args.push("--message-format=json");
-    let output = Command::new("cargo")
+    args.push("--message-format=json-render-diagnostics");
+    let mut child = Command::new("cargo")
         .args(&args)
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-    let Ok(text) = String::from_utf8(output.stdout) else {
-        return Vec::new();
-    };
+        .spawn()
+        .map_err(|err| format!("failed to launch cargo: {err}"))?;
+
+    // Drain stdout WHILE the build runs — the JSON stream is emitted
+    // per-artifact, and an undrained pipe would deadlock the build once
+    // the OS buffer fills.
+    let mut text = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        let mut reader = stdout;
+        use std::io::Read;
+        if let Err(err) = reader.read_to_string(&mut text) {
+            // Keep going to reap the child; report the real failure below.
+            eprintln!("⚠️  could not read cargo's artifact stream: {err}");
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|err| format!("failed to wait for cargo: {err}"))?;
+    if !status.success() {
+        return Err(format!("build failed with {status:?}"));
+    }
+
     let mut paths = Vec::new();
     for line in text.lines() {
         if let Some(exe) = json_executable(line) {
@@ -637,7 +652,7 @@ fn workspace_executables(build_args: &[&str]) -> Vec<PathBuf> {
     }
     paths.sort();
     paths.dedup();
-    paths
+    Ok(paths)
 }
 
 /// The non-null `"executable"` path from one cargo JSON message line, if

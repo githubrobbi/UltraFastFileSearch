@@ -131,6 +131,39 @@ pub enum LoadCacheError {
     Deserialize(String),
 }
 
+impl LoadCacheError {
+    /// `true` when this failure means the on-disk cache file itself is
+    /// unusable **permanently** — no retry with the same file can ever
+    /// succeed — as opposed to a transient / environmental failure.
+    ///
+    /// Corruption-class variants are:
+    ///
+    /// * [`Self::DecryptFailed`] — GCM MAC mismatch: the ciphertext is damaged,
+    ///   or it was written under a key that no longer exists (key rotation).
+    ///   Either way the file can never be read again.
+    /// * [`Self::DecompressFailed`] — decrypted fine but the zstd frame is
+    ///   corrupt.
+    /// * [`Self::ParseError`] / [`Self::Deserialize`] — the plaintext layout is
+    ///   invalid (bad magic, out-of-range fields such as the 2026-08 `bloom
+    ///   k_hashes out of range` incident, truncation).
+    ///
+    /// Everything else (missing, stale, I/O, key *unavailable*) is
+    /// recoverable without touching the file and returns `false`.
+    /// [`load_compact_cache`] uses this to quarantine a poisoned cache
+    /// file so the next rebuild's save starts from a clean slate instead
+    /// of every future load failing on the same bytes forever.
+    #[must_use]
+    pub const fn is_corruption(&self) -> bool {
+        matches!(
+            self,
+            Self::DecryptFailed(_)
+                | Self::DecompressFailed(_)
+                | Self::ParseError(_)
+                | Self::Deserialize(_)
+        )
+    }
+}
+
 /// Convenience alias — [`LoadCacheError`] is the canonical failure
 /// type for compact-cache loads.
 pub(crate) type LoadCacheResult<T> = Result<T, LoadCacheError>;
@@ -1135,13 +1168,92 @@ pub fn load_compact_cache(
     trust_ttl_only: bool,
 ) -> LoadCacheResult<DriveCompactIndex> {
     let path = compact_cache_path(drive_letter);
-    check_compact_cache_freshness(&path, drive_letter, ttl_seconds, trust_ttl_only)?;
+    let result = load_compact_cache_at(
+        &path,
+        drive_letter,
+        ttl_seconds,
+        mft_build_epoch,
+        trust_ttl_only,
+    );
+    // Self-heal: a corruption-class failure is permanent — the same bytes
+    // will fail every future load (the 2026-08 incident had drive C fail
+    // `bloom k_hashes out of range` on every start for ten days).  Move
+    // the poisoned file aside so the next load reports `Missing`, the
+    // caller rebuilds, and the rebuild's save writes a fresh file.
+    if let Err(err) = &result
+        && err.is_corruption()
+    {
+        quarantine_corrupt_cache(&path, drive_letter, err);
+    }
+    result
+}
+
+/// Move an unreadable cache file aside as `<name>.corrupt` (keeping one
+/// sample for forensics — how the bytes went bad is itself a bug worth
+/// diagnosing), falling back to deletion when the rename fails.
+///
+/// Best-effort: a quarantine failure is logged and swallowed — the load
+/// error the caller already holds is the actionable failure, and the
+/// worst case of a failed quarantine is the pre-existing behaviour
+/// (the corrupt file stays and the next load fails the same way).
+fn quarantine_corrupt_cache(
+    path: &Path,
+    drive_letter: uffs_mft::platform::DriveLetter,
+    err: &LoadCacheError,
+) {
+    let mut quarantine_name = path.as_os_str().to_owned();
+    quarantine_name.push(".corrupt");
+    let quarantine = PathBuf::from(quarantine_name);
+    // Replace any previous sample — Windows `rename` refuses to
+    // overwrite an existing destination.
+    let _replaced = std::fs::remove_file(&quarantine);
+    match std::fs::rename(path, &quarantine) {
+        Ok(()) => {
+            tracing::warn!(
+                drive = %drive_letter,
+                error = %err,
+                quarantine = %quarantine.display(),
+                "Corrupt compact cache quarantined; next load rebuilds from scratch",
+            );
+        }
+        Err(rename_err) => match std::fs::remove_file(path) {
+            Ok(()) => {
+                tracing::warn!(
+                    drive = %drive_letter,
+                    error = %err,
+                    "Corrupt compact cache deleted (quarantine rename failed); next load rebuilds",
+                );
+            }
+            Err(remove_err) => {
+                tracing::warn!(
+                    drive = %drive_letter,
+                    error = %err,
+                    rename_error = %rename_err,
+                    remove_error = %remove_err,
+                    "Corrupt compact cache could not be quarantined or deleted",
+                );
+            }
+        },
+    }
+}
+
+/// Path-parameterised body of [`load_compact_cache`] — split out so the
+/// quarantine wrapper above sees every failure with the path in hand,
+/// and so tests can exercise the load pipeline against an explicit file.
+fn load_compact_cache_at(
+    path: &Path,
+    drive_letter: uffs_mft::platform::DriveLetter,
+    ttl_seconds: u64,
+    mft_build_epoch: u64,
+    trust_ttl_only: bool,
+) -> LoadCacheResult<DriveCompactIndex> {
+    check_compact_cache_freshness(path, drive_letter, ttl_seconds, trust_ttl_only)?;
 
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
     let t_total = Instant::now();
 
     let t_read = Instant::now();
-    let raw = std::fs::read(&path)?;
+    let raw = std::fs::read(path)?;
     let read_ms = t_read.elapsed().as_millis();
     let raw_len = raw.len();
 

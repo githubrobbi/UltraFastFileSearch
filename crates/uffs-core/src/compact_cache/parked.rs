@@ -47,8 +47,9 @@ use std::time::Instant;
 use uffs_text::case_fold::CaseFold;
 
 use super::{
-    COMPACT_VERSION, RECORD_BYTES, ZSTD_MAGIC, check_compact_cache_freshness, compact_cache_path,
-    filters_io, parse_compact_header, read_u32,
+    COMPACT_VERSION, LoadCacheError, LoadCacheResult, RECORD_BYTES, ZSTD_MAGIC,
+    check_compact_cache_freshness, compact_cache_path, filters_io, parse_compact_header,
+    quarantine_corrupt_cache, read_u32,
 };
 use crate::bloom::Bloom;
 use crate::path_trie::PathTrie;
@@ -303,30 +304,37 @@ struct ParkedLoadIoTimings {
 
 /// Read + decrypt + (optionally) decompress a compact cache file.
 ///
-/// Returns `None` on any IO / crypto failure — the caller treats
-/// that the same as a missing cache (rebuild triggered).
-fn read_decompressed_plaintext(path: &std::path::Path) -> Option<(Vec<u8>, ParkedLoadIoTimings)> {
+/// Returns the structured [`LoadCacheError`] on failure so the caller
+/// can tell a transient miss (IO error, key unavailable) from
+/// corruption-class failures (decrypt / decompress) that warrant
+/// quarantining the file — mirroring `load_compact_cache`'s pipeline.
+fn read_decompressed_plaintext(
+    path: &std::path::Path,
+) -> LoadCacheResult<(Vec<u8>, ParkedLoadIoTimings)> {
     let t_read = Instant::now();
-    let raw = std::fs::read(path).ok()?;
+    let raw = std::fs::read(path)?;
     let read_ms = t_read.elapsed().as_millis();
     let raw_len = raw.len();
 
-    let key = uffs_security::keystore::get_cache_key().ok()?;
+    let key = uffs_security::keystore::get_cache_key()
+        .map_err(|err| LoadCacheError::KeyUnavailable(err.to_string()))?;
     let t_decrypt = Instant::now();
-    let decrypted = uffs_security::crypto::decrypt_cache(&raw, &key).ok()?;
+    let decrypted = uffs_security::crypto::decrypt_cache(&raw, &key)
+        .map_err(|err| LoadCacheError::DecryptFailed(err.to_string()))?;
     let decrypt_ms = t_decrypt.elapsed().as_millis();
 
     let t_decompress = Instant::now();
     let is_compressed = decrypted.get(..4).is_some_and(|magic| magic == ZSTD_MAGIC);
     let plaintext = if is_compressed {
-        zstd::decode_all(decrypted.as_slice()).ok()?
+        zstd::decode_all(decrypted.as_slice())
+            .map_err(|err| LoadCacheError::DecompressFailed(err.to_string()))?
     } else {
         decrypted
     };
     let decompress_ms = t_decompress.elapsed().as_millis();
     let plaintext_len = plaintext.len();
 
-    Some((plaintext, ParkedLoadIoTimings {
+    Ok((plaintext, ParkedLoadIoTimings {
         read_ms,
         raw_len,
         decrypt_ms,
@@ -416,7 +424,10 @@ fn emit_parked_load_profile(
 /// Returns `None` on any failure (cache missing, key missing,
 /// decrypt fail, decompress fail, version < 9, parse error).  This
 /// matches `load_compact_cache`'s "any failure → caller rebuilds"
-/// contract.
+/// contract — including its self-heal: a corruption-class failure
+/// (decrypt / decompress / parse) quarantines the poisoned file as
+/// `<name>.corrupt` so the next load rebuilds from scratch instead
+/// of failing on the same bytes forever.
 #[must_use]
 pub fn load_parked_body(
     drive_letter: uffs_mft::platform::DriveLetter,
@@ -440,13 +451,41 @@ pub fn load_parked_body(
     }
 
     let t_total = Instant::now();
-    let (plaintext, io) = read_decompressed_plaintext(&path)?;
+    let (plaintext, io) = match read_decompressed_plaintext(&path) {
+        Ok(loaded) => loaded,
+        Err(err) => {
+            // Corruption-class failures (decrypt / decompress) are
+            // permanent for these bytes: quarantine the file so the next
+            // load rebuilds, exactly like `load_compact_cache` does.
+            // Transient failures (IO, key unavailable) leave it alone.
+            if err.is_corruption() {
+                quarantine_corrupt_cache(&path, drive_letter, &err);
+            } else {
+                tracing::debug!(
+                    drive = %drive_letter,
+                    error = %err,
+                    "parked-body load: IO/crypto pipeline failed",
+                );
+            }
+            return None;
+        }
+    };
     if is_compact_cache_stale_for_epoch(&plaintext, mft_build_epoch, drive_letter) {
         return None;
     }
 
     let t_deser = Instant::now();
-    let body = deserialize_parked_body(&plaintext, drive_letter).ok()?;
+    let body = match deserialize_parked_body(&plaintext, drive_letter) {
+        Ok(body) => body,
+        Err(parse_err) => {
+            // Decrypted + decompressed fine but the layout is invalid
+            // (this is where a poisoned bloom section — the 2026-08
+            // `k_hashes out of range` incident — surfaces on the parked
+            // path).  Same permanent-failure contract as above.
+            quarantine_corrupt_cache(&path, drive_letter, &LoadCacheError::ParseError(parse_err));
+            return None;
+        }
+    };
     let deser_ms = t_deser.elapsed().as_millis();
 
     if std::env::var_os("UFFS_CACHE_PROFILE").is_some() {
@@ -696,5 +735,45 @@ mod tests {
         assert!(bloom_bytes > 0, "bloom must be non-empty");
         assert!(trie_bytes > 0, "trie must be non-empty (1 dir at minimum)");
         assert_eq!(body.size_bytes(), bloom_bytes + trie_bytes);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_error_tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_is_transient_io_not_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("T_compact.uffs");
+
+        let err = read_decompressed_plaintext(&path).err().unwrap();
+
+        assert!(
+            matches!(err, LoadCacheError::Io(_)),
+            "missing file must surface as Io, got: {err}"
+        );
+        assert!(!err.is_corruption());
+    }
+
+    #[test]
+    fn garbage_bytes_classify_as_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("T_compact.uffs");
+        std::fs::write(&path, b"definitely not an encrypted cache").unwrap();
+
+        let err = read_decompressed_plaintext(&path).err().unwrap();
+
+        // Host-dependent early-out: without a cache key (locked Keychain /
+        // headless CI) the pipeline fails before decryption ever sees the
+        // garbage; the decrypt-failure classification itself is pinned by
+        // the `is_corruption` tests in `compact_cache::tests`.
+        if !matches!(err, LoadCacheError::KeyUnavailable(_)) {
+            assert!(
+                err.is_corruption(),
+                "garbage bytes must classify as corruption, got: {err}"
+            );
+        }
+        assert!(path.exists(), "the pipeline itself must not touch the file");
     }
 }

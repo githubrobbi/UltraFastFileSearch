@@ -16,7 +16,7 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, GetPromptRequestParams,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, GetPromptRequestParams,
     GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
@@ -328,6 +328,28 @@ impl Drop for UffsMcpServer {
     }
 }
 
+/// Stamp the SEP-2549 freshness pair required by MCP protocol
+/// `2026-07-28` onto a list/read result: `ttlMs: 0` ("always fresh, do
+/// not cache") + `cacheScope: private` — the conservative pair, matching
+/// rmcp's own `DiscoverResult::new` posture.
+///
+/// A client that negotiated `2026-07-28` (Claude Code does) REQUIRES
+/// both fields and rejects the entire result without them — field-
+/// observed on winbox 2026-08-23 as `tools/list` failing schema
+/// validation ("expected number, received undefined" for `ttlMs`),
+/// which bricks tool discovery while the connection itself stays up.
+/// rmcp keeps the fields `Option` for pre-2026 peers and its
+/// constructors leave them `None`, so every result WE build must set
+/// them explicitly.
+macro_rules! stamp_freshness {
+    ($result:expr) => {{
+        let mut result = $result;
+        result.ttl_ms = Some(0);
+        result.cache_scope = Some(CacheScope::Private);
+        result
+    }};
+}
+
 impl ServerHandler for UffsMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -401,9 +423,9 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         self.touch();
-        Ok(ListToolsResult::with_all_items(
+        Ok(stamp_freshness!(ListToolsResult::with_all_items(
             definitions::tool_definitions(),
-        ))
+        )))
     }
 
     #[cfg_attr(
@@ -493,7 +515,7 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         self.touch();
-        Ok(ListResourcesResult::with_all_items(vec![
+        Ok(stamp_freshness!(ListResourcesResult::with_all_items(vec![
             Resource::new("uffs://schema/fields", "Field Catalog")
                 .with_description(
                     "Complete catalog of fields available for searching, filtering, \
@@ -530,7 +552,7 @@ impl ServerHandler for UffsMcpServer {
                          Read this first to learn how to compose effective UFFS queries.",
                 )
                 .with_mime_type("application/json"),
-        ]))
+        ])))
     }
 
     #[expect(
@@ -543,15 +565,17 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         self.touch();
-        Ok(ListResourceTemplatesResult::with_all_items(vec![
-            ResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
-                .with_description(
-                    "Full metadata for a file or directory by path. \
+        Ok(stamp_freshness!(
+            ListResourceTemplatesResult::with_all_items(vec![
+                ResourceTemplate::new("uffs://info/{path}", "File/Directory Info")
+                    .with_description(
+                        "Full metadata for a file or directory by path. \
                      The {path} parameter is a percent-encoded Windows path \
                      with forward slashes (e.g. C:/Users/me/file.txt).",
-                )
-                .with_mime_type("application/json"),
-        ]))
+                    )
+                    .with_mime_type("application/json"),
+            ])
+        ))
     }
 
     async fn read_resource(
@@ -627,7 +651,13 @@ impl ServerHandler for UffsMcpServer {
             }
         };
 
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(json, request.uri)]).into())
+        Ok(
+            stamp_freshness!(ReadResourceResult::new(vec![ResourceContents::text(
+                json,
+                request.uri
+            )]))
+            .into(),
+        )
     }
 
     #[expect(
@@ -640,9 +670,9 @@ impl ServerHandler for UffsMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         self.touch();
-        Ok(ListPromptsResult::with_all_items(
+        Ok(stamp_freshness!(ListPromptsResult::with_all_items(
             definitions::prompt_definitions(),
-        ))
+        )))
     }
 
     #[expect(
@@ -699,5 +729,32 @@ mod tests {
         // These ARE always present — must be required.
         assert!(required.contains(&"returned"));
         assert!(required.contains(&"rows"));
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    /// SEP-2549 regression: every list result we serve must carry the
+    /// `ttlMs`/`cacheScope` pair on the wire — a 2026-07-28 client
+    /// (Claude Code) rejects the whole result without them, which
+    /// bricks tool discovery (field-observed on winbox 2026-08-23).
+    #[test]
+    fn stamped_results_carry_the_sep2549_pair_on_the_wire() {
+        let result = stamp_freshness!(ListToolsResult::with_all_items(vec![]));
+        let json = serde_json::to_value(&result).expect("list result serialises");
+        assert_eq!(
+            json.get("ttlMs").and_then(Value::as_u64),
+            Some(0),
+            "ttlMs must be present and numeric, got: {json}"
+        );
+        assert_eq!(
+            json.get("cacheScope").and_then(Value::as_str),
+            Some("private"),
+            "cacheScope must be present and 'private', got: {json}"
+        );
     }
 }

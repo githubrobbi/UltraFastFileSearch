@@ -179,7 +179,11 @@ unsafe fn read_one_chunk(
 /// Apply NTFS fixup to each record slice in `buffer` and feed the parsed
 /// results into `merger`.  Records that fail fixup are silently skipped
 /// (matches the previous inline behaviour).
-fn parse_chunk_records(
+///
+/// `pub(crate)`: shared with the offset-read fallback
+/// (`super::offset_fallback`), whose chunks have the same
+/// records-laid-out-back-to-back shape.
+pub(crate) fn parse_chunk_records(
     buffer: &mut [u8],
     record_size: usize,
     base_frs: u64,

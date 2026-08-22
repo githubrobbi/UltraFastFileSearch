@@ -44,6 +44,10 @@ mod basic;
 mod iocp;
 #[cfg(windows)]
 pub(crate) mod mft_file;
+/// Offset-read fallback: `OVERLAPPED` reads on the caller's existing
+/// handle — the only rung that works on adopted broker handles.
+#[cfg(windows)]
+pub(crate) mod offset_fallback;
 #[cfg(windows)]
 mod pipelined;
 #[cfg(windows)]

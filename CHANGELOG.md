@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- mft: offset-read fallback rung on the existing volume handle — broker-mode
+  full MFT reads no longer dead-end when the file object's one-shot IOCP
+  association is already claimed (the "drive stuck Cold under zero-UAC"
+  incident of 2026-08-22)
+- core: corruption-class compact-cache load failures quarantine the poisoned
+  file as `<name>.corrupt` so the next load rebuilds from scratch instead of
+  failing on the same bytes forever
+- mft: the `.uffs.tmp` sweep in `cache_dir()` is age-gated (1 h) — it no
+  longer deletes temp files an in-flight background cache save is still
+  writing (root cause of the intermittent "Background compact cache save
+  failed" os error 2)
+
 ## [0.6.35] - 2026-08-21
 
 ### Added

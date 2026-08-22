@@ -584,3 +584,120 @@ fn purge_legacy_dir_non_empty_directory_is_refused() {
         "non-empty dir contents must be untouched after refused purge",
     );
 }
+
+// ─── Corrupt-cache quarantine (2026-08 self-heal) ───────────────────────────
+
+#[test]
+fn corruption_classification_is_permanent_failures_only() {
+    // Corruption-class: the same on-disk bytes can never load again.
+    assert!(LoadCacheError::DecryptFailed("mac mismatch".to_owned()).is_corruption());
+    assert!(LoadCacheError::DecompressFailed("bad frame".to_owned()).is_corruption());
+    assert!(LoadCacheError::ParseError("bad magic").is_corruption());
+    assert!(LoadCacheError::Deserialize("bloom k_hashes out of range".to_owned()).is_corruption());
+
+    // Transient / environmental: retrying or fixing the environment can
+    // succeed with the same file — never quarantine these.
+    assert!(!LoadCacheError::Missing.is_corruption());
+    assert!(
+        !LoadCacheError::StaleByTtl {
+            age_secs: 10,
+            ttl_secs: 5
+        }
+        .is_corruption()
+    );
+    assert!(!LoadCacheError::StaleVsMft.is_corruption());
+    assert!(
+        !LoadCacheError::StaleByEpoch {
+            cached_epoch: 1,
+            current_epoch: 2
+        }
+        .is_corruption()
+    );
+    assert!(!LoadCacheError::Io(io::Error::other("disk gone")).is_corruption());
+    assert!(!LoadCacheError::KeyUnavailable("keychain denied".to_owned()).is_corruption());
+    assert!(!LoadCacheError::RuntimeTempfile("perms".to_owned()).is_corruption());
+}
+
+#[test]
+fn quarantine_moves_corrupt_file_aside() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T_compact.uffs");
+    std::fs::write(&path, b"poisoned bytes").unwrap();
+
+    quarantine_corrupt_cache(
+        &path,
+        uffs_mft::platform::DriveLetter::T,
+        &LoadCacheError::Deserialize("bloom k_hashes out of range".to_owned()),
+    );
+
+    // The poisoned file is gone (next load reports `Missing` → rebuild)
+    // and its bytes survive as a forensic sample.
+    assert!(!path.exists());
+    let sample = dir.path().join("T_compact.uffs.corrupt");
+    assert_eq!(std::fs::read(&sample).unwrap(), b"poisoned bytes");
+}
+
+#[test]
+fn quarantine_replaces_previous_sample() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T_compact.uffs");
+    let sample = dir.path().join("T_compact.uffs.corrupt");
+    std::fs::write(&path, b"newer poison").unwrap();
+    // A sample from an earlier incident must not block the rename
+    // (Windows `rename` refuses to overwrite an existing destination).
+    std::fs::write(&sample, b"older poison").unwrap();
+
+    quarantine_corrupt_cache(
+        &path,
+        uffs_mft::platform::DriveLetter::T,
+        &LoadCacheError::ParseError("bad magic"),
+    );
+
+    assert!(!path.exists());
+    assert_eq!(std::fs::read(&sample).unwrap(), b"newer poison");
+}
+
+#[test]
+fn quarantine_of_missing_file_is_harmless() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T_compact.uffs");
+
+    // Nothing to move and nothing to delete — must not panic or create
+    // stray files.
+    quarantine_corrupt_cache(
+        &path,
+        uffs_mft::platform::DriveLetter::T,
+        &LoadCacheError::ParseError("bad magic"),
+    );
+
+    assert!(!path.exists());
+    assert!(!dir.path().join("T_compact.uffs.corrupt").exists());
+}
+
+#[test]
+fn load_compact_cache_at_quarantines_nothing_itself() {
+    // `load_compact_cache_at` is the pure load pipeline: handing it
+    // garbage must fail with a corruption-class error and leave the file
+    // in place — the quarantine decision belongs to the public wrapper.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T_compact.uffs");
+    std::fs::write(&path, b"definitely not an encrypted cache").unwrap();
+
+    // `.err()` instead of `unwrap_err()`: `DriveCompactIndex` has no
+    // `Debug` impl, which `unwrap_err`'s panic message would require.
+    let err = load_compact_cache_at(&path, uffs_mft::platform::DriveLetter::T, u64::MAX, 0, true)
+        .err()
+        .unwrap();
+
+    // Host-dependent early-out: without a cache key (locked Keychain /
+    // headless CI) the pipeline fails before decryption ever sees the
+    // garbage.  The classification itself is pinned by the pure tests
+    // above; this test's subject is the file-untouched contract below.
+    if !matches!(err, LoadCacheError::KeyUnavailable(_)) {
+        assert!(
+            err.is_corruption(),
+            "garbage bytes must classify as corruption, got: {err}"
+        );
+    }
+    assert!(path.exists(), "inner loader must not touch the file");
+}

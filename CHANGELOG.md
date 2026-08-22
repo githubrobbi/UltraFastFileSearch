@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.36] - 2026-08-22
+
 ### Fixed
 
 - mft: offset-read fallback rung on the existing volume handle — broker-mode
@@ -2817,7 +2819,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.35...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.36...HEAD
+[0.6.36]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.35...v0.6.36
 [0.6.35]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.33...v0.6.35
 [0.6.33]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.31...v0.6.32

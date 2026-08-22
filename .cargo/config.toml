@@ -120,3 +120,16 @@ color = "auto"
 # =============================================================================
 # Profiles - defined in Cargo.toml (do not duplicate here)
 # =============================================================================
+
+[env]
+# Hermetic tests + prompt-free local dev on macOS: every rebuild changes
+# the test binaries' ad-hoc code signature, so the Keychain re-prompts
+# for authorization on each `cargo test` run — a GUI dialog a background
+# or CI-like run can never answer, observed 2026-08-23 as
+# `load_compact_cache_at_quarantines_nothing_itself` hanging to the
+# nextest timeout inside `security_framework::get_generic_password`.
+# `UFFS_DEV` routes `uffs-security::keystore::get_cache_key` to its
+# file-based dev key (macOS only; the Windows DPAPI path ignores it).
+# Scope: processes spawned BY cargo in this workspace (build/test/run) —
+# installed release binaries never see this variable.
+UFFS_DEV = "1"

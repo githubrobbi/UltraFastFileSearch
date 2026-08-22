@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - core: corruption-class compact-cache load failures quarantine the poisoned
   file as `<name>.corrupt` so the next load rebuilds from scratch instead of
   failing on the same bytes forever
+- core: the parked-tier (bloom + trie) loader joins the same self-heal —
+  corruption-class failures quarantine the file instead of folding into a
+  silent `None`
 - mft: the `.uffs.tmp` sweep in `cache_dir()` is age-gated (1 h) — it no
   longer deletes temp files an in-flight background cache save is still
   writing (root cause of the intermittent "Background compact cache save

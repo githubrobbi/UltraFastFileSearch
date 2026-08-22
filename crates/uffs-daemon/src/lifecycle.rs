@@ -1116,7 +1116,15 @@ mod tests {
 
     // ── Sliding-window: activity extends deadline ───────────────────────
 
-    #[tokio::test]
+    // All `run_idle_timer` tests run on tokio's paused virtual clock
+    // (`start_paused = true`): sleeps advance instantly and
+    // deterministically, so a stalled CI runner can never let a real
+    // deadline slip past an activity reset (the Windows-runner flake
+    // this cluster used to have). Assertion instants are chosen OFF the
+    // timer's own deadlines — with virtual time both sides fire at
+    // exact instants, and a tie's poll order is not guaranteed.
+
+    #[tokio::test(start_paused = true)]
     async fn idle_timer_extends_deadline_on_activity() {
         // 200 ms idle timeout — should NOT fire because we reset at 100 ms.
         let mut mgr = test_lifecycle(Some(Duration::from_millis(200)));
@@ -1125,34 +1133,33 @@ mod tests {
         // Spawn the idle timer.
         let timer = tokio::spawn(async move { mgr.run_idle_timer().await });
 
-        // After 100 ms, send activity.
+        // After 100 ms, send activity → deadline moves to t=300 ms.
         tokio::time::sleep(Duration::from_millis(100)).await;
         handle.reset_idle_timer();
 
-        // After another 150 ms (total 250 ms from start, but only 150 ms
-        // from the activity reset), the timer should still be running because
-        // the 200 ms window was extended at t=100 ms.
+        // At t=250 ms (150 ms after the reset) the timer must still be
+        // alive: the original t=200 ms deadline was extended.
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             !timer.is_finished(),
             "timer should still be alive after activity reset"
         );
 
-        // Now wait for the remaining ~50 ms + margin so the timer actually fires.
+        // At t=350 ms the extended deadline (t=300 ms) has fired.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(timer.is_finished(), "timer should have fired by now");
     }
 
     // ── Sliding-window: genuine idle causes retirement ──────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn idle_timer_retires_after_full_window_without_activity() {
         let mut mgr = test_lifecycle(Some(Duration::from_millis(100)));
 
         let timer = tokio::spawn(async move { mgr.run_idle_timer().await });
 
-        // No activity — timer should fire after ~100 ms.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // No activity — the deadline at t=100 ms fires; assert at t=150 ms.
+        tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             timer.is_finished(),
             "timer should have retired after idle window"
@@ -1161,7 +1168,7 @@ mod tests {
 
     // ── Shutdown signal wins immediately ─────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn shutdown_signal_preempts_idle_timer() {
         let mut mgr = test_lifecycle(Some(Duration::from_hours(1)));
         let handle = mgr.handle();
@@ -1178,8 +1185,11 @@ mod tests {
 
     // ── Active connections defer retirement (D2.6.7) ─────────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn active_connections_defer_retirement() {
+        // Deferral re-arms at the effective timeout, so the timer's
+        // deadlines land on t=100, 200, 300 … ms; assert at 250/500 ms
+        // to stay off them.
         let mut mgr = test_lifecycle(Some(Duration::from_millis(100)));
         let handle = mgr.handle();
 
@@ -1189,22 +1199,22 @@ mod tests {
         let h2 = handle.clone();
         let timer = tokio::spawn(async move { mgr.run_idle_timer().await });
 
-        // Wait for the idle deadline to fire — it should be deferred.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Deadlines at t=100 and t=200 ms fire deferred; alive at t=250 ms.
+        tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(
             !timer.is_finished(),
             "should not retire with active connections"
         );
 
-        // Close the connection; the next deadline firing should retire.
+        // Close the connection; the t=300 ms firing retires.
         h2.connection_closed();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(timer.is_finished(), "should retire after connections close");
     }
 
     // ── No-retire mode waits for explicit shutdown ───────────────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn no_retire_waits_for_shutdown() {
         let mut mgr = test_lifecycle(None);
         let handle = mgr.handle();
@@ -1305,7 +1315,7 @@ mod tests {
 
     // ── Session tier upgrades take effect on next activity ───────────────
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn session_tier_upgrade_extends_timeout() {
         // 100 ms base timeout at tier 0. After upgrade to tier 1, effective
         // timeout becomes 300 ms.
@@ -1314,21 +1324,21 @@ mod tests {
 
         let timer = tokio::spawn(async move { mgr.run_idle_timer().await });
 
-        // At 80 ms, upgrade session tier and send activity.
+        // At 80 ms, upgrade session tier and send activity → deadline
+        // moves to t=80+300=380 ms.
         tokio::time::sleep(Duration::from_millis(80)).await;
         handle.set_session_type("mcp"); // tier 1 → 300 ms effective
         handle.reset_idle_timer();
 
-        // At 350 ms from activity (430 ms from start), timer should still be alive
-        // because the new effective timeout is 300 ms from the activity at t=80 ms,
-        // meaning deadline is at t=380 ms.
+        // At t=330 ms the timer must still be alive: the original
+        // t=100 ms deadline was replaced by the tier-1 window.
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(
             !timer.is_finished(),
             "tier 1 timeout should extend deadline"
         );
 
-        // Wait for the deadline to fire.
+        // At t=480 ms the tier-1 deadline (t=380 ms) has fired.
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             timer.is_finished(),

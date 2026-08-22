@@ -205,12 +205,50 @@ fn migrate_single_file(src: &Path, dst: &Path) -> bool {
     }
 }
 
-/// Cleans up stale `.uffs.tmp` files left behind by crashed atomic writes.
+/// Minimum age before a `.uffs.tmp` file is treated as abandoned by a
+/// crashed atomic write and eligible for cleanup.
+///
+/// A *live* temp can exist for the several seconds a multi-hundred-MB
+/// background compact-cache save spends writing before its rename.
+/// `cache_dir()` is called concurrently from the per-shard journal
+/// loops, so an age-blind sweep raced those in-flight writers: Windows
+/// opens the temp with `FILE_SHARE_DELETE`, the sweep's delete
+/// succeeded (delete-pending), and the writer's final rename then
+/// failed with `ERROR_FILE_NOT_FOUND` (os error 2) — the "Background
+/// compact cache save failed" incidents of 2026-08. One hour is far
+/// beyond any legitimate in-flight write while still reclaiming
+/// crash debris promptly.
+const STALE_TEMP_MAX_AGE_SECS: u64 = 3600;
+
+/// `true` when a temp file whose mtime is `modified` counts as
+/// abandoned at time `now` (older than [`STALE_TEMP_MAX_AGE_SECS`]).
+///
+/// A file younger than the threshold — or with a clock-skewed mtime in
+/// the future (`duration_since` errors) — is treated as live and kept.
+fn is_abandoned_temp(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age.as_secs() >= STALE_TEMP_MAX_AGE_SECS)
+}
+
+/// Cleans up abandoned `.uffs.tmp` files left behind by crashed atomic
+/// writes.
+///
+/// Only temps older than [`STALE_TEMP_MAX_AGE_SECS`] are removed; a
+/// younger temp may be an atomic write in flight on another thread and
+/// deleting it would make that writer's rename fail (see the constant's
+/// doc for the incident this prevents). Files whose mtime cannot be
+/// read are conservatively kept.
 fn cleanup_stale_temps(dir: &Path) {
+    let now = SystemTime::now();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name.to_string_lossy().ends_with(".uffs.tmp") {
+            let abandoned = name.to_string_lossy().ends_with(".uffs.tmp")
+                && entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .is_ok_and(|modified| is_abandoned_temp(modified, now));
+            if abandoned {
                 let _ignore = std::fs::remove_file(entry.path());
             }
         }
@@ -220,8 +258,10 @@ fn cleanup_stale_temps(dir: &Path) {
 /// Gets the cache directory path.
 ///
 /// Returns the platform-appropriate secure cache directory. On the first
-/// call per process, also migrates any legacy cache files from the old
-/// temp-dir location and cleans up stale `.uffs.tmp` files.
+/// call per process it also migrates any legacy cache files from the old
+/// temp-dir location; every call sweeps abandoned `.uffs.tmp` files
+/// (older than `STALE_TEMP_MAX_AGE_SECS`, one hour — younger temps may
+/// be atomic writes in flight and are left alone).
 #[must_use]
 pub fn cache_dir() -> PathBuf {
     migrate_legacy_cache();
@@ -694,5 +734,52 @@ pub fn check_multi_drive_cache(
             stale_drives: stale,
             fresh_drives: fresh,
         }
+    }
+}
+
+#[cfg(test)]
+mod stale_temp_tests {
+    use core::time::Duration;
+    use std::time::SystemTime;
+
+    use super::{STALE_TEMP_MAX_AGE_SECS, is_abandoned_temp};
+
+    #[test]
+    fn fresh_temp_is_kept() {
+        // A temp written seconds ago is an atomic write likely still in
+        // flight — deleting it would break that writer's rename.
+        let now = SystemTime::now();
+        let modified = now - Duration::from_secs(5);
+        assert!(!is_abandoned_temp(modified, now));
+    }
+
+    #[test]
+    fn temp_just_under_threshold_is_kept() {
+        let now = SystemTime::now();
+        let modified = now - Duration::from_secs(STALE_TEMP_MAX_AGE_SECS - 1);
+        assert!(!is_abandoned_temp(modified, now));
+    }
+
+    #[test]
+    fn temp_at_threshold_is_abandoned() {
+        let now = SystemTime::now();
+        let modified = now - Duration::from_secs(STALE_TEMP_MAX_AGE_SECS);
+        assert!(is_abandoned_temp(modified, now));
+    }
+
+    #[test]
+    fn temp_far_past_threshold_is_abandoned() {
+        let now = SystemTime::now();
+        let modified = now - Duration::from_secs(STALE_TEMP_MAX_AGE_SECS * 24);
+        assert!(is_abandoned_temp(modified, now));
+    }
+
+    #[test]
+    fn future_mtime_is_kept() {
+        // Clock skew: an mtime in the future makes `duration_since` fail;
+        // the conservative answer is "live, keep it".
+        let now = SystemTime::now();
+        let modified = now + Duration::from_secs(60);
+        assert!(!is_abandoned_temp(modified, now));
     }
 }

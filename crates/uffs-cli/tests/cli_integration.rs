@@ -28,6 +28,13 @@ mod tests {
         Command::cargo_bin("uffs")
             .expect("uffs test binary should build")
             .env("NO_COLOR", "1")
+            // Never auto-spawn a real `uffsd` from a test: the workspace
+            // build puts one right next to the test binary, and a spawned
+            // daemon is up to 120 s of readiness-polling nondeterminism
+            // plus a leaked process per run (CI flake, issue #610). With
+            // the kill-switch, daemonless failures are immediate and
+            // their message is stable.
+            .env("UFFS_NO_AUTOSTART", "1")
             .env("UFFS_LOG_DIR", log_dir)
             .env_remove("RUST_LOG")
             .env_remove("RUST_LOG_FILE")

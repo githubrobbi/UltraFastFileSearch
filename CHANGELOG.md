@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.38] - 2026-08-24
+
+### Added
+
+- daemon: warm_plan RPC - the bloom-aware cold-index answer external gates must use
+
+### Fixed
+
+- dev: single-pass install build — capture the artifact JSON from the real build
+- daemon: lifecycle idle-timer tests on tokio's paused clock
+- client: UFFS_NO_AUTOSTART kill-switch so tests never spawn uffsd
+- core: compact-cache poisoning via delta-carrying saves and the empty-trigram reader gap
+
 ## [0.6.37] - 2026-08-22
 
 ### Fixed
@@ -2826,7 +2839,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.37...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.38...HEAD
+[0.6.38]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.37...v0.6.38
 [0.6.37]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.36...v0.6.37
 [0.6.36]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.35...v0.6.36
 [0.6.35]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.33...v0.6.35

@@ -518,10 +518,19 @@ impl ShardEntry {
     /// revisits the layout.
     ///
     /// [`DriveCompactIndex::frs_to_compact`]: uffs_core::compact::DriveCompactIndex::frs_to_compact
+    /// `fold_delta` — pass `true` on a SAVE-bound patch: the returned
+    /// body will be serialised, and a delta-carrying index must never
+    /// reach the writer (its base CSR sections are stale against the
+    /// patched records — see
+    /// [`DriveCompactIndex::fold_delta_for_save`]).  The apply-only
+    /// tick passes `false` and keeps the cheap overlay.
+    ///
+    /// [`DriveCompactIndex::fold_delta_for_save`]: uffs_core::compact::DriveCompactIndex::fold_delta_for_save
     #[must_use]
     pub(crate) fn apply_usn_patch_to_body(
         &self,
         changes: &[uffs_mft::usn::FileChange],
+        fold_delta: bool,
     ) -> Option<(
         Arc<DriveCompactIndex>,
         uffs_core::compact_loader::PatchStats,
@@ -539,6 +548,9 @@ impl ShardEntry {
         // the small delta, not the hundreds-of-MB inverted indexes.
         let mut owned: DriveCompactIndex = (**body_arc).clone();
         let stats = uffs_core::compact_loader::apply_usn_patch(&mut owned, changes);
+        if fold_delta {
+            owned.fold_delta_for_save();
+        }
         Some((Arc::new(owned), stats))
     }
 }

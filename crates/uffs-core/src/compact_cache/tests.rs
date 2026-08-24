@@ -701,3 +701,11 @@ fn load_compact_cache_at_quarantines_nothing_itself() {
     }
     assert!(path.exists(), "inner loader must not touch the file");
 }
+
+// The cache-poisoning regression cluster (empty-trigram shape, the
+// delta-carrying misalignment, and the save-boundary refusal) lives in
+// a nested sibling file so this module stays under the workspace
+// 800-LOC ceiling.  `#[path]` keeps it a child of `tests`, so it can
+// use this module's `make_test_index` fixture directly.
+#[path = "tests_cache_poison.rs"]
+mod cache_poison;

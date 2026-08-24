@@ -32,6 +32,9 @@ pub(crate) async fn run(
 
     // Cold-index contract, scoped to the path's own drive: an info
     // lookup on a parked drive must not block for the re-warm either.
+    // Minimal match-all params: an info lookup has no ext filter, so
+    // the daemon's plan is "promote every Parked/Cold drive in scope"
+    // — the body genuinely is needed to resolve the path.
     let scope: Vec<uffs_mft::platform::DriveLetter> = args
         .path
         .chars()
@@ -39,7 +42,12 @@ pub(crate) async fn run(
         .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
         .into_iter()
         .collect();
-    super::warm::warm_gate(client, &scope).await?;
+    let scope_params = uffs_client::protocol::SearchParams {
+        pattern: "*".to_owned(),
+        drives: scope,
+        ..Default::default()
+    };
+    super::warm::warm_gate(client, &scope_params).await?;
 
     let response = client
         .info(&args.path)

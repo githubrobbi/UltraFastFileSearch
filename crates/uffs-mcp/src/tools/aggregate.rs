@@ -136,7 +136,9 @@ pub(crate) async fn run(
 
     // Cold-index contract: return a retryable "warming" error instead of
     // blocking silently for the length of a re-warm (see `tools::warm`).
-    super::warm::warm_gate(client, &params.drives).await?;
+    // Full params, not just the drive scope: the daemon's plan consults
+    // the query's resolved ext/type filter against each Parked bloom.
+    super::warm::warm_gate(client, &params).await?;
 
     // Log the exact RPC payload for debugging parity with API validation.
     tracing::info!(

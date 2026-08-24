@@ -351,7 +351,7 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
 /// (folded basenames + extensions).  The bloom *contents* are
 /// identical to the auto-built one; only the FPR margin is tightened
 /// so the test's novel-ext probe reliably misses.
-fn build_test_drive_with_tight_bloom() -> uffs_core::compact::DriveCompactIndex {
+pub(super) fn build_test_drive_with_tight_bloom() -> uffs_core::compact::DriveCompactIndex {
     use uffs_core::bloom::Bloom;
 
     /// Tighter than the production `SHARD_BLOOM_TARGET_FPR` (1 %) so

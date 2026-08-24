@@ -23,7 +23,6 @@ use uffs_core::search::backend::{
     DriveIndex, FilterMode, PhaseTimings, SearchRequest, SortSpec, search_index,
 };
 use uffs_core::search::field::FieldId;
-use uffs_core::search::filters::{SearchFilterParams, SearchFilters};
 
 use super::IndexManager;
 
@@ -117,43 +116,11 @@ impl IndexManager {
             SearchFilterMode::All => FilterMode::All,
         };
 
-        let ep = &effective_params;
-        let mut filters = SearchFilters::from_params(&SearchFilterParams {
-            hide_system: ep.hide_system,
-            hide_ads: ep.hide_ads,
-            min_size: ep.min_size,
-            max_size: ep.max_size,
-            min_descendants: ep.min_descendants,
-            max_descendants: ep.max_descendants,
-            newer: ep.newer.as_deref(),
-            older: ep.older.as_deref(),
-            newer_created: ep.newer_created.as_deref(),
-            older_created: ep.older_created.as_deref(),
-            newer_accessed: ep.newer_accessed.as_deref(),
-            older_accessed: ep.older_accessed.as_deref(),
-            attr_filter: ep.attr.as_deref(),
-            ext_filter: ep.ext.as_deref(),
-            exclude: ep.exclude.as_deref(),
-            path_contains: ep.path_contains.as_deref(),
-            path_excludes: ep.path_excludes.as_deref(),
-            type_filter: ep.type_filter.as_deref(),
-            min_bulkiness: ep.min_bulkiness,
-            max_bulkiness: ep.max_bulkiness,
-            min_name_len: ep.min_name_len,
-            max_name_len: ep.max_name_len,
-            min_path_len: ep.min_path_len,
-            max_path_len: ep.max_path_len,
-            min_allocated: ep.min_allocated,
-            max_allocated: ep.max_allocated,
-            min_treesize: ep.min_treesize,
-            max_treesize: ep.max_treesize,
-            min_tree_allocated: ep.min_tree_allocated,
-            max_tree_allocated: ep.max_tree_allocated,
-            allowed_months: &ep.allowed_months,
-        });
-        // Display-only: select the malformed-name render mode for resolved
-        // paths + the name column (`--normalize-malformed`).
-        filters.normalize_malformed = ep.normalize_malformed;
+        // Resolution shared with the `warm_plan` RPC (see
+        // `search_filters_build`): both must derive the SAME
+        // `filters.extensions`, or an external warm gate could
+        // contradict the bloom pre-check below.
+        let mut filters = super::search_filters_build::build_search_filters(&effective_params);
 
         // Overlay canonical predicates that can be compiled into the hot
         // path (size / descendant bounds).

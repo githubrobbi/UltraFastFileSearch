@@ -5,9 +5,8 @@
 //! [`crate::index::IndexManager`].
 
 use uffs_client::protocol::response::{
-    DEFAULT_PRELOAD_PIN_MINUTES, FacetValuesParams, FacetValuesResponse, ForgetParams,
-    ForgetResponse, HibernateParams, HibernateResponse, LoadDriveParams, LoadDriveResponse,
-    PreloadParams, PreloadResponse, RefreshParams, SearchPayload, StatusDrivesResponse,
+    FacetValuesParams, FacetValuesResponse, ForgetParams, ForgetResponse, LoadDriveParams,
+    LoadDriveResponse, RefreshParams, SearchPayload, StatusDrivesResponse,
 };
 use uffs_client::protocol::{
     AggregateSpecWire, ERR_DRIVE_BUSY, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, RpcErrorResponse,
@@ -52,6 +51,12 @@ mod diff_handler;
 #[path = "handler_journal.rs"]
 mod journal_handler;
 
+// The memory-tiering handlers (`hibernate`, `preload`, `warm_plan`) live in
+// a sibling file for the same 800-LOC policy reason; `#[path]` keeps them
+// `impl RequestHandler` methods the dispatcher calls directly.
+#[path = "handler_tiering.rs"]
+mod tiering_handler;
+
 /// Request handler holding shared daemon state.
 pub(crate) struct RequestHandler {
     /// Shared index manager.
@@ -92,6 +97,7 @@ impl RequestHandler {
             // respectively.
             "hibernate" => self.handle_hibernate(id, req).await,
             "preload" => self.handle_preload(id, req).await,
+            "warm_plan" => self.handle_warm_plan(id, req).await,
             "forget" => self.handle_forget(id, req).await,
             "status_drives" => self.handle_status_drives(id).await,
             "changed_since" => self.handle_changed_since(id, req).await,
@@ -575,112 +581,6 @@ impl RequestHandler {
         }
 
         let result = serde_json::json!({"ok": true});
-        serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
-    }
-
-    /// Handle `hibernate` method (Phase 8-B).
-    ///
-    /// Parses [`HibernateParams`] from the JSON-RPC envelope, walks
-    /// the registry via [`IndexManager::hibernate_shards`], and
-    /// returns the structured [`HibernateResponse`] reporting
-    /// drives demoted from each pre-call tier plus drives that were
-    /// already at the bottom.
-    ///
-    /// Empty `drives` in the params means "every loaded drive";
-    /// non-matching letters in a non-empty `drives` filter are
-    /// silently dropped (the operator audit lives on the
-    /// `already_cold` field of the response, which lists only
-    /// drives the daemon actually knows about).
-    ///
-    /// Malformed params (anything that fails to deserialise as
-    /// [`HibernateParams`]) fall back to the empty-default
-    /// (hibernate every drive); the wire contract is "best-effort
-    /// match" rather than "strict reject" because the all-loaded
-    /// path is always safe and an over-strict reject would surprise
-    /// scripts that send slightly-non-canonical JSON.
-    async fn handle_hibernate(&self, id: u64, req: &RpcRequest) -> String {
-        let params: HibernateParams = req
-            .params
-            .as_ref()
-            .and_then(|val| serde_json::from_value(val.clone()).ok())
-            .unwrap_or_default();
-        let outcome = self.index.hibernate_shards(&params.drives).await;
-        let response = HibernateResponse {
-            hot_demoted: outcome.hot_demoted,
-            warm_demoted: outcome.warm_demoted,
-            parked_demoted: outcome.parked_demoted,
-            already_cold: outcome.already_cold,
-        };
-        let result = serde_json::to_value(&response).unwrap_or_default();
-        serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
-    }
-
-    /// Handle `preload` method (Phase 8-C).
-    ///
-    /// Parses [`PreloadParams`] from the JSON-RPC envelope, loops
-    /// over the requested drives calling
-    /// [`IndexManager::preload_drive`] for each, and aggregates the
-    /// per-drive [`crate::index::tiering_ops::PreloadOutcome`]s into
-    /// a single [`PreloadResponse`].
-    ///
-    /// Validates that the params include at least one drive — an
-    /// empty `drives` vector returns [`ERR_INVALID_PARAMS`] so a
-    /// caller's mistyped script doesn't silently succeed.  The pin
-    /// duration defaults to [`DEFAULT_PRELOAD_PIN_MINUTES`] when
-    /// the params omit `pin_minutes`.
-    async fn handle_preload(&self, id: u64, req: &RpcRequest) -> String {
-        let params: PreloadParams = req
-            .params
-            .as_ref()
-            .and_then(|val| serde_json::from_value(val.clone()).ok())
-            .unwrap_or_default();
-        if params.drives.is_empty() {
-            return serde_json::to_string(&RpcErrorResponse::error(
-                Some(id),
-                ERR_INVALID_PARAMS,
-                "preload: `drives` must contain at least one drive letter",
-            ))
-            .unwrap_or_default();
-        }
-        let pin_minutes = params.pin_minutes.unwrap_or(DEFAULT_PRELOAD_PIN_MINUTES);
-
-        let mut promoted: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
-        let mut already_hot: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
-        let mut errors: Vec<String> = Vec::new();
-        let mut latest_pin_until_ms: i64 = 0;
-
-        for &letter in &params.drives {
-            use crate::index::tiering_ops::PreloadOutcome;
-            match self.index.preload_drive(letter, pin_minutes).await {
-                PreloadOutcome::Promoted { pin_until_ms, .. } => {
-                    promoted.push(letter);
-                    latest_pin_until_ms = i64::try_from(pin_until_ms).unwrap_or(i64::MAX);
-                }
-                PreloadOutcome::AlreadyHot { pin_until_ms } => {
-                    already_hot.push(letter);
-                    latest_pin_until_ms = i64::try_from(pin_until_ms).unwrap_or(i64::MAX);
-                }
-                PreloadOutcome::UnknownDrive => {
-                    errors.push(format!("{letter}: drive not loaded"));
-                }
-                PreloadOutcome::LoadFailed => {
-                    errors.push(format!("{letter}: body load failed"));
-                }
-                PreloadOutcome::Busy { from_state } => {
-                    errors.push(format!(
-                        "{letter}: drive busy in transient state ({from_state})"
-                    ));
-                }
-            }
-        }
-
-        let response = PreloadResponse {
-            promoted,
-            already_hot,
-            errors,
-            pin_until_unix_ms: latest_pin_until_ms,
-        };
-        let result = serde_json::to_value(&response).unwrap_or_default();
         serde_json::to_string(&RpcResponse::success(id, result)).unwrap_or_default()
     }
 

@@ -366,7 +366,9 @@ pub(crate) async fn run(
 
     // Cold-index contract: return a retryable "warming" error instead of
     // blocking silently for the length of a re-warm (see `tools::warm`).
-    super::warm::warm_gate(client, &search_params.drives).await?;
+    // Full params, not just the drive scope: the daemon's plan consults
+    // the query's resolved ext filter against each Parked bloom.
+    super::warm::warm_gate(client, &search_params).await?;
 
     tracing::debug!(
         params_json = %serde_json::to_string(&search_params).unwrap_or_default(),

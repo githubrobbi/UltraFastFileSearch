@@ -100,32 +100,11 @@ impl IndexManager {
         ext_terms: &[String],
     ) {
         // ── Phase 1: read-lock detection (fast path) ───────────
-        // Identify Parked/Cold shards in the touched set.  Single
-        // read-lock acquisition; the registry's `iter()` is a Vec
-        // walk, no allocation beyond the `needs_promote` Vec.
-        //
-        // Phase 4 Commit F — for Parked shards we additionally
-        // probe the bloom against `ext_terms`: a miss means the
-        // shard provably has no records matching the ext filter,
-        // so we skip the promote entirely (zero-RAM-touch
-        // contract).  Cold shards drop their bloom on demote, so
-        // they always promote.  Empty `ext_terms` short-circuits
-        // to the Phase-3 always-promote behaviour.
-        let needs_promote: Vec<uffs_mft::platform::DriveLetter> = {
-            let guard = self.index.read().await;
-            guard
-                .iter()
-                .filter(|shard| params_drives.is_empty() || params_drives.contains(&shard.drive))
-                .filter(|shard| {
-                    matches!(
-                        shard.state(),
-                        crate::cache::ShardState::Parked | crate::cache::ShardState::Cold
-                    )
-                })
-                .filter(|shard| Self::bloom_pre_check_should_promote(shard, ext_terms))
-                .map(|shard| shard.drive)
-                .collect()
-        };
+        // See [`Self::promote_plan`] — the same computation also
+        // answers the `warm_plan` RPC, so external gates (the MCP
+        // cold-index gate) and this dispatch can never disagree
+        // about which drives a query would actually promote.
+        let needs_promote = self.promote_plan(params_drives, ext_terms).await;
         if needs_promote.is_empty() {
             return;
         }
@@ -446,6 +425,64 @@ impl IndexManager {
             }
         }
         body
+    }
+
+    /// The drives a dispatch with this scope + resolved ext-term set
+    /// would need to promote: every Parked/Cold shard in the touched
+    /// set whose bloom cannot prove it irrelevant.
+    ///
+    /// Single read-lock acquisition; the registry's `iter()` is a Vec
+    /// walk, no allocation beyond the returned Vec.
+    ///
+    /// Phase 4 Commit F — for Parked shards we additionally probe the
+    /// bloom against `ext_terms`: a miss means the shard provably has
+    /// no records matching the ext filter, so the promote is skipped
+    /// entirely (zero-RAM-touch contract).  Cold shards drop their
+    /// bloom on demote, so they always promote.  Empty `ext_terms`
+    /// short-circuits to the Phase-3 always-promote behaviour.
+    ///
+    /// Shared verbatim by [`Self::ensure_warm_for_dispatch`] (which
+    /// then executes the promotes) and the `warm_plan` RPC (which
+    /// reports the set to external gates) — one computation, so the
+    /// MCP cold-index gate can never contradict what dispatch will
+    /// actually do (field 2026-08-24: the gate's tier-only view
+    /// declared a bloom-skippable Parked drive "not ready" and
+    /// force-promoted its body for a query the bloom had already
+    /// answered).
+    pub(crate) async fn promote_plan(
+        &self,
+        params_drives: &[uffs_mft::platform::DriveLetter],
+        ext_terms: &[String],
+    ) -> Vec<uffs_mft::platform::DriveLetter> {
+        let guard = self.index.read().await;
+        guard
+            .iter()
+            .filter(|shard| params_drives.is_empty() || params_drives.contains(&shard.drive))
+            .filter(|shard| {
+                matches!(
+                    shard.state(),
+                    crate::cache::ShardState::Parked | crate::cache::ShardState::Cold
+                )
+            })
+            .filter(|shard| Self::bloom_pre_check_should_promote(shard, ext_terms))
+            .map(|shard| shard.drive)
+            .collect()
+    }
+
+    /// The `warm_plan` RPC body: the promote set the SAME search would
+    /// trigger, derived through the same canonicalisation + filter
+    /// resolution `run_search_over` performs before its ensure-warm
+    /// call — bit-exact with dispatch by construction, because both
+    /// funnel into [`Self::promote_plan`].
+    pub(crate) async fn warm_plan(
+        &self,
+        params: &uffs_client::protocol::SearchParams,
+    ) -> Vec<uffs_mft::platform::DriveLetter> {
+        let mut effective = params.clone();
+        effective.populate_canonical_fields();
+        let filters = super::search_filters_build::build_search_filters(&effective);
+        self.promote_plan(&effective.drives, &filters.extensions)
+            .await
     }
 
     /// Phase 4 Commit F — bloom pre-check for Parked shards.

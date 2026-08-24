@@ -37,10 +37,26 @@
 //! (MCP progress notifications) was considered and rejected: hosts do
 //! not extend their tool-call patience on progress events, so the
 //! call would still read as hung.
+//!
+//! # Who decides "not ready": the daemon, not this gate
+//!
+//! Since v0.6.38 the gate asks the daemon's `warm_plan` RPC for the
+//! exact promote set its dispatch would execute for the query — which
+//! includes the Phase-4 bloom pre-check.  A Parked drive whose bloom
+//! proves it holds nothing matching the query's extension filter is
+//! ready *by definition* (dispatch skips it and it contributes zero
+//! rows), so it must neither gate the call nor be force-warmed.  The
+//! previous tier-only inference did both (field 2026-08-24, winbox
+//! drive E:), and its warm trigger — pattern-only, no ext filter —
+//! bypassed the daemon's own bloom skip and paged the body back into
+//! RAM.  The tier-based check survives only as `not_ready`, the
+//! fallback for pre-`warm_plan` daemons, where it is conservative
+//! (over-gates, never under-gates).
 
 use uffs_client::connect::UffsClient;
-use uffs_client::protocol::SearchParams;
+use uffs_client::error::ClientError;
 use uffs_client::protocol::response::{DriveInfo, ShardTier};
+use uffs_client::protocol::{ERR_METHOD_NOT_FOUND, SearchParams};
 
 use crate::error::BridgeError;
 
@@ -75,24 +91,51 @@ fn not_ready(
         .collect()
 }
 
-/// Gate a query tool on index warmth: `Ok(())` when every scoped drive
-/// is `Warm`/`Hot`; otherwise kick a detached re-warm and return the
-/// retry-shaped error described in the module docs.
+/// Whether a client error is the daemon saying it does not know the
+/// `warm_plan` method (pre-v0.6.38): the signal to fall back to the
+/// legacy tier-based gate rather than fail the query tool.
+const fn is_method_not_found(err: &ClientError) -> bool {
+    matches!(err, ClientError::DaemonError { code, .. } if *code == ERR_METHOD_NOT_FOUND)
+}
+
+/// Gate a query tool on index warmth: `Ok(())` when the daemon's own
+/// dispatch would promote nothing for `params`; otherwise kick a
+/// detached re-warm of exactly the drives the daemon named and return
+/// the retry-shaped error described in the module docs.
+///
+/// The decision is daemon-authoritative (`warm_plan` RPC): the daemon
+/// computes the promote set through the same filter resolution + bloom
+/// pre-check its dispatch uses, so a Parked drive whose bloom proves it
+/// irrelevant to the query's extension filter passes the gate and is
+/// never force-promoted.  Deciding from the tier marker alone — the
+/// pre-v0.6.38 behaviour, kept as the fallback for older daemons —
+/// over-gates exactly that case (field 2026-08-24, winbox drive `E:` — an
+/// ext-filtered query the bloom had already answered was reported
+/// "warming — retry" while the warm trigger paged the drive's body
+/// back into RAM, defeating the Phase-4 zero-RAM-touch contract).
 ///
 /// # Errors
 ///
 /// Returns [`BridgeError::Daemon`] when scoped drives are re-warming
-/// (the retry contract) or when the tier probe itself fails.
+/// (the retry contract) or when the plan/tier probe itself fails.
 pub(crate) async fn warm_gate(
     client: &mut UffsClient,
-    scope: &[uffs_mft::platform::DriveLetter],
+    params: &SearchParams,
 ) -> Result<(), BridgeError> {
-    let drives = client
-        .drives()
-        .await
-        .map_err(|err| BridgeError::Daemon(format!("warm check failed: {err}")))?;
-
-    let cold = not_ready(&drives.drives, scope);
+    let cold = match client.warm_plan(params).await {
+        Ok(plan) => plan.needs_promote,
+        Err(err) if is_method_not_found(&err) => {
+            // Pre-`warm_plan` daemon: legacy tier-based gate.  Strictly
+            // more conservative than the plan (it cannot consult the
+            // bloom), never less — a query is at worst gated when it
+            // could have passed, exactly the pre-v0.6.38 behaviour.
+            let drives = client.drives().await.map_err(|drives_err| {
+                BridgeError::Daemon(format!("warm check failed: {drives_err}"))
+            })?;
+            not_ready(&drives.drives, &params.drives)
+        }
+        Err(err) => return Err(BridgeError::Daemon(format!("warm check failed: {err}"))),
+    };
     if cold.is_empty() {
         return Ok(());
     }
@@ -109,14 +152,14 @@ pub(crate) async fn warm_gate(
             tracing::warn!("warm trigger: daemon connect failed — retry will re-trigger");
             return;
         };
-        let mut params = SearchParams {
+        let mut trigger_params = SearchParams {
             pattern: WARM_TRIGGER_PATTERN.to_owned(),
             drives: trigger_drives.clone(),
             limit: Some(1),
             ..Default::default()
         };
-        params.populate_canonical_fields();
-        match warm_client.search(&params).await {
+        trigger_params.populate_canonical_fields();
+        match warm_client.search(&trigger_params).await {
             Ok(_) => tracing::info!(drives = ?trigger_drives, "warm trigger completed"),
             Err(err) => tracing::warn!(%err, "warm trigger search failed"),
         }
@@ -203,5 +246,25 @@ mod tests {
     fn missing_tier_reads_as_ready() {
         let drives = vec![info('C', None)];
         assert_eq!(not_ready(&drives, &[]), Vec::<DriveLetter>::new());
+    }
+
+    /// Only the daemon's method-not-found answer selects the legacy
+    /// tier-based fallback; every other failure propagates.
+    #[test]
+    fn only_method_not_found_selects_the_legacy_fallback() {
+        use uffs_client::error::ClientError;
+        use uffs_client::protocol::ERR_METHOD_NOT_FOUND;
+
+        use super::is_method_not_found;
+
+        assert!(is_method_not_found(&ClientError::DaemonError {
+            code: ERR_METHOD_NOT_FOUND,
+            message: "Method not found: warm_plan".to_owned(),
+        }));
+        assert!(!is_method_not_found(&ClientError::DaemonError {
+            code: -32_602_i32,
+            message: "Missing or invalid search params".to_owned(),
+        }));
+        assert!(!is_method_not_found(&ClientError::ConnectionClosed));
     }
 }

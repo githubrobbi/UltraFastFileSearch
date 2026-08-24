@@ -200,9 +200,17 @@ fn find_v9_filters_offset(data: &[u8]) -> Result<(usize, u64), &'static str> {
         return Err("truncated trigram header");
     }
 
-    // Trigram CSR (always present for v >= 6).
+    // Trigram CSR (always present for v >= 6, INCLUDING when empty:
+    // the writer serialises the in-memory CSR invariant `offsets.len()
+    // == keys.len() + 1`, so an empty index still emits its `[0]`
+    // offsets entry plus a zero values count).  The old `key_count >
+    // 0` fast-path treated the count word as a bare "no trigram"
+    // sentinel — a shape no writer ever produced — and left 8 bytes
+    // unconsumed, shifting the ext-names/bloom/trie reads that follow
+    // (the `bloom k_hashes out of range` corruption class; see
+    // `parse_compact_body` for the full incident note).
     let trigram_key_count = read_u32(data, postings_end) as usize;
-    let after_trigram = if trigram_key_count > 0 {
+    let after_trigram = {
         let keys_end = postings_end
             .checked_add(4)
             .and_then(|x| x.checked_add(trigram_key_count.checked_mul(8)?))
@@ -222,15 +230,6 @@ fn find_v9_filters_offset(data: &[u8]) -> Result<(usize, u64), &'static str> {
             return Err("truncated trigram values");
         }
         values_end
-    } else {
-        // v >= 6 with `trigram_key_count == 0` is the legacy "no
-        // trigram on disk" sentinel; v9 always emits a real
-        // trigram, but a malformed v9 buffer could land here.
-        // The 4-byte sentinel header has been consumed; advance
-        // past it so the next section follows correctly.
-        postings_end
-            .checked_add(4)
-            .ok_or("after-trigram-sentinel overflow")?
     };
 
     // Skip the v7+ ext_names table without allocating.  v9 always

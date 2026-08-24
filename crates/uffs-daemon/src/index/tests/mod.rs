@@ -57,6 +57,7 @@ mod manager;
 mod registry;
 mod shard_ttl_events;
 mod tiering_ops;
+mod warm_plan;
 // Exposed at `pub(crate)` so the shared `EventLog` / `CapturedEvent`
 // scaffold (already `pub(crate)`) can be imported from sibling test
 // modules such as `crate::cache::journal_loop::tests::save_log_message`

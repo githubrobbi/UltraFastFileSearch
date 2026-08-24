@@ -161,7 +161,10 @@ impl IndexManager {
         reason: &str,
         changes: Vec<FileChange>,
     ) -> bool {
-        match self.apply_to_body(letter, reason, changes).await {
+        // Save-bound: fold any delta overlay inside the patch task so
+        // the body handed to the disk writer is delta-free (the
+        // serialization invariant `fold_delta_for_save` documents).
+        match self.apply_to_body(letter, reason, changes, true).await {
             BodyApplyOutcome::Applied(new_body) => {
                 spawn_compact_cache_save_task(letter, new_body);
                 true
@@ -197,8 +200,11 @@ impl IndexManager {
         reason: &str,
         changes: Vec<FileChange>,
     ) -> bool {
+        // Apply-only: keep the cheap delta overlay — nothing is
+        // serialised on this tick, and folding every ~2 s apply would
+        // be an O(total-records) rebuild per tick.
         !matches!(
-            self.apply_to_body(letter, reason, changes).await,
+            self.apply_to_body(letter, reason, changes, false).await,
             BodyApplyOutcome::Failed
         )
     }
@@ -215,6 +221,7 @@ impl IndexManager {
         letter: uffs_mft::platform::DriveLetter,
         reason: &str,
         changes: Vec<FileChange>,
+        fold_delta: bool,
     ) -> BodyApplyOutcome {
         if changes.is_empty() {
             log_save_empty_batch(letter, reason);
@@ -228,7 +235,7 @@ impl IndexManager {
         };
 
         let (new_body, stats) = match self
-            .run_surgical_patch_task(&shard, letter, reason, changes)
+            .run_surgical_patch_task(&shard, letter, reason, changes, fold_delta)
             .await
         {
             PatchTaskOutcome::Applied(body, stats) => (body, stats),
@@ -281,13 +288,14 @@ impl IndexManager {
         letter: uffs_mft::platform::DriveLetter,
         reason: &str,
         changes: Vec<FileChange>,
+        fold_delta: bool,
     ) -> PatchTaskOutcome {
         let background_io = Arc::clone(&self.background_io);
         let shard_for_patch = Arc::clone(shard);
         let change_count = changes.len();
         let patch_result = tokio::task::spawn_blocking(move || {
             let _bg_scope = crate::cache::background_io::BackgroundIoScope::enter(background_io);
-            shard_for_patch.apply_usn_patch_to_body(&changes)
+            shard_for_patch.apply_usn_patch_to_body(&changes, fold_delta)
         })
         .await;
         classify_patch_result(patch_result, letter, reason, change_count)

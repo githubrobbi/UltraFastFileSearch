@@ -267,9 +267,33 @@ impl DriveCompactIndex {
     /// mutation — then resets `delta = None` so subsequent searches take the
     /// zero-overhead base fast path.
     ///
+    /// Fold any pending delta overlay into fresh bases so this index
+    /// is safe to serialize — the boundary every save path must cross.
+    ///
+    /// A delta-carrying index is UNSERIALIZABLE as-is: the patch path
+    /// appends created records (the header's record count grows) while
+    /// `children` / `trigram` / `ext_index` stay the Arc-shared bases,
+    /// so the writer emits a children CSR sized for the OLD record
+    /// count and the reader — which sizes the section from the header
+    /// — mis-walks every later section (field signature: `bloom
+    /// k_hashes out of range`, quarantining an otherwise-healthy cache
+    /// on the next start; winbox M/C/D/S 2026-08-24, and the 2026-08
+    /// "drive C for ten days" incident).  Even an aligned save would
+    /// persist a trigram base missing the new records — a silent
+    /// substring-search hole after reload.  No-op when `delta` is
+    /// already `None`, so calling it unconditionally before a save is
+    /// free in the steady state.
+    pub fn fold_delta_for_save(&mut self) {
+        if self.delta.is_some() {
+            self.compact_base();
+        }
+    }
+
     /// O(total records); the per-apply path drives toward this running only
     /// occasionally (every [`TRIGRAM_COMPACT_THRESHOLD`] touched records) or
-    /// before serialization (the on-disk cache is always delta-free).
+    /// before serialization (the on-disk cache is always delta-free —
+    /// enforced by [`Self::fold_delta_for_save`] +
+    /// `save_compact_cache_background`'s refusal guard).
     pub(crate) fn compact_base(&mut self) {
         self.trigram = Arc::new(TrigramIndex::build(&self.records, &self.names, self.fold));
         self.ext_index = Arc::new(ExtensionIndex::build(&self.records));

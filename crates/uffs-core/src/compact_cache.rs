@@ -707,20 +707,39 @@ fn parse_compact_body(
         return Err("truncated trigram header");
     }
     let tkc = read_u32(data, pe) as usize;
-    let (trigram_loaded, after_tri) = if version >= 6 && tkc > 0 {
+    let (trigram_loaded, after_tri) = if version >= 6 {
+        // The v6+ writer ALWAYS emits the full trigram CSR — keys,
+        // offsets, and the values count — even for an empty index:
+        // `TrigramIndex` maintains the CSR invariant `offsets.len()
+        // == keys.len() + 1` in memory, so an empty index still
+        // serialises its `[0]` offsets entry plus `vc = 0`.  The old
+        // `tkc > 0` fast-path consumed only the 4-byte key count in
+        // the empty case, leaving those 8 bytes unread and shifting
+        // every later section (ext names, bloom, trie, frs) — the
+        // `bloom k_hashes out of range` corruption class that
+        // quarantined otherwise-valid caches (2026-08 "drive C for
+        // ten days"; 2026-08-24 winbox C/D/S quarantine storm).
         let (ks, ke, oe) = (pe + 4, pe + 4 + tkc * 8, pe + 4 + tkc * 8 + (tkc + 1) * 4);
         if data.len() < oe + 4 {
             return Err("truncated trigram CSR");
         }
-        let tk: Vec<u64> = aligned_vec_from_bytes(data.get(ks..ke).ok_or("trigram keys")?);
-        let to: Vec<u32> = aligned_vec_from_bytes(data.get(ke..oe).ok_or("trigram offsets")?);
         let vc = read_u32(data, oe) as usize;
         let ve = oe + 4 + vc * 4;
         if data.len() < ve {
             return Err("truncated trigram values");
         }
-        let tv: Vec<u32> = aligned_vec_from_bytes(data.get(oe + 4..ve).ok_or("trigram values")?);
-        (Some(TrigramIndex::from_csr(tk, to, tv)), ve)
+        if tkc > 0 {
+            let tk: Vec<u64> = aligned_vec_from_bytes(data.get(ks..ke).ok_or("trigram keys")?);
+            let to: Vec<u32> = aligned_vec_from_bytes(data.get(ke..oe).ok_or("trigram offsets")?);
+            let tv: Vec<u32> =
+                aligned_vec_from_bytes(data.get(oe + 4..ve).ok_or("trigram values")?);
+            (Some(TrigramIndex::from_csr(tk, to, tv)), ve)
+        } else {
+            // Empty on disk: report `None` so the assembler rebuilds
+            // from records — adopting the empty index verbatim would
+            // silently break substring search on a non-empty drive.
+            (None, ve)
+        }
     } else {
         (None, pe + 4)
     };
@@ -1018,6 +1037,21 @@ pub fn save_compact_cache(index: &DriveCompactIndex) -> io::Result<()> {
 /// # Errors
 /// Returns an error only if compression or directory creation fails.
 pub fn save_compact_cache_background(index: &DriveCompactIndex) -> io::Result<()> {
+    // Boundary enforcement of the "on-disk cache is always delta-free"
+    // invariant: a delta-carrying index serialises a children CSR sized
+    // for the pre-patch record count while the header carries the
+    // post-patch count, mis-aligning every later section for the reader
+    // (see `DriveCompactIndex::fold_delta_for_save` for the full
+    // mechanism + field incidents).  Callers fold the delta first; this
+    // guard turns any future path that forgets into a loud error
+    // instead of a poisoned cache that quarantines on the next start.
+    if index.delta.is_some() {
+        return Err(io::Error::other(
+            "refusing to persist a delta-carrying compact index: fold the delta first \
+             (DriveCompactIndex::fold_delta_for_save) — its base sections are stale \
+             against the patched records and would serialize misaligned",
+        ));
+    }
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
     let t_compress = Instant::now();
 

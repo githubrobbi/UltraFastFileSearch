@@ -25,6 +25,28 @@ pub struct DrivesResponse {
     pub drives: Vec<DriveInfo>,
 }
 
+/// Response for the `warm_plan` method (v0.6.38+).
+///
+/// Carries the drives the daemon's dispatch would actually promote for
+/// the given search params — Parked/Cold shards in scope whose bloom
+/// cannot prove them irrelevant to the query's resolved extension
+/// filter.
+///
+/// This is the daemon-authoritative answer external cold-index gates
+/// must consume instead of inferring readiness from `DriveInfo::tier`
+/// alone: a Parked drive whose bloom proves "no matching extensions"
+/// serves the query instantly with zero rows and MUST NOT be gated or
+/// force-warmed (field 2026-08-24: the MCP gate's tier-only view
+/// reported such a drive "warming — retry" and paged its body back
+/// into RAM for a query the bloom had already answered).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WarmPlanResponse {
+    /// Drives the search would promote, in registry order.  Empty
+    /// means the query dispatches without any re-warm — the caller's
+    /// gate must pass.
+    pub needs_promote: Vec<uffs_mft::platform::DriveLetter>,
+}
+
 /// Memory-tiering state of a single shard, as surfaced over the wire.
 ///
 /// Mirrors the daemon-internal `ShardState` enum (`crates/uffs-daemon/

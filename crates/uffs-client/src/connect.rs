@@ -269,6 +269,34 @@ impl UffsClient {
         Ok(response)
     }
 
+    /// Ask the daemon which drives the given search would promote
+    /// (the dispatch promote-plan, bloom pre-check included) —
+    /// `warm_plan` RPC, daemon v0.6.38+.
+    ///
+    /// Send the SAME params the search itself will carry; the daemon
+    /// resolves them through its own filter pipeline, so the answer is
+    /// bit-exact with what dispatching that search would promote.  An
+    /// empty `needs_promote` means the query serves without any
+    /// re-warm.  Older daemons answer with a method-not-found
+    /// [`crate::error::ClientError::DaemonError`]
+    /// (code [`crate::protocol::ERR_METHOD_NOT_FOUND`]); callers
+    /// gate-keeping on this should fall back to a tier-based check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ClientError` on connection, protocol, or timeout
+    /// failure, and the method-not-found daemon error described above.
+    pub async fn warm_plan(
+        &mut self,
+        params: &SearchParams,
+    ) -> Result<crate::protocol::response::WarmPlanResponse, crate::error::ClientError> {
+        let value = serde_json::to_value(params)
+            .map_err(|err| crate::error::ClientError::Protocol(err.to_string()))?;
+        let result = self.send_request("warm_plan", Some(value)).await?;
+        serde_json::from_value(result)
+            .map_err(|err| crate::error::ClientError::Protocol(err.to_string()))
+    }
+
     /// List loaded drives.
     ///
     /// # Errors

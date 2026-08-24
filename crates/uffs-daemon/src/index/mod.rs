@@ -25,6 +25,7 @@ mod predicates;
 mod projection;
 mod refresh;
 pub(crate) mod search;
+mod search_filters_build;
 mod stats;
 mod status_drives;
 mod test_helpers;

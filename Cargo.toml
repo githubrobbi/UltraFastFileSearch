@@ -258,7 +258,7 @@ thiserror = "2.0.20"
 anyhow = "1.0.104"
 
 # ───── MCP (Model Context Protocol) ─────
-rmcp = { version = "3.1.2", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "3.1.4", features = ["server", "transport-io", "macros"] }
 schemars = "1.2.2"
 
 # ───── HTTP / Tower (for MCP Streamable HTTP gateway) ─────
@@ -304,7 +304,7 @@ dirs-next = "2.0.0"
 # daemon binary when the client auto-spawns it.  Workspace-scoped for
 # version consistency across any future consumers (e.g. `uffs-client`
 # when async spawn lands).
-which = "8.0.5"
+which = "8.0.6"
 
 # `strsim` — small, zero-dep Levenshtein impl (already in the tree +
 # audited by Google/Mozilla).  Used by `uffs-cli` to suggest the nearest
@@ -363,10 +363,10 @@ hostname = "0.4.2"
 num_cpus = "1.17.0"
 # Random unique identifiers.  Only the `v4` (random) feature is enabled
 # workspace-wide; consumers that need v1/v5/v7 etc. re-add the feature.
-uuid = { version = "1.24.0", features = ["v4"] }
+uuid = { version = "1.26.0", features = ["v4"] }
 
 # ───── Security / Crypto ─────
-aes-gcm = "0.11.0"
+aes-gcm = "0.11.1"
 rand = "0.10.2"
 rand_chacha = "0.10.0"
 security-framework = "3.7.0"

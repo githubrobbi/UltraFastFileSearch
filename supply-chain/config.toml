@@ -302,10 +302,6 @@ criteria = "safe-to-deploy"
 version = "0.10.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.cpufeatures]]
-version = "0.2.17"
-criteria = "safe-to-deploy"
-
 [[exemptions.crc32fast]]
 version = "1.5.0"
 criteria = "safe-to-deploy"
@@ -404,10 +400,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.fastrand]]
 version = "2.4.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.flate2]]
-version = "1.1.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.float-cmp]]
@@ -928,10 +920,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.symlink]]
 version = "0.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.syn]]
-version = "2.0.117"
 criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]

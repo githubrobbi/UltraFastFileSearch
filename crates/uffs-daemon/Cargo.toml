@@ -94,7 +94,7 @@ clap.workspace = true
 # Random (nonce generation for shutdown auth)
 rand.workspace = true
 mimalloc.workspace = true
-libmimalloc-sys = { version = "0.1.44", features = ["extended"] }
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 
 # Unix PID file liveness check
 [target.'cfg(unix)'.dependencies]

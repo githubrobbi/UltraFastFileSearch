@@ -32,6 +32,24 @@
 #     `cargo update -p ethnum --precise 1.5.3` (or newer), never a
 #     toolchain downgrade.
 #
+#   * nightly-2026-08-25 and later (as of 2026-08-29) fail our clippy gate
+#     with 14 × `clippy::empty_enums` ("enum with no variants") at every
+#     `#[derive(FromBytes)]` site in uffs-mft.  Root cause: rust#155499
+#     stabilized `never_type` on 2026-08-24, which turns on the guard
+#     inside `empty_enums`, and zerocopy-derive 0.8.56 emits one
+#     uninhabited `enum ẕ<field> {}` per field inside a generated
+#     `#[allow(...)]` block that lacks that lint (call-site spans, so it
+#     lands on OUR derive lines).  Upstream: google/zerocopy#3414 (fix
+#     proposed in google/zerocopy#3600); tracked here in #617.  Policy:
+#     no local `#[allow]`, no source patch of a crate we do not own —
+#     the pin holds until a zerocopy release carries the fix, then the
+#     resolution is a dependency bump (the ethnum pattern), never a lint
+#     exception.
+#   * nightly-2026-08-22..24 were additionally rejected by toolchain-sync
+#     on 2026-08-29: clippy-driver exited 101 on the `uffs-ci-pipeline`
+#     test target (no diagnostic in the log tail).  Not root-caused —
+#     moot while the 08-25+ block above stands; re-check on the next bump.
+#
 # Run `just toolchain-sync` to re-attempt a channel bump; the CI
 # pipeline auto-refreshes on `ship --fresh` unless `--skip-toolchain-sync`
 # is passed.

@@ -68,7 +68,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.6.38"
+version = "0.6.39"
 edition = "2024"
 # No `rust-version` claim: the workspace is structurally nightly-only.
 # `crates/uffs-polars` enables `polars/nightly` unconditionally, which
@@ -135,36 +135,36 @@ publish = false
 # proposed-plan output for 12 days because `release-plz update`
 # failed at `cargo package` with this very error.  See
 # `release-automation-baseline.md` §10 for the diagnostic trail.
-uffs-polars = { path = "crates/uffs-polars", version = "0.6.38" }
-uffs-security = { path = "crates/uffs-security", version = "0.6.38" }
-uffs-text = { path = "crates/uffs-text", version = "0.6.38" }
-uffs-time = { path = "crates/uffs-time", version = "0.6.38" }
-uffs-version = { path = "crates/uffs-version", version = "0.6.38" }
-uffs-statusfmt = { path = "crates/uffs-statusfmt", version = "0.6.38" }
-uffs-mft = { path = "crates/uffs-mft", version = "0.6.38" }
-uffs-format = { path = "crates/uffs-format", version = "0.6.38" }
-uffs-core = { path = "crates/uffs-core", version = "0.6.38" }
-uffs-client = { path = "crates/uffs-client", version = "0.6.38" }
+uffs-polars = { path = "crates/uffs-polars", version = "0.6.39" }
+uffs-security = { path = "crates/uffs-security", version = "0.6.39" }
+uffs-text = { path = "crates/uffs-text", version = "0.6.39" }
+uffs-time = { path = "crates/uffs-time", version = "0.6.39" }
+uffs-version = { path = "crates/uffs-version", version = "0.6.39" }
+uffs-statusfmt = { path = "crates/uffs-statusfmt", version = "0.6.39" }
+uffs-mft = { path = "crates/uffs-mft", version = "0.6.39" }
+uffs-format = { path = "crates/uffs-format", version = "0.6.39" }
+uffs-core = { path = "crates/uffs-core", version = "0.6.39" }
+uffs-client = { path = "crates/uffs-client", version = "0.6.39" }
 # `uffs-broker-protocol` carries the wire-protocol types shared between
 # `uffs-broker` (the elevated handle vendor, Windows-only binary) and
 # `uffs-daemon::broker_client` (the handle consumer).  Pure-logic
 # Layer-0 lib — cross-platform tests run on every CI lane.  Added in
 # F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
 # wire-format byte literals.
-uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.38" }
+uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.39" }
 # `uffs-winsvc` — native Windows service control (SCM query/start/stop) +
 # the non-connecting broker-pipe readiness probe.  Layer-0 leaf: its only
 # dependency is the `windows` crate (windows-target), with non-Windows
 # stubs so cross-platform consumers (uffs-update, uffs-cli) compile.
 # Single source of truth for the `sc`/SCM mechanics previously duplicated
 # across uffs-broker, uffs-update, and uffs-cli.
-uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.38" }
+uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.39" }
 # `uffs-fetch` — hardened release-asset transport (blocking reqwest +
 # rustls with retry/timeout/byte-cap, plus `SHA256SUMS` verification),
 # extracted from `uffs-update` as a small public lib so external products
 # can reuse it. Cross-platform pure-logic leaf; keeps the HTTP/TLS stack
 # out of the lean `uffs` CLI exactly as before.
-uffs-fetch = { path = "crates/uffs-fetch", version = "0.6.38" }
+uffs-fetch = { path = "crates/uffs-fetch", version = "0.6.39" }
 # NOTE: no `uffs-broker` workspace dependency alias on purpose —
 # `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
 # this protocol module's now-extracted sibling); no other workspace
@@ -258,7 +258,7 @@ thiserror = "2.0.20"
 anyhow = "1.0.104"
 
 # ───── MCP (Model Context Protocol) ─────
-rmcp = { version = "3.1.2", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "3.1.4", features = ["server", "transport-io", "macros"] }
 schemars = "1.2.2"
 
 # ───── HTTP / Tower (for MCP Streamable HTTP gateway) ─────
@@ -304,7 +304,7 @@ dirs-next = "2.0.0"
 # daemon binary when the client auto-spawns it.  Workspace-scoped for
 # version consistency across any future consumers (e.g. `uffs-client`
 # when async spawn lands).
-which = "8.0.5"
+which = "8.0.6"
 
 # `strsim` — small, zero-dep Levenshtein impl (already in the tree +
 # audited by Google/Mozilla).  Used by `uffs-cli` to suggest the nearest
@@ -363,10 +363,10 @@ hostname = "0.4.2"
 num_cpus = "1.17.0"
 # Random unique identifiers.  Only the `v4` (random) feature is enabled
 # workspace-wide; consumers that need v1/v5/v7 etc. re-add the feature.
-uuid = { version = "1.24.0", features = ["v4"] }
+uuid = { version = "1.26.0", features = ["v4"] }
 
 # ───── Security / Crypto ─────
-aes-gcm = "0.11.0"
+aes-gcm = "0.11.1"
 rand = "0.10.2"
 rand_chacha = "0.10.0"
 security-framework = "3.7.0"

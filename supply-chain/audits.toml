@@ -161,6 +161,12 @@ notes = """
 Reviewed the full diff; the only functional changes are two hunks in src/traits.rs that bring derive(NoUninit) in line with the constraints derive(Pod) already enforced — check_attributes now accepts repr(packed) structs that are not repr(C), and asserts permits generic parameters when the type is repr(transparent) or repr(packed(1)), skipping the no-padding size assertion only in those two provably padding-free cases. The Pod hunk is a variable rename and a clearer diagnostic with an unchanged condition. Compiling against the macro confirmed padded packed(2)/packed(4)/repr(C) structs, generic non-packed types, and unions are all still rejected, and that generated impls carry T: NoUninit bounds. Everything else is doc fixes, cfg-gating of existing tests, and a syn 2 -> 3 build-time dependency bump.
 """
 
+[[audits.chacha20]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.10.1 -> 0.10.2"
+notes = "Delta review: unsafe SIMD backend refactor of the cipher core (RustCrypto internals); no build-script, dependency, or I/O changes. Mirrored from the docenta repo supply-chain audit performed by the same auditor/owner."
+
 [[audits.chrono]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -184,6 +190,18 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.16.3 -> 0.16.4"
 notes = "Delta audit (cargo vet diff 0.16.3 -> 0.16.4, 435-line diff). (1) term.rs: TermInner construction deduplicated into new()/new_buffered()/with_buffer() helpers - pure refactor; new pub fn is_dumb() reads TERM env var (read-only env access, same capability class the crate already had via is_a_color_terminal). (2) utils.rs: Style::from_dotted_str gains is_ascii() guards on '#RRGGBB'/'on_#RRGGBB' parsing - fixes a panic on non-ASCII input that slices mid-UTF-8 char (robustness improvement for untrusted style strings), plus regression tests. (3) windows_term: as_handle() helper removed in favor of out.as_raw_handle() at existing call sites - unchanged unsafe surface (same SetConsoleCursorPosition/SetConsoleCursorInfo calls as before); read_secure backspace arm converted to a match guard, logic identical. No new unsafe blocks, no new fs/net/process capability. Publisher djc (Dirkjan Ochtman, console-rs maintainer, same publisher as 0.16.3)."
+
+[[audits.cpufeatures]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.3.1"
+notes = "Reviewed full diff (7 files, 19/7 lines; RustCrypto/utils #1511, #1513, #1515). Three one-line source changes: the x86 `avx` feature entry now requires the `ymm` OS-save state (correct — AVX uses YMM registers; strictly more conservative detection), the Miri shim reports compile-time `cfg!(target_feature)` instead of a constant false, and `u8::max_value()` becomes `u8::MAX`. No unsafe, build-script, dependency, or I/O changes; rest is changelog + license year."
+
+[[audits.crc32fast]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.5.0 -> 1.5.1"
+notes = "Delta review: new AVX2/AVX512 accelerated CRC paths behind runtime feature detection (unsafe intrinsics, in-domain); no build-script, dependency, or I/O changes. Mirrored from the docenta repo supply-chain audit performed by the same auditor/owner."
 
 [[audits.crossbeam-channel]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -529,6 +547,12 @@ criteria = "safe-to-deploy"
 delta = "0.1.19 -> 0.1.20"
 notes = "Adds TtyCall syscall-number enum + TryFrom mapping (Redox-only constants; UFFS never targets Redox). No unsafe, no I/O changes."
 
+[[audits.libredox]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.20 -> 0.1.21"
+notes = "Reviewed full diff (2 files, 19/2 lines): adds a PidfdCall enum (SendSignal = 0) with try_from_raw, and an #[expect(unreachable_patterns)] on is_wouldblock because EAGAIN == EWOULDBLOCK on Redox. Redox-only syscall numbering; no unsafe, build-script, dependency, or I/O changes; dead code on every platform we ship."
+
 [[audits.litemap]]
 who = "Robert M1 <clauderobert@nios.net>"
 criteria = "safe-to-deploy"
@@ -540,6 +564,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.4.32 -> 0.4.33"
 notes = "Single functional change: `MaybeStaticStr`'s derived Eq/Ord/Hash (which compared the enum discriminant, making Static vs Borrowed keys with equal text unequal) replaced by manual impls that delegate to the underlying &str, fixing structured-logging Key comparison (upstream PR #732); matching unit tests added in src/kv/key.rs. No unsafe, no build.rs, no dependency or feature changes; rest is changelog, html_root_url bump, and dev lockfile churn (sval pinned back to 2.19)."
+
+[[audits.log]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.33 -> 0.4.34"
+notes = "Delta review: full diffstat, all risk-pattern additions (unsafe/process/net/fs/build), dependency and build-script changes scanned; nothing outside the crate domain, no new deps beyond same-family path bumps, no build scripts. Mirrored from the docenta and uffs-products repo supply-chain audits performed by the same auditor/owner."
 
 [[audits.memchr]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -564,6 +594,12 @@ who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.51 -> 0.1.52"
 notes = "Delta audit (cargo vet diff 0.1.51 -> 0.1.52). Cargo.toml(.orig): version bump + libmimalloc-sys dep 0.1.48->0.1.49. src/lib.rs + src/extended.rs add a v3-only (#[cfg(not(feature=v2))]) 'stats_json() -> Result<StatsJson, &str>' wrapper plus a StatsJson newtype with Deref/Drop. The unsafe blocks are allocator FFI into mimalloc's own functions (the new mi_stats_get_json getter and mi_free for the returned buffer) — standard mimalloc-sys FFI, no new ambient capability / I/O / network."
+
+[[audits.miniz_oxide]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.9 -> 0.9.1"
+notes = "Reviewed full diff (14 files, ~540/185 lines). Crate keeps #![forbid(unsafe_code)]; zero unsafe, build-script, process, network, or filesystem additions. Deflate: new TDEFLFlush modes (Partial/PartialOpt/SyncOpt/NoSync) and unwritten_bit_count; CompressorOxide::with_params clamps level<=10 and window_bits<=15, stores window_bits_max and refuses level raises that would exceed the zlib-header window; block writing skipped for empty blocks unless Finish; SMALL_DIST_EXTRA table shrunk 512->128 with a >>2 index (values are constant per 4-entry group, verified); stored mode no longer feeds the hash chain; several enums gain #[non_exhaustive]. Inflate: decompress_with_limit + OutputBuffer max bound (bytes_left now max-position, i.e. strictly tighter); Huffman table build now rejects over-subscribed tables per step and allows the RFC 1951 single-symbol/empty incomplete tables (matches zlib inftrees.c). Manifest: serde optional dep goes default-features=false + alloc (std feature forwards serde/std), simd-adler32 optional req 0.3.3 -> 0.3.8; no new dependencies."
 
 [[audits.mio]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -1232,6 +1268,12 @@ delta = "1.23.1 -> 1.23.2"
 notes = "Delta audit (cargo vet diff 1.23.1 -> 1.23.2). Files: Cargo.toml(.orig) version bump, README, src/{error,fmt,parser,lib,external/serde_support}.rs. Patch release by KodrAus (uuid maintainer): formatting/parser refinements + serde tweak. The single unsafe is std::str::from_utf8_unchecked(self.0) on the crate's own fixed-size format buffer, which uuid populates exclusively with ASCII hex digits + hyphens before formatting — sound zero-copy formatting (same pattern as the vetted 1.23.1). No new I/O / FFI / process / network / ambient capability."
 
 [[audits.uuid]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.1 -> 1.26.0"
+notes = "Delta review: fmt fast path over MaybeUninit ASCII buffers (unsafe init-before-read pattern inspected); no build-script, dependency, or I/O changes. Mirrored from the docenta repo supply-chain audit performed by the same auditor/owner."
+
+[[audits.uuid]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.23.2 -> 1.23.3"
@@ -1284,6 +1326,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "8.0.4 -> 8.0.5"
 notes = "Reviewed diff (5 files, 49/20 lines): genuine upstream bugfix -- absolute paths now resolve correctly even with no cwd/PATH list (previously silently failed); includes new regression tests. Same capability surface as before (still just fs read_dir + PATH env lookup for binary resolution), no new I/O sources."
+
+[[audits.which]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.5 -> 8.0.6"
+notes = 'Reviewed full diff (4 files, 120/11 lines; upstream PR #128). Only behavioural change: relative PATH entries (tools, ./tools, ../tools) are resolved against the caller-provided cwd instead of the process cwd, via a new is_ordinary_relative_path helper that leaves ~-prefixed, rooted, drive-relative (C:foo) and root-relative (\foo) paths untouched; the Windows empty-PATH-entry filter moves from a cfg to a Sys::is_windows check. Same capability surface (fs read_dir + PATH env lookup), no unsafe, build-script, dependency, or new I/O; new unit + integration tests cover the resolution.'
 
 [[audits.winapi-util]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -1461,6 +1509,12 @@ trusted-publisher = "github:RustCrypto/utils"
 start = "2026-04-28"
 end = "2027-07-02"
 
+[[trusted.cpufeatures]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-02-05"
+end = "2027-08-29"
+
 [[trusted.ctr]]
 criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/block-modes"
@@ -1490,6 +1544,12 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:rust-lang/cc-rs"
 start = "2025-09-05"
 end = "2027-08-12"
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 980 # Sebastian Thiel (Byron)
+start = "2023-08-15"
+end = "2027-08-29"
 
 [[trusted.ghash]]
 criteria = "safe-to-deploy"
@@ -1569,6 +1629,12 @@ criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2024-07-01"
 end = "2027-08-04"
+
+[[trusted.indexmap]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2020-01-15"
+end = "2027-08-29"
 
 [[trusted.js-sys]]
 criteria = "safe-to-deploy"
@@ -1850,6 +1916,12 @@ criteria = "safe-to-deploy"
 user-id = 6743 # Ed Page (epage)
 start = "2023-01-20"
 end = "2027-08-04"
+
+[[trusted.syn]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-08-29"
 
 [[trusted.thiserror]]
 criteria = "safe-to-deploy"

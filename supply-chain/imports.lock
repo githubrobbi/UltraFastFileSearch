@@ -7,8 +7,8 @@ when = "2026-06-17"
 trusted-publisher = "github:RustCrypto/traits"
 
 [[publisher.aes]]
-version = "0.9.2"
-when = "2026-07-27"
+version = "0.9.3"
+when = "2026-08-28"
 trusted-publisher = "github:RustCrypto/block-ciphers"
 
 [[publisher.anyhow]]
@@ -87,6 +87,11 @@ version = "0.1.1"
 when = "2026-04-28"
 trusted-publisher = "github:RustCrypto/utils"
 
+[[publisher.cpufeatures]]
+version = "0.3.0"
+when = "2026-02-05"
+trusted-publisher = "github:RustCrypto/utils"
+
 [[publisher.ctr]]
 version = "0.10.1"
 when = "2026-05-20"
@@ -112,6 +117,13 @@ version = "0.1.11"
 when = "2026-08-14"
 trusted-publisher = "github:rust-lang/cc-rs"
 
+[[publisher.flate2]]
+version = "1.1.10"
+when = "2026-08-28"
+user-id = 980
+user-login = "Byron"
+user-name = "Sebastian Thiel"
+
 [[publisher.ghash]]
 version = "0.6.0"
 when = "2026-02-28"
@@ -131,8 +143,8 @@ user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.h2]]
-version = "0.4.18"
-when = "2026-08-20"
+version = "0.4.19"
+when = "2026-08-24"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -171,8 +183,8 @@ when = "2026-07-30"
 trusted-publisher = "github:RustCrypto/hybrid-array"
 
 [[publisher.hyper]]
-version = "1.11.0"
-when = "2026-07-20"
+version = "1.11.1"
+when = "2026-08-28"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -197,6 +209,13 @@ when = "2024-07-01"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
+
+[[publisher.indexmap]]
+version = "2.14.1"
+when = "2026-08-28"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
 
 [[publisher.js-sys]]
 version = "0.3.104"
@@ -507,6 +526,20 @@ when = "2026-03-31"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
+
+[[publisher.syn]]
+version = "2.0.119"
+when = "2026-07-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.syn]]
+version = "3.0.4"
+when = "2026-08-24"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
 
 [[publisher.thiserror]]
 version = "2.0.20"
@@ -1072,31 +1105,6 @@ criteria = "safe-to-deploy"
 version = "1.0.3"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
-[[audits.google.audits.indexmap]]
-who = "Lukasz Anforowicz <lukasza@chromium.org>"
-criteria = "safe-to-deploy"
-version = "2.7.1"
-notes = '''
-Grepped for `-i cipher`, `-i crypto`, `'\bfs\b'`, `'\bnet\b'`
-and there were no hits.
-
-There is a little bit of `unsafe` Rust code - the audit can be found at
-https://chromium-review.googlesource.com/c/chromium/src/+/6187726/2
-'''
-aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
-
-[[audits.google.audits.indexmap]]
-who = "Lukasz Anforowicz <lukasza@chromium.org>"
-criteria = "safe-to-deploy"
-delta = "2.7.1 -> 2.8.0"
-notes = """
-No `unsafe` introduced or affected in:
-* `indexmap_with_default!` and `indexset_with_default!` macros
-* New `PartialEq` implementations
-* `fn slice_eq` in `util.rs`
-"""
-aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
-
 [[audits.google.audits.itertools]]
 who = "ChromeOS"
 criteria = "safe-to-run"
@@ -1339,11 +1347,6 @@ delta = "1.0.1 -> 1.0.3"
 who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 delta = "1.0.3 -> 1.0.4"
-
-[[audits.isrg.audits.cpufeatures]]
-who = "David Cook <dcook@divviup.org>"
-criteria = "safe-to-deploy"
-delta = "0.2.17 -> 0.3.0"
 
 [[audits.isrg.audits.criterion-plot]]
 who = "J.C. Jones <jc@divviup.org>"
@@ -1686,19 +1689,6 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "edgul <ed.guloien@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.3 -> 1.1.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.indexmap]]
-who = "Erich Gubler <erichdongubler@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "2.8.0 -> 2.11.4"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.indexmap]]
-who = "Ben Dean-Kawamura <bdk@mozilla.com>"
-criteria = "safe-to-deploy"
-delta = "2.11.4 -> 2.14.0"
-notes = "Mostly internal refactorings.  No new unsafe code."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.num-conv]]

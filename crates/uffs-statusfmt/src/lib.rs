@@ -3,10 +3,16 @@
 
 //! Shared operator-status styling for UFFS `--status` surfaces.
 //!
-//! One visual language for the daemon, broker, combined-system, and MCP status
-//! output: a health [`Glyph`], aligned `key: value` [`field`]s, and [`section`]
-//! headers, all through a single [`Palette`] that turns color **off**
-//! automatically when stdout is not a terminal or `NO_COLOR` is set.
+//! One visual language for the CLI's status views — the daemon, broker,
+//! combined-system and MCP sections of `uffs --status`, and
+//! `uffs --daemon status`: a health [`Glyph`], aligned `key: value`
+//! [`field`]s, and [`section`] headers, all through a single [`Palette`] that
+//! turns color **off** automatically when stdout is not a terminal or
+//! `NO_COLOR` is set.
+//!
+//! `uffs-cli` is the only consumer.  The daemon reports status over the wire
+//! and the broker's `--status` is a bare service probe; neither renders an
+//! operator table, so neither depends on this crate.
 //!
 //! Callers build lines with these helpers and print them; the machine-readable
 //! `--json` form is modelled separately by each caller (this crate is purely

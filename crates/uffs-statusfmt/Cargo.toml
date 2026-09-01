@@ -3,10 +3,18 @@
 # ============================================================================
 # Layer 0 leaf crate. Zero external dependencies.
 #
-# One visual language for every `--status` / status surface (daemon, broker,
-# combined, MCP): TTY- and NO_COLOR-aware color, health glyphs, aligned
-# `key: value` fields, and section headers. Keeps the human output consistent
-# and scannable; the machine-readable `--json` form is modelled by each caller.
+# One visual language for the CLI's status views — `uffs --status` (daemon,
+# broker, combined-system and MCP sections) and `uffs --daemon status`:
+# TTY- and NO_COLOR-aware color, health glyphs, aligned `key: value` fields,
+# and section headers. Keeps the human output consistent and scannable; the
+# machine-readable `--json` form is modelled by each caller.
+#
+# Consumers: `uffs-cli` only. The daemon exposes status over the wire
+# (`StatusResponse`) and the broker's `--status` is a four-line service
+# probe; neither renders an operator table of its own, so neither links
+# this crate. It stays a separate layer-0 crate (rather than living in
+# `uffs-format`, which pulls `uffs-mft`) so the thin CLI can style output
+# without dragging the MFT reader into its dependency graph.
 # ============================================================================
 
 [package]

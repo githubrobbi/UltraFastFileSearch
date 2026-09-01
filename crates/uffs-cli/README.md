@@ -33,6 +33,31 @@ The "thin client" design has three concrete consequences:
    CLI auto-spawns the daemon if it isn't already running; subsequent
    invocations reuse the daemon over the warm socket.
 
+### Why the fast path parses its arguments by hand
+
+`uffs-cli` has no `clap` dependency, on purpose.  The cross-tool
+benchmark (`docs/research/cross-tool-benchmark-analysis.md`, §4.1.1)
+measured Windows process creation at **~12 ms + ~2.7 ms per MB of
+binary**: the original 52.7 MB fat client took 152 ms to start, 136 ms
+of it before `main()` ran.  Parsing was never the cost — a clap
+`Cli::parse()` is ~1 ms — the *weight* was.  So the thin client dropped
+Polars, tokio, tracing and clap together and went from 52.7 MB to
+~774 KB (Phase 1, v0.5.x).  What is left is a handful of `--flag`
+matches in `src/args.rs` and `src/commands/search/args.rs`; the real
+search-grammar validation is `SearchParams::from_cli_args` in
+`uffs-client`, shared with the daemon, so the CLI never re-implements
+it.
+
+clap stays where startup does not matter: `uffs-mft`, `uffs-daemon`,
+`uffs-mcp` and `uffs-bench`.
+
+To re-measure on a release box (PowerShell, elevated shell not needed):
+
+```powershell
+(Get-Item (Get-Command uffs).Source).Length / 1KB      # binary size, KB
+1..10 | ForEach-Object { (Measure-Command { uffs --version }).TotalMilliseconds }
+```
+
 ## Install
 
 ```bash

@@ -192,3 +192,6 @@ uffs-mcp-claude-video.mp4
 
 # rustc ICE dumps (transient nightly "delayed bug" reports; never commit)
 rustc-ice-*.txt
+
+# docenta: local inclusion policy (the quarantine whitelist), never committed
+.docentaignore

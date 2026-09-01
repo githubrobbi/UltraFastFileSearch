@@ -11,8 +11,23 @@ use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::daemon_ctl::{pid_file_path, socket_path};
 use uffs_client::protocol::response::DaemonStatus;
 
-use crate::args::DaemonAction;
+use crate::args::{self, DaemonAction};
 use crate::commands::{daemon_load, daemon_status, daemon_tiering};
+
+/// Handle `uffs --daemon <action> [flags...]`.
+///
+/// # Errors
+///
+/// Returns an error for an unparseable action or when the action's
+/// handler fails.
+pub(crate) fn run_daemon(args: &[String]) -> Result<()> {
+    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        args::print_daemon_help();
+        return Ok(());
+    }
+    let action = args::parse_daemon_action(args)?;
+    daemon(&action)
+}
 
 /// Suppress the user-facing progress prints of the daemon handlers while an
 /// internal flow (the uninstall's background drive-coverage reload) runs them

@@ -21,7 +21,54 @@ use std::io::Write;
 use anyhow::Result;
 use uffs_client::protocol::AggregateResultWire;
 
+use super::search::run_search;
 use super::{format_number, format_size};
+use crate::args;
+
+/// Handle `uffs --agg|agg <preset> [--format ...] [--data-dir ...]`.
+///
+/// # Errors
+///
+/// Returns an error when no preset is given or when the synthesised
+/// aggregate search fails.
+pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        args::print_aggregate_help();
+        return Ok(());
+    }
+    // Extract the preset (first positional arg).
+    let preset = args
+        .iter()
+        .find(|arg| !arg.starts_with('-'))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Usage: uffs --agg <PRESET>\n\
+                 Available presets: overview, by_type, by_extension, by_drive, by_size, by_age, count"
+            )
+        })?;
+
+    // Synthesise search args: `* --agg <preset> --limit 0 [remaining flags]`.
+    let mut synth_args = vec![
+        "*".to_owned(),
+        "--agg".to_owned(),
+        preset.clone(),
+        "--limit".to_owned(),
+        "0".to_owned(),
+    ];
+    // Default to table format for `uffs --agg` unless user specifies --format.
+    let has_format = args.iter().any(|arg| arg == "--format" || arg == "-f");
+    if !has_format {
+        synth_args.extend(["--format".to_owned(), "table".to_owned()]);
+    }
+    // Forward all flags (skip the preset positional).
+    for arg in args {
+        if arg == preset {
+            continue;
+        }
+        synth_args.push(arg.clone());
+    }
+    run_search(&synth_args)
+}
 
 /// Print aggregate results in a human-readable table format.
 ///

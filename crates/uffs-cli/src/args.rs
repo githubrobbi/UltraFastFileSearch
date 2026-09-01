@@ -646,7 +646,9 @@ pub(crate) use help::{
 mod tests {
     use core::error::Error as _;
 
-    use super::{DaemonAction, ParseDriveLetterError, parse_daemon_action, parse_drive_letter};
+    use super::{
+        DaemonAction, DriveLetter, ParseDriveLetterError, parse_daemon_action, parse_drive_letter,
+    };
 
     /// `BadShape` carries the original input and its Display matches the
     /// byte-for-byte format the previous `Result<_, String>` produced.
@@ -768,5 +770,20 @@ mod tests {
             parse_daemon_action(&two).is_err(),
             "two drives must be rejected",
         );
+    }
+
+    #[test]
+    fn parse_drive_letter_accepts_letter_colon_and_whitespace_variants() {
+        assert_eq!(parse_drive_letter("c"), Ok(DriveLetter::C));
+        assert_eq!(parse_drive_letter("C:"), Ok(DriveLetter::C));
+        assert_eq!(parse_drive_letter(" d: "), Ok(DriveLetter::D));
+    }
+
+    #[test]
+    fn parse_drive_letter_rejects_invalid_values() {
+        parse_drive_letter("").unwrap_err();
+        parse_drive_letter("12").unwrap_err();
+        parse_drive_letter("1:").unwrap_err();
+        parse_drive_letter("CD").unwrap_err();
     }
 }

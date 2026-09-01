@@ -113,12 +113,12 @@ pub(crate) fn suggest_command(flag: &str) -> Option<&'static str> {
 /// Propagates the underlying command's failure.
 pub(crate) fn dispatch_command(command: Command, args: &[String]) -> Result<()> {
     match command {
-        Command::Search => crate::run_search(args),
-        Command::Stats => crate::run_stats(args),
-        Command::Agg => crate::run_aggregate(args),
+        Command::Search => commands::search::run_search(args),
+        Command::Stats => commands::stats::run_stats(args),
+        Command::Agg => commands::aggregate::run_aggregate(args),
         Command::Deleted => commands::deleted::run_deleted(args),
         Command::Snapshot => commands::snapshot::run_snapshot(args),
-        Command::Daemon => crate::run_daemon(args),
+        Command::Daemon => commands::daemon_mgmt::run_daemon(args),
         Command::Mcp => commands::mcp_mgmt::mcp_from_args(args),
         Command::Update => commands::update::run_update(args),
         Command::Uninstall => commands::uninstall::run_uninstall(args),

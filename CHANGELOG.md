@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.40] - 2026-08-31
+
+### Changed
+
+- cli: move the four pre-#436 command entry points out of main.rs
+
 ## [0.6.38] - 2026-08-24
 
 ### Added
@@ -2839,7 +2845,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.38...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.40...HEAD
+[0.6.40]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.38...v0.6.40
 [0.6.38]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.37...v0.6.38
 [0.6.37]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.36...v0.6.37
 [0.6.36]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.35...v0.6.36
